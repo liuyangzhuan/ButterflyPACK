@@ -65,6 +65,26 @@ struct H2Handoff {
     int k;
 };
 
+// A target of the transposed products (a nonsymmetric kernel's A^T x): its
+// len entries of column c at base * nrhs + c * stride + off of the local
+// (dest 0) or the send (dest 1) array += the sum over its blocks, in order,
+// of K^T x.
+struct H2TTarget {
+    int64_t base;
+    int64_t stride;
+    int64_t off;
+    int len;
+    int dest;
+    int block0, nblocks;
+};
+// K (m x the target's len, ld m: a block of the source box's rows) and the
+// source vector, column c at c * ldx + x.
+struct H2TBlock {
+    const void* K;
+    int m;
+    int64_t x;
+};
+
 // dst[dst_base * nrhs + c * dst_stride + dst_off + i] = src[c * src_stride + src + i], i < len
 struct H2Span {
     int64_t src;
@@ -109,6 +129,18 @@ void launch_h2_handoff(const H2Handoff* items, int count, T* child, int64_t ldc,
                        bool gather, cudaStream_t stream);
 template<typename T>
 void launch_h2_pack(const H2Span* spans, int count, const T* src, T* dst, int nrhs, int max_len, cudaStream_t stream);
+// the transposed products of the targets (x: the sources' vectors at c * ldx)
+template<typename T>
+void launch_h2_accumulate_t(const H2TTarget* targets, int count, const H2TBlock* blocks, const T* x, int64_t ldx,
+                            T* local, T* send, int nrhs, cudaStream_t stream);
+// the reverse of launch_h2_pack, added: src[c * src_stride + src + i] += dst[...]
+template<typename T>
+void launch_h2_unpack_add(const H2Span* spans, int count, const T* dst, T* src, int nrhs, int max_len,
+                          cudaStream_t stream);
+// x_S += q (compact skeleton vectors), the reverse of launch_h2_gather_q
+template<typename T>
+void launch_h2_scatter_add_q(const H2Box* boxes, int count, const T* q, int64_t ldq, T* vec, int64_t ld, int nrhs,
+                             cudaStream_t stream);
 
 // Shared memory of launch_h2_accumulate for the largest block.
 template<typename T>

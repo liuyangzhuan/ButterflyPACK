@@ -29,6 +29,7 @@ struct DriverOptions {
   int64_t reduction_threshold = 2;
   int ca_level = 10000;
   int h2_use_sketch = 1;
+  double h2_s_op = 0.0;  // H2_s_op: the IDs' absolute floor tol_comp * h2_s_op (0 off)
   int h2_lazy_schur = 0;
   int h2_gemm_split = 16;
   int h2_xrr_factor = 0;
@@ -163,6 +164,8 @@ DriverOptions parse_driver_options(int argc, char** argv) {
       options.ca_level = parse_int(value, "CA_level");
     } else if (name == "h2_use_sketch") {
       options.h2_use_sketch = parse_int(value, "H2_use_sketch");
+    } else if (name == "h2_s_op") {
+      options.h2_s_op = parse_double(value, "H2_s_op");
     } else if (name == "h2_lazy_schur") {
       options.h2_lazy_schur = parse_int(value, "H2_lazy_schur");
     } else if (name == "h2_gemm_split") {
@@ -263,7 +266,7 @@ DriverOptions parse_driver_options(int argc, char** argv) {
     throw std::invalid_argument("H2_XRR_factor must be 0 or 1");
   }
   if (options.h2_use_gpu < 0 || options.h2_use_gpu > 2) {
-    throw std::invalid_argument("H2_use_gpu must be 0, 1 or 2");
+    throw std::invalid_argument("H2_use_gpu must be 0 (CPU) or 1 (GPU, FP64 tensor-core GEMMs); 2 is taken as 1");
   }
   if (options.format != 1 && options.format != 7) {
     throw std::invalid_argument("format must be 1 (HODLR) or 7 (H2)");
@@ -317,10 +320,11 @@ void print_usage(const char* executable) {
       << "  --reduction_threshold <count>\n"
       << "  --CA_level <level>  (accepted for compatibility; 1D stays color)\n"
       << "  --H2_use_sketch <0|1|2>\n"
+      << "  --H2_s_op <s>   (IDs: absolute floor tol_comp*s on the rank rule; at most ||A|| for --precon 2, at most 1/||A^-1|| factored; 0 off)\n"
       << "  --H2_lazy_schur <0|1|2>\n"
       << "  --H2_GEMM_split <count>\n"
       << "  --H2_XRR_factor <0|1>\n"
-      << "  --H2_use_gpu <0|1|2>\n"
+      << "  --H2_use_gpu <0|1>   (1: GPU, FP64 tensor-core GEMMs; 2 is taken as 1)\n"
       << "  --length-scale <value>\n"
       << "  --nugget <value>\n"
       << "  --precon <1|3>\n"
@@ -598,6 +602,7 @@ int main(int argc, char** argv) {
         &resources.option, "CA_level", driver_options.ca_level);
     d_c_bpack_set_I_option(
         &resources.option, "H2_use_sketch", driver_options.h2_use_sketch);
+    d_c_bpack_set_D_option(&resources.option, "H2_s_op", driver_options.h2_s_op);
     d_c_bpack_set_I_option(
         &resources.option, "H2_lazy_schur", driver_options.h2_lazy_schur);
     d_c_bpack_set_I_option(

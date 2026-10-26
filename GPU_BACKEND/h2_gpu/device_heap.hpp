@@ -821,22 +821,24 @@ inline void reserve_exchange_arena(int nproc, int share, double fraction = 0.0) 
 // its high-water over the data held when it began, plus an eighth); an
 // allocation that still does not fit fails.  An eviction on one rank only
 // would split the ranks between the device and host paths of that operator.
-// The evicted operator's kept solve factors go to the host first (its
-// keeper, register_solve_keeper in device_solve.hpp): the factorization left
-// the LU of X_RR on the device only, so it could not solve otherwise.  It
-// solves on, on the host or with its factors uploaded again at its next
-// solve.  (Evicting when the others held half the heap dropped the factors
-// of 7 of 16 diagonal blocks of a block-diagonal preconditioner on a 40 GB
-// GPU, which then failed in the host solve.)
+// What of an evicted operator has no host copy (the solve factors kept on the
+// device only) goes to its host boxes first (spillers), so its later solves
+// and logdet take the host's factors.  (Evicting whenever the others held
+// half the heap evicted 7 of 16 diagonal blocks of a block-diagonal
+// preconditioner on a 40 GB GPU, where all 16 fit.)
+//
+// Every H2 call on an operator activates it before it reads a store: the
+// builds (begin_operator_build), the solve (run_device_solve), the matvec
+// (run_device_h2_mul) and the logdet (hierarchical_logdet_parallel).
 struct OperatorContext {
     const void* active = nullptr;                         // the operator of the current H2 call
     uint64_t clock = 0;
     std::unordered_map<const void*, uint64_t> last_use;   // operator -> last use
-    // per kind of store (solve, matvec): release an operator's data; bytes it holds
+    // per kind of store (solve, matvec): release an operator's data; bytes it
+    // holds; before an eviction, its data without a host copy to the host
     std::vector<std::function<void(const void*)>> releasers;
     std::vector<std::function<size_t(const void*)>> holders;
-    // per operator: bring its device-only data to the host (before an eviction)
-    std::unordered_map<const void*, std::function<void()>> keepers;
+    std::vector<std::function<void(const void*)>> spillers;
     // what a build takes beyond the data held when it began (the largest so
     // far), and what was held when the current one began
     size_t build_need = 0, build_base = 0;
@@ -872,16 +874,11 @@ inline bool other_operators_hold_data() {
 }
 
 // Operator `tree` gives up its device data to make room (an eviction, on
-// every rank of the operator): its keeper first, with the stores serving it,
-// then every store releases its data.
+// every rank of the operator): its data without a host copy goes to the host
+// first (spillers), then every store releases its data.
 inline void evict_operator(const void* tree) {
     OperatorContext& c = operator_context();
-    if (auto k = c.keepers.find(tree); k != c.keepers.end()) {
-        const void* active = c.active;
-        c.active = tree;
-        k->second();
-        c.active = active;
-    }
+    for (const auto& spill : c.spillers) spill(tree);
     for (const auto& release : c.releasers) release(tree);
     c.last_use.erase(tree);
 }
@@ -890,7 +887,6 @@ inline void evict_operator(const void* tree) {
 inline void release_operator(const void* tree) {
     OperatorContext& c = operator_context();
     for (const auto& release : c.releasers) release(tree);
-    c.keepers.erase(tree);
     c.last_use.erase(tree);
     if (c.active == tree) c.active = nullptr;
 }

@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "zBPACK_wrapper.h"
+#include "bpack_inv_mult_check.hpp"
 #ifdef BPACK_EXAMPLE_GPU
 #include "gpu/gpu_evaluators.h"
 #endif
@@ -37,6 +38,7 @@ struct EMSurfOptions {
   int rcs_nsample = 1000;
   int mesh_normal = 1;
   int solve = 1;  // 0: stop after the factorization or compression and its check
+  int inv_mult_check = 0;  // columns of the inv_mult / transposed mult check after the solve; 0: none
 };
 
 double real_part(_Complex double value) { return __real__ value; }
@@ -94,6 +96,8 @@ EMSurfOptions parse_emsurf_options(int argc, char** argv) {
       options.scaling = parse_double(name.c_str(), next());
     } else if (name == "--solve") {
       options.solve = parse_int(name.c_str(), next());
+    } else if (name == "--inv_mult_check") {
+      options.inv_mult_check = parse_int(name.c_str(), next());
     }
   }
   if (options.rcs_nsample <= 0) throw std::runtime_error("--rcs_nsample must be positive");
@@ -326,11 +330,11 @@ int main(int argc, char** argv) {
     double h2_use_gpu = 0.0, hodlr_use_gpu = 0.0;
     z_c_bpack_getoption(&option, "H2_use_gpu", &h2_use_gpu);
     z_c_bpack_getoption(&option, "HODLR_use_gpu", &hodlr_use_gpu);
-    if ((h2_use_gpu > 0 || hodlr_use_gpu > 0) && (em_options.cfie_alpha == 1.0 || matrix_format == 1)) {
+    if (h2_use_gpu > 0 || hodlr_use_gpu > 0) {
       // GPU evaluator of the entries for H2_use_gpu / HODLR_use_gpu
       // (gpu/emsurf_gpu.cu): the EFIE by triangle pairs (a block
-      // evaluator), or the CFIE (an entry evaluator, not symmetric: HODLR
-      // only), from the mesh tables of Zelem_EMSURF
+      // evaluator), or the CFIE (an entry evaluator, not symmetric: HODLR,
+      // or an H2 with option%sym=0), from the mesh tables of Zelem_EMSURF
       int64_t nreals = 0;
       int64_t nints = 0;
       emsurf_get_gpu_table_sizes_c(&nreals, &nints);
@@ -387,6 +391,36 @@ int main(int argc, char** argv) {
       } else {
         write_bistatic_rcs(rank, local_size, &mesh, em_options.rcs_nsample,
                            wavenumber, solution);
+      }
+
+      // inv_mult 'N', 'T', 'C' and the transposed mult (bpack_inv_mult_check.hpp;
+      // with precon 2 the transposed mult alone)
+      double precon = 1.0;
+      z_c_bpack_getoption(&option, "precon", &precon);
+      using Z = std::complex<double>;
+      auto mult = [&](char trans, const Z* in, Z* out, int ncol) {
+        int n_in = local_size, n_out = local_size;
+        z_c_bpack_mult(&trans, reinterpret_cast<const _Complex double*>(in),
+                       reinterpret_cast<_Complex double*>(out), &n_in, &n_out, &ncol,
+                       &matrix, &option, &statistics, &process_tree);
+      };
+      if (em_options.inv_mult_check > 0 && static_cast<int>(precon) == 2) {
+        bpack_example::check_mult_transpose<Z>(MPI_COMM_WORLD, local_size, em_options.inv_mult_check, mult,
+                                               matrix_format == 7 ? "H2" : "HODLR");
+      } else if (em_options.inv_mult_check > 0) {
+        auto inv_mult = [&](char trans, const Z* in, Z* out, int ncol) {
+          int n_in = local_size, n_out = local_size;
+          z_c_bpack_inv_mult(&trans, reinterpret_cast<const _Complex double*>(in),
+                             reinterpret_cast<_Complex double*>(out), &n_in, &n_out, &ncol,
+                             &matrix, &option, &statistics, &process_tree);
+        };
+        const Z* rhs_begin = reinterpret_cast<const Z*>(right_hand_side.data());
+        const Z* solution_begin = reinterpret_cast<const Z*>(solution.data());
+        const std::vector<Z> solve_rhs(rhs_begin, rhs_begin + right_hand_side.size());
+        const std::vector<Z> solve_solution(solution_begin, solution_begin + solution.size());
+        bpack_example::check_inv_mult<Z>(MPI_COMM_WORLD, local_size, em_options.inv_mult_check, 5,
+                                         solve_rhs, solve_solution, nrhs, inv_mult, mult,
+                                         matrix_format == 7 ? "H2" : "HODLR");
       }
     }
 

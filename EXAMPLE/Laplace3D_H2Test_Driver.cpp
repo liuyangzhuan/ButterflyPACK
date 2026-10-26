@@ -8,6 +8,7 @@
 #include <iostream>
 #include <limits>
 #include <numeric>
+#include <random>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -15,6 +16,7 @@
 #include <mpi.h>
 
 #include "dBPACK_wrapper.h"
+#include "bpack_inv_mult_check.hpp"
 #ifdef BPACK_EXAMPLE_GPU
 #include "gpu/gpu_evaluators.h"
 #endif
@@ -46,6 +48,7 @@ struct DriverOptions {
   int h2_id_radius = -1;  // -1: the library default
   int h2_id_proxy = -1;
   int h2_id_proxy_points = -1;
+  double h2_s_op = 0.0;  // H2_s_op: the IDs' absolute floor tol_comp * h2_s_op (0 off)
   int h2_ca_staged_halo = 0;
   int h2_ca_owner_component = 0;
   int h2_ca_pack_shared = 0;  // 0 auto, 1 always, 2 never
@@ -53,6 +56,9 @@ struct DriverOptions {
   int h2_ca_owner_serial = 0;
   int precon = 1;
   int nrhs = 1;
+  int inv_mult_check = 0;  // columns of the inv_mult / transposed mult check (bpack_inv_mult_check.hpp); 0: none
+  int extract_check = 0;   // intersections of the extraction check of a compression-only H2 (precon 2); 0: none
+  int logdet_check = 0;    // 1: the logdet and a solve again after another H2 is built (format 7, not precon 2)
   int verbosity = 1;
   int elem_extract = -1;  // -1: 2, with hodlr_extract_ranks 1
   int lrlevel = 0;
@@ -60,6 +66,12 @@ struct DriverOptions {
   int gpu_evaluator = 1;
   int format = 7;
   int sym = 1;
+  // a nonsymmetric matrix (--sym 0; H2: --H2_unstructured 1): a dipole term
+  // c (d . (x - y)) / r along a fixed direction d, and column weights w(y) =
+  // 1 + a sin(2 pi (y0 + 2 y1 + 3 y2)) (exact checks: log det(A W) =
+  // log det(A) + sum log w, x = W^{-1} x_sym)
+  double skew = 0.0;
+  double column_weight = 0.0;
   int distributed64 = 0;
   bool show_help = false;
 };
@@ -220,6 +232,8 @@ DriverOptions parse_driver_options(int argc, char** argv) {
       options.h2_id_proxy = parse_int(value, "H2_ID_proxy");
     } else if (name == "h2_id_proxy_points") {
       options.h2_id_proxy_points = parse_int(value, "H2_ID_proxy_points");
+    } else if (name == "h2_s_op") {
+      options.h2_s_op = parse_double(value, "H2_s_op");
     } else if (name == "h2_ca_staged_halo") {
       options.h2_ca_staged_halo = parse_int(value, "H2_CA_staged_halo");
     } else if (name == "h2_ca_owner_component") {
@@ -238,12 +252,18 @@ DriverOptions parse_driver_options(int argc, char** argv) {
       options.precon = parse_int(value, "precon");
     } else if (name == "nrhs") {
       options.nrhs = parse_int(value, "nrhs");
+    } else if (name == "inv_mult_check") {
+      options.inv_mult_check = parse_int(value, "inv_mult_check");
+    } else if (name == "extract_check") {
+      options.extract_check = parse_int(value, "extract_check");
+    } else if (name == "logdet_check") {
+      options.logdet_check = parse_int(value, "logdet_check");
     } else if (name == "verbosity") {
       options.verbosity = parse_int(value, "verbosity");
     } else if (name == "elem_extract") {
       options.elem_extract = parse_int(value, "elem_extract");
-    } else if (name == "hodlr_extract_ranks") {
-      options.hodlr_extract_ranks = parse_int(value, "hodlr_extract_ranks");
+    } else if (name == "hodlr_extract_ranks" || name == "extract_ranks") {
+      options.hodlr_extract_ranks = parse_int(value, "extract_ranks");
     } else if (name == "gpu_evaluator") {
       options.gpu_evaluator = parse_int(value, "gpu_evaluator");
     } else if (name == "lrlevel") {
@@ -271,6 +291,10 @@ DriverOptions parse_driver_options(int argc, char** argv) {
       options.format = parse_int(value, "format");
     } else if (name == "sym") {
       options.sym = parse_int(value, "sym");
+    } else if (name == "skew") {
+      options.skew = std::stod(value);
+    } else if (name == "column_weight") {
+      options.column_weight = std::stod(value);
     } else {
       throw std::invalid_argument("unknown option: --" + name);
     }
@@ -289,9 +313,16 @@ DriverOptions parse_driver_options(int argc, char** argv) {
     throw std::invalid_argument("hodlr_extract_ranks must be nonnegative");
   }
   if (options.hodlr_extract_ranks > 0 &&
-      (options.format != 1 || options.distributed64 != 0)) {
+      ((options.format != 1 && options.format != 7) || options.distributed64 != 0)) {
     throw std::invalid_argument(
-        "hodlr_extract_ranks requires format=1 and distributed64=0");
+        "extract_ranks requires format=1 or 7 and distributed64=0");
+  }
+  if (options.hodlr_extract_ranks > 0 && options.format == 7 &&
+      (options.elem_extract == 0 || options.h2_unstructured != 1 || options.precon == 2)) {
+    // (the H2's blocks from the compressed H2 through the collective block
+    // callback; unstructured Color only; the H2 under test factored)
+    throw std::invalid_argument(
+        "extract_ranks with format=7 requires elem_extract 1, H2_unstructured 1 and precon 1 or 3");
   }
   if (options.gpu_evaluator != 0 && options.gpu_evaluator != 1) {
     throw std::invalid_argument("gpu_evaluator must be 0 or 1");
@@ -305,7 +336,7 @@ DriverOptions parse_driver_options(int argc, char** argv) {
   if (options.hodlr_extract_ranks > 0 && options.elem_extract == 2) {
     // (the extraction from the source is collective over all ranks)
     throw std::invalid_argument(
-        "with hodlr_extract_ranks, elem_extract must be 1 (or 0)");
+        "with extract_ranks, elem_extract must be 1 (or 0)");
   }
   if (options.precon < 1 || options.precon > 3) {
     throw std::invalid_argument("precon must be 1, 2, or 3");
@@ -339,7 +370,7 @@ DriverOptions parse_driver_options(int argc, char** argv) {
     throw std::invalid_argument("H2_XRR_factor must be 0 or 1");
   }
   if (options.h2_use_gpu < 0 || options.h2_use_gpu > 2) {
-    throw std::invalid_argument("H2_use_gpu must be 0, 1 or 2");
+    throw std::invalid_argument("H2_use_gpu must be 0 (CPU) or 1 (GPU, FP64 tensor-core GEMMs); 2 is taken as 1");
   }
   if (options.hodlr_use_gpu < 0 || options.hodlr_use_gpu > 2) {
     throw std::invalid_argument("HODLR_use_gpu must be 0, 1 or 2");
@@ -369,8 +400,14 @@ DriverOptions parse_driver_options(int argc, char** argv) {
   if (options.sym != 0 && options.sym != 1) {
     throw std::invalid_argument("sym must be 0 or 1");
   }
-  if (options.format == 7 && options.sym != 1) {
-    throw std::invalid_argument("format=7 (H2) requires --sym 1");
+  if (options.format == 7 && options.sym != 1 && options.h2_unstructured != 1) {
+    throw std::invalid_argument("format=7 (H2) with --sym 0 requires --H2_unstructured 1");
+  }
+  if ((options.skew != 0.0 || options.column_weight != 0.0) && options.sym != 0) {
+    throw std::invalid_argument("--skew and --column_weight make the matrix nonsymmetric: pass --sym 0");
+  }
+  if (!(options.column_weight >= 0.0 && options.column_weight < 1.0)) {
+    throw std::invalid_argument("--column_weight must lie in [0, 1)");
   }
   if (options.distributed64 != 0 && options.distributed64 != 1) {
     throw std::invalid_argument("distributed64 must be 0 or 1");
@@ -428,7 +465,7 @@ void print_usage(const char* executable) {
          "                                blocks; the factorization is lossy too)\n"
       << "  --H2_GEMM_split <count>\n"
       << "  --H2_XRR_factor <0|1>\n"
-      << "  --H2_use_gpu <0|1|2>\n"
+      << "  --H2_use_gpu <0|1>   (1: GPU, FP64 tensor-core GEMMs; 2 is taken as 1)\n"
       << "  --HODLR_use_gpu <0|1|2>\n"
       << "  --HODLR_gpu_pieces <n>   (pieces per rank of a shared HODLR block on the GPU; default 4)\n"
       << "  --RecLR_leaf <n>   (low-rank compression of HODLR blocks; 5: BACA without overlap)\n"
@@ -436,6 +473,7 @@ void print_usage(const char* executable) {
       << "  --H2_ID_radius <n>   (ID neighborhood radius; default 2)\n"
       << "  --H2_ID_proxy <0|1|2>   (0: none, 1: geometric surface, 2: adaptive row sampling; needs --distributed64 0)\n"
       << "  --H2_ID_proxy_points <n>   (surface samples of --H2_ID_proxy 1)\n"
+      << "  --H2_s_op <s>   (IDs: absolute floor tol_comp*s on the rank rule; at most ||A|| for --precon 2, at most 1/||A^-1|| factored; 0 off)\n"
       << "  --H2_CA_staged_halo <0|2>\n"
       << "  --H2_CA_owner_component <0|3>\n"
       << "  --H2_CA_pack_shared <auto|always|never>\n"
@@ -443,14 +481,29 @@ void print_usage(const char* executable) {
       << "  --H2_CA_owner_serial <0|1>\n"
       << "  --precon <1|2|3>\n"
       << "  --nrhs <count>\n"
+      << "  --inv_mult_check <columns>   (after the solve: inv_mult N/T/C and the\n"
+         "                                transposed mult; with precon 2 the\n"
+         "                                transposed mult alone)\n"
+      << "  --extract_check <count>   (format=7, precon 2, distributed64 1: that many\n"
+         "                             random blocks extracted from the compressed H2,\n"
+         "                             against the kernel and its matvec)\n"
+      << "  --logdet_check <0|1>   (format=7, precon 1 or 3: the logdet and a solve of\n"
+         "                          the factored H2 again after a compression-only H2\n"
+         "                          of the same kernel is built)\n"
       << "  --format <1|7>\n"
-      << "  --sym <0|1>          (0: unsymmetric HODLR, format=1 only)\n"
+      << "  --sym <0|1>          (0: nonsymmetric; format=7 needs --H2_unstructured 1)\n"
+      << "  --skew <c>           (a nonsymmetric dipole term c (d . (x - y)) / r; --sym 0)\n"
+      << "  --column_weight <a>  (columns times 1 + a sin(...), 0 <= a < 1; --sym 0)\n"
       << "  --distributed64 <0|1>\n"
       << "  --elem_extract <0|1|2>   (default 2; with --hodlr_extract_ranks: of\n"
          "                            the HODLR from the entries, default 1)\n"
-      << "  --hodlr_extract_ranks <P>   (format=1: build the HODLR from the kernel on\n"
+      << "  --extract_ranks <P>   (format=1: build the HODLR from the kernel on\n"
          "                            the first P ranks, then the one factored and\n"
-         "                            solved on all ranks from its entries)\n"
+         "                            solved on all ranks from its entries; format=7:\n"
+         "                            the same with a compression-only H2 (precon 2)\n"
+         "                            and an H2 factored from its entries through the\n"
+         "                            collective block callback, elem_extract 1;\n"
+         "                            alias --hodlr_extract_ranks)\n"
       << "  --gpu_evaluator <0|1>   (0: no GPU evaluator of the kernel; the GPU\n"
          "                            HODLR construction takes the entries through\n"
          "                            the block callback)\n"
@@ -487,11 +540,14 @@ double laplace_self_cell_integral(int64_t grid_size) {
 
 class Laplace3DApplication {
  public:
-  Laplace3DApplication(int64_t grid_size, bool materialize_locations)
+  Laplace3DApplication(int64_t grid_size, bool materialize_locations, double skew = 0.0,
+                       double column_weight = 0.0)
       : grid_size_(grid_size),
         point_count_(checked_cube(grid_size, "grid_size")),
         inverse_4pi_n_(1.0 / (4.0 * kPi * static_cast<double>(point_count_))),
-        diagonal_(laplace_self_cell_integral(grid_size)) {
+        diagonal_(laplace_self_cell_integral(grid_size)),
+        skew_(skew),
+        column_weight_(column_weight) {
     if (materialize_locations) {
       locations_.resize(static_cast<size_t>(point_count_) * 3);
       for (int64_t index = 0; index < point_count_; ++index) {
@@ -503,6 +559,26 @@ class Laplace3DApplication {
   double* locations() { return locations_.data(); }
   double diagonal() const { return diagonal_; }
   double inverse_4pi_n() const { return inverse_4pi_n_; }
+  double skew() const { return skew_; }
+  double column_weight() const { return column_weight_; }
+  const double* skew_direction() const { return kSkewDirection; }
+  bool symmetric() const { return skew_ == 0.0 && column_weight_ == 0.0; }
+
+  // w(y) of --column_weight
+  double weight(const double* y) const {
+    if (column_weight_ == 0.0) return 1.0;
+    return 1.0 + column_weight_ * std::sin(2.0 * kPi * (y[0] + 2.0 * y[1] + 3.0 * y[2]));
+  }
+  // sum over the points of log w (log det(A W) - log det(A))
+  double log_weight_sum() const {
+    double sum = 0.0;
+    for (int64_t index = 0; index < point_count_; ++index) {
+      double y[3];
+      coordinate(index, y);
+      sum += std::log(weight(y));
+    }
+    return sum;
+  }
 
   void coordinate(int64_t index, double* point) const {
     const int64_t k = index % grid_size_;
@@ -517,12 +593,16 @@ class Laplace3DApplication {
 
   double evaluate_coordinates(int64_t row_id, int64_t column_id,
                               const double* x, const double* y) const {
-    if (row_id == column_id) return diagonal_;
+    if (row_id == column_id) return diagonal_ * weight(y);
     const double dx = x[0] - y[0];
     const double dy = x[1] - y[1];
     const double dz = x[2] - y[2];
     const double r = std::sqrt(dx * dx + dy * dy + dz * dz);
-    return inverse_4pi_n_ / r;
+    double value = inverse_4pi_n_ / r;
+    if (skew_ != 0.0) {
+      value *= 1.0 + skew_ * (kSkewDirection[0] * dx + kSkewDirection[1] * dy + kSkewDirection[2] * dz) / r;
+    }
+    return value * weight(y);
   }
 
   double evaluate(int row, int column) const {
@@ -546,10 +626,14 @@ class Laplace3DApplication {
   }
 
  private:
+  // the dipole direction of --skew: (1, 2, 3) / sqrt(14)
+  static constexpr double kSkewDirection[3] = {0.2672612419124244, 0.5345224838248488, 0.8017837257372732};
   int64_t grid_size_;
   int64_t point_count_;
   double inverse_4pi_n_;
   double diagonal_;
+  double skew_;
+  double column_weight_;
   std::vector<double> locations_;
 };
 
@@ -698,6 +782,32 @@ void extraction_block_callback(
       pgidx, npmap, pmaps);
 }
 
+// The sketched blocks of the H2 under test (the ID's sketches of its kernel
+// rows) from the source, collective over all ranks (elem_extract=1)
+void extraction_sketch_callback(
+    int* nsketch, int* nallrows, int* nallcols, int64_t* nallomega, int64_t* nalldat_loc, int* allrows,
+    int* allcols, int* rowidx, int* colidx, int* sketchdim, int* omegaidx, int* omega_row, int* omega_dest,
+    double* omega_val, double* alldat_loc, int* pgidx, int* npmap, int* pmaps, C2Fptr quant) {
+  auto* source = static_cast<ExtractionSource*>(quant);
+  d_c_bpack_extractsketch_bridge(
+      &source->matrix, &source->option, &source->mesh, &source->stats, &source->process_tree,
+      &source->caller_tree, nsketch, nallrows, nallcols, nallomega, nalldat_loc, allrows, allcols, rowidx,
+      colidx, sketchdim, omegaidx, omega_row, omega_dest, omega_val, alldat_loc, pgidx, npmap, pmaps);
+}
+
+// The transposed sketched blocks, Omega A(columns, rows)^T (a nonsymmetric
+// H2's ID), from the source, collective over all ranks (elem_extract=1)
+void extraction_sketch_transpose_callback(
+    int* nsketch, int* nallrows, int* nallcols, int64_t* nallomega, int64_t* nalldat_loc, int* allrows,
+    int* allcols, int* rowidx, int* colidx, int* sketchdim, int* omegaidx, int* omega_row, int* omega_dest,
+    double* omega_val, double* alldat_loc, int* pgidx, int* npmap, int* pmaps, C2Fptr quant) {
+  auto* source = static_cast<ExtractionSource*>(quant);
+  d_c_bpack_extractsketch_transpose_bridge(
+      &source->matrix, &source->option, &source->mesh, &source->stats, &source->process_tree,
+      &source->caller_tree, nsketch, nallrows, nallcols, nallomega, nalldat_loc, allrows, allcols, rowidx,
+      colidx, sketchdim, omegaidx, omega_row, omega_dest, omega_val, alldat_loc, pgidx, npmap, pmaps);
+}
+
 struct ButterflyResources {
   F2Cptr option = nullptr;
   F2Cptr stats = nullptr;
@@ -740,7 +850,8 @@ int main(int argc, char** argv) {
         checked_cube(driver_options.grid_size, "grid_size");
     int dimension = 3;
     Laplace3DApplication application(
-        driver_options.grid_size, driver_options.distributed64 == 0);
+        driver_options.grid_size, driver_options.distributed64 == 0, driver_options.skew,
+        driver_options.column_weight);
 
     if (rank == 0) {
       std::cout << "=== ButterflyPACK H2 3D Laplace Test ===\n"
@@ -750,6 +861,12 @@ int main(int argc, char** argv) {
                 << "Total points: " << point_count_64 << "\n"
                 << "Format: " << driver_options.format << "\n"
                 << "sym: " << driver_options.sym << "\n"
+                << (driver_options.skew != 0.0 ? "Skew (dipole) term: " + std::to_string(driver_options.skew) + "\n" : "")
+                << (driver_options.column_weight != 0.0
+                        ? "Column weights: amplitude " + std::to_string(driver_options.column_weight) +
+                              ", sum of log w " + std::to_string(application.log_weight_sum()) +
+                              " (log det(A W) - log det(A))\n"
+                        : "")
                 << "C API: "
                 << (driver_options.distributed64 == 1
                         ? "distributed 64-bit"
@@ -866,6 +983,7 @@ int main(int argc, char** argv) {
             option_handle, "H2_ID_proxy_points",
             driver_options.h2_id_proxy_points);
       }
+      d_c_bpack_set_D_option(option_handle, "H2_s_op", driver_options.h2_s_op);
       d_c_bpack_set_I_option(
           option_handle, "H2_CA_staged_halo",
           driver_options.h2_ca_staged_halo);
@@ -915,9 +1033,11 @@ int main(int argc, char** argv) {
       d_c_bpack_createptree(&source_size, source_groups.data(),
                             &source_fortran_comm, &source.process_tree);
       set_options(&source.option);
-      // (not factored; the Laplace block callback on its own ranks)
+      // (not factored, or for an H2 compressed only; the Laplace block
+      // callback on its own ranks)
       d_c_bpack_set_I_option(&source.option, "ErrSol", 0);
       d_c_bpack_set_I_option(&source.option, "elem_extract", 2);
+      if (driver_options.format == 7) d_c_bpack_set_I_option(&source.option, "precon", 2);
       int point_count = static_cast<int>(point_count_64);
       int nlevel = 0;
       int user_tree = point_count;
@@ -930,23 +1050,31 @@ int main(int argc, char** argv) {
           &source_kernel_quantities, &source.process_tree,
           &distance_callback, &near_far_callback, &application);
 #ifdef BPACK_EXAMPLE_GPU
-      if (driver_options.hodlr_use_gpu > 0 && driver_options.gpu_evaluator == 1) {
-        laplace3d_gpu_register(&source.matrix, application.inverse_4pi_n(),
-                               application.diagonal());
+      if ((driver_options.format == 7 ? driver_options.h2_use_gpu : driver_options.hodlr_use_gpu) > 0 &&
+          driver_options.gpu_evaluator == 1) {
+        laplace3d_gpu_register_general(&source.matrix, application.inverse_4pi_n(), application.diagonal(),
+                                       application.skew(), application.skew_direction(),
+                                       application.column_weight());
       }
 #endif
       d_c_bpack_construct_element_compute(
           &source.matrix, &source.option, &source.stats, &source.mesh,
           &source_kernel_quantities, &source.process_tree,
           &laplace_entry_callback, &laplace_block_callback, &application);
+      if (driver_options.format == 7) {
+        // the compression-only H2 (precon 2): the source of the entries
+        d_c_bpack_factor(&source.matrix, &source.option, &source.stats,
+                         &source.process_tree, &source.mesh);
+      }
       extraction.matrix = source.matrix;
       extraction.option = source.option;
       extraction.mesh = source.mesh;
       extraction.stats = source.stats;
       extraction.process_tree = source.process_tree;
       if (rank == 0) {
-        std::cout << "\nBuilt the source HODLR on " << source_ranks
-                  << " ranks; the HODLR under test from its entries on "
+        const char* kind = driver_options.format == 7 ? "H2" : "HODLR";
+        std::cout << "\nBuilt the source " << kind << " on " << source_ranks
+                  << " ranks; the " << kind << " under test from its entries on "
                   << mpi_size << " ranks:" << std::endl;
       }
     }
@@ -954,10 +1082,13 @@ int main(int argc, char** argv) {
     set_options(&resources.option);
     if (source_ranks > 0) {
       // the HODLR under test in the source's tree order (natural order, no
-      // geometry), its entries by blocks from the source
-      d_c_bpack_set_I_option(&resources.option, "nogeo", 1);
-      d_c_bpack_set_I_option(&resources.option, "xyzsort", 0);
-      d_c_bpack_set_I_option(&resources.option, "knn", 0);
+      // geometry), its entries by blocks from the source; an H2 keeps its
+      // geometry (the source's indices are the points', as its own)
+      if (driver_options.format == 1) {
+        d_c_bpack_set_I_option(&resources.option, "nogeo", 1);
+        d_c_bpack_set_I_option(&resources.option, "xyzsort", 0);
+        d_c_bpack_set_I_option(&resources.option, "knn", 0);
+      }
       extraction.caller_tree = resources.process_tree;
     }
 
@@ -1005,8 +1136,9 @@ int main(int argc, char** argv) {
       d_c_bpack_getoption(&resources.option, "H2_use_gpu", &h2_use_gpu);
       d_c_bpack_getoption(&resources.option, "HODLR_use_gpu", &hodlr_use_gpu);
       if (h2_use_gpu > 0 || hodlr_use_gpu > 0) {
-        laplace3d_gpu_register(&resources.matrix, application.inverse_4pi_n(),
-                               application.diagonal());
+        laplace3d_gpu_register_general(&resources.matrix, application.inverse_4pi_n(), application.diagonal(),
+                                       application.skew(), application.skew_direction(),
+                                       application.column_weight());
       }
     }
 #endif
@@ -1016,6 +1148,12 @@ int main(int argc, char** argv) {
           &resources.mesh, &kernel_quantities, &resources.process_tree,
           &laplace_entry_callback64, &laplace_block_callback64, &application);
     } else if (source_ranks > 0) {
+      // an H2 asks for the ID's sketches of its kernel rows sketched (a
+      // nonsymmetric one also for the transposed sketches)
+      if (driver_options.format == 7) {
+        d_c_bpack_set_sketch_callback(&resources.matrix, &extraction_sketch_callback);
+        d_c_bpack_set_sketch_transpose_callback(&resources.matrix, &extraction_sketch_transpose_callback);
+      }
       d_c_bpack_construct_element_compute(
           &resources.matrix, &resources.option, &resources.stats,
           &resources.mesh, &kernel_quantities, &resources.process_tree,
@@ -1034,6 +1172,254 @@ int main(int argc, char** argv) {
     d_c_bpack_factor(
         &resources.matrix, &resources.option, &resources.stats,
         &resources.process_tree, &resources.mesh);
+
+    // --extract_check: random blocks of the compression-only H2 through the
+    // extraction bridge (each to a random rank), against the kernel; then
+    // this rank's rows of two columns against the compressed matvec of their
+    // unit vectors (the same representation: rounding)
+    if (driver_options.extract_check > 0 && driver_options.format == 7 &&
+        driver_options.precon == 2 && driver_options.distributed64 == 1) {
+      const int64_t n_global = point_count_64;
+      std::mt19937_64 rng(20261016);
+      auto pick = [&](int count, std::vector<int>& out) {
+        // a random box-sized cluster of consecutive ids, or scattered ids
+        const bool cluster = rng() % 2 == 0;
+        const int64_t first = static_cast<int64_t>(rng() % static_cast<uint64_t>(n_global));
+        for (int i = 0; i < count; ++i) {
+          const int64_t id = cluster ? (first + i * 7) % n_global
+                                     : static_cast<int64_t>(rng() % static_cast<uint64_t>(n_global));
+          out.push_back(static_cast<int>(id + 1));
+        }
+      };
+      int ninter = driver_options.extract_check;
+      std::vector<int> allrows, allcols, rowidx, colidx, pgidx;
+      for (int n = 0; n < ninter; ++n) {
+        const int nr = 1 + static_cast<int>(rng() % 60), nc = 1 + static_cast<int>(rng() % 60);
+        pick(nr, allrows);
+        pick(nc, allcols);
+        rowidx.push_back(nr);
+        colidx.push_back(nc);
+        pgidx.push_back(static_cast<int>(rng() % static_cast<uint64_t>(mpi_size)));
+      }
+      // this rank's rows of two random columns, owned here
+      std::vector<int> probe(2);
+      for (int& j : probe) j = static_cast<int>(rng() % static_cast<uint64_t>(n_global)) + 1;
+      for (int p = 0; p < mpi_size; ++p) {
+        for (int j : probe) {
+          // (every rank must pass the same list: rank p's rows)
+          const int64_t base = n_global / mpi_size, extra = n_global % mpi_size;
+          const int64_t first = p * base + std::min<int64_t>(p, extra);
+          const int64_t count = base + (p < extra ? 1 : 0);
+          for (int64_t i = 0; i < count; ++i) allrows.push_back(static_cast<int>(first + i + 1));
+          allcols.push_back(j);
+          rowidx.push_back(static_cast<int>(count));
+          colidx.push_back(1);
+          pgidx.push_back(p);
+        }
+      }
+      ninter = static_cast<int>(rowidx.size());
+      std::vector<int> pmaps(3 * mpi_size);
+      for (int p = 0; p < mpi_size; ++p) {
+        pmaps[p] = 1;
+        pmaps[mpi_size + p] = 1;
+        pmaps[2 * mpi_size + p] = p;
+      }
+      int64_t mine = 0;
+      for (int n = 0; n < ninter; ++n) {
+        if (pgidx[n] == rank) mine += static_cast<int64_t>(rowidx[n]) * colidx[n];
+      }
+      std::vector<double> values(static_cast<size_t>(std::max<int64_t>(mine, 1)));
+      int nallrows = static_cast<int>(allrows.size()), nallcols = static_cast<int>(allcols.size());
+      int npmap = mpi_size;
+      MPI_Barrier(MPI_COMM_WORLD);
+      const double t0 = MPI_Wtime();
+      d_c_bpack_extractelement_bridge(
+          &resources.matrix, &resources.option, &resources.mesh, &resources.stats,
+          &resources.process_tree, &resources.process_tree, &ninter, &nallrows,
+          &nallcols, &mine, allrows.data(), allcols.data(), values.data(),
+          rowidx.data(), colidx.data(), pgidx.data(), &npmap, pmaps.data());
+      double t_extract = MPI_Wtime() - t0;
+      MPI_Allreduce(MPI_IN_PLACE, &t_extract, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+
+      // against the kernel (the random blocks), and the matvec (the probes)
+      std::vector<double> unit(static_cast<size_t>(local_points) * 2, 0.0);
+      for (int c = 0; c < 2; ++c) {
+        const int64_t local = probe[static_cast<size_t>(c)] - 1 - distributed_input.first;
+        if (local >= 0 && local < local_points) unit[static_cast<size_t>(local + c * local_points)] = 1.0;
+      }
+      std::vector<double> product(unit.size(), 0.0);
+      {
+        int two = 2, n_in = local_points, n_out = local_points;
+        const char trans = 'N';
+        d_c_bpack_mult(&trans, unit.data(), product.data(), &n_in, &n_out, &two,
+                       &resources.matrix, &resources.option, &resources.stats,
+                       &resources.process_tree);
+      }
+      double kernel_error2 = 0.0, kernel_norm2 = 0.0, matvec_error = 0.0, matvec_scale = 0.0;
+      int64_t entries = 0;
+      int64_t at = 0, row_at = 0, col_at = 0;
+      const int random_blocks = driver_options.extract_check;
+      for (int n = 0; n < ninter; ++n) {
+        const int nr = rowidx[n], nc = colidx[n];
+        if (pgidx[n] == rank) {
+          for (int j = 0; j < nc; ++j) {
+            for (int i = 0; i < nr; ++i) {
+              const double v = values[static_cast<size_t>(at + i + static_cast<int64_t>(j) * nr)];
+              if (n < random_blocks) {
+                // (distributed64: the coordinates from the ids, none stored)
+                const int64_t a = allrows[static_cast<size_t>(row_at + i)], b = allcols[static_cast<size_t>(col_at + j)];
+                double x[3], y[3];
+                application.coordinate(a - 1, x);
+                application.coordinate(b - 1, y);
+                const double k = application.evaluate_coordinates(a, b, x, y);
+                kernel_error2 += (v - k) * (v - k);
+                kernel_norm2 += k * k;
+              } else {
+                const int c = ((n - random_blocks) % 2);
+                const double y = product[static_cast<size_t>(i + c * local_points)];
+                matvec_error = std::max(matvec_error, std::abs(v - y));
+                matvec_scale = std::max(matvec_scale, std::abs(y));
+              }
+            }
+          }
+          at += static_cast<int64_t>(nr) * nc;
+          entries += static_cast<int64_t>(nr) * nc;
+        }
+        row_at += nr;
+        col_at += nc;
+      }
+      MPI_Allreduce(MPI_IN_PLACE, &kernel_error2, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+      MPI_Allreduce(MPI_IN_PLACE, &kernel_norm2, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+      MPI_Allreduce(MPI_IN_PLACE, &matvec_error, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+      MPI_Allreduce(MPI_IN_PLACE, &matvec_scale, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+      MPI_Allreduce(MPI_IN_PLACE, &entries, 1, MPI_INT64_T, MPI_SUM, MPI_COMM_WORLD);
+
+      // the random blocks sketched (c_bpack_extractsketch_bridge), against
+      // the same sketch of their extracted entries
+      int nsketch = random_blocks;
+      std::vector<int> sketchdim, omegaidx, omega_row, omega_dest;
+      std::vector<double> omega_val;
+      int nsrows = 0, nscols = 0;
+      for (int n = 0; n < nsketch; ++n) {
+        const int d = 1 + static_cast<int>(rng() % 40);
+        sketchdim.push_back(d);
+        for (int i = 0; i < rowidx[n]; ++i) {
+          for (int e = 0; e < 4; ++e) {
+            omega_row.push_back(i + 1);
+            omega_dest.push_back(static_cast<int>(rng() % static_cast<uint64_t>(d)) + 1);
+            omega_val.push_back(rng() % 2 == 0 ? 0.5 : -0.5);
+          }
+        }
+        omegaidx.push_back(4 * rowidx[n]);
+        nsrows += rowidx[n];
+        nscols += colidx[n];
+      }
+      int64_t sketch_mine = 0;
+      for (int n = 0; n < nsketch; ++n) {
+        if (pgidx[n] == rank) sketch_mine += static_cast<int64_t>(sketchdim[n]) * colidx[n];
+      }
+      std::vector<double> sketched(static_cast<size_t>(std::max<int64_t>(sketch_mine, 1)));
+      int64_t nallomega = static_cast<int64_t>(omega_val.size());
+      MPI_Barrier(MPI_COMM_WORLD);
+      const double t_sketch0 = MPI_Wtime();
+      d_c_bpack_extractsketch_bridge(
+          &resources.matrix, &resources.option, &resources.mesh, &resources.stats,
+          &resources.process_tree, &resources.process_tree, &nsketch, &nsrows, &nscols, &nallomega,
+          &sketch_mine, allrows.data(), allcols.data(), rowidx.data(), colidx.data(), sketchdim.data(),
+          omegaidx.data(), omega_row.data(), omega_dest.data(), omega_val.data(), sketched.data(),
+          pgidx.data(), &npmap, pmaps.data());
+      double t_sketch = MPI_Wtime() - t_sketch0;
+      MPI_Allreduce(MPI_IN_PLACE, &t_sketch, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+      double sketch_error = 0.0, sketch_scale = 0.0;
+      {
+        int64_t at_entries = 0, at_sketch = 0, e0 = 0;
+        for (int n = 0; n < nsketch; ++n) {
+          const int nr = rowidx[n], nc = colidx[n], d = sketchdim[n];
+          if (pgidx[n] == rank) {
+            std::vector<double> reference(static_cast<size_t>(d) * nc, 0.0);
+            for (int64_t e = e0; e < e0 + omegaidx[n]; ++e) {
+              const int r = omega_row[static_cast<size_t>(e)] - 1, i = omega_dest[static_cast<size_t>(e)] - 1;
+              for (int j = 0; j < nc; ++j) {
+                reference[static_cast<size_t>(i + j * d)] +=
+                    omega_val[static_cast<size_t>(e)] * values[static_cast<size_t>(at_entries + r + static_cast<int64_t>(j) * nr)];
+              }
+            }
+            for (size_t q = 0; q < reference.size(); ++q) {
+              sketch_error = std::max(sketch_error, std::abs(sketched[static_cast<size_t>(at_sketch) + q] - reference[q]));
+              sketch_scale = std::max(sketch_scale, std::abs(reference[q]));
+            }
+            at_entries += static_cast<int64_t>(nr) * nc;
+            at_sketch += static_cast<int64_t>(d) * nc;
+          }
+          e0 += omegaidx[n];
+        }
+      }
+      MPI_Allreduce(MPI_IN_PLACE, &sketch_error, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+      MPI_Allreduce(MPI_IN_PLACE, &sketch_scale, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+
+      // the same transposed (c_bpack_extractsketch_transpose_bridge): Omega
+      // A(J, I)^T against that sketch of the extracted A(J, I)
+      std::vector<double> values_t;
+      {
+        int64_t mine_t = 0;
+        for (int n = 0; n < nsketch; ++n) {
+          if (pgidx[n] == rank) mine_t += static_cast<int64_t>(rowidx[n]) * colidx[n];
+        }
+        values_t.assign(static_cast<size_t>(std::max<int64_t>(mine_t, 1)), 0.0);
+        d_c_bpack_extractelement_bridge(
+            &resources.matrix, &resources.option, &resources.mesh, &resources.stats,
+            &resources.process_tree, &resources.process_tree, &nsketch, &nscols, &nsrows, &mine_t,
+            allcols.data(), allrows.data(), values_t.data(), colidx.data(), rowidx.data(), pgidx.data(), &npmap,
+            pmaps.data());
+      }
+      std::vector<double> sketched_t(static_cast<size_t>(std::max<int64_t>(sketch_mine, 1)));
+      MPI_Barrier(MPI_COMM_WORLD);
+      const double t_sketch_t0 = MPI_Wtime();
+      d_c_bpack_extractsketch_transpose_bridge(
+          &resources.matrix, &resources.option, &resources.mesh, &resources.stats,
+          &resources.process_tree, &resources.process_tree, &nsketch, &nsrows, &nscols, &nallomega,
+          &sketch_mine, allrows.data(), allcols.data(), rowidx.data(), colidx.data(), sketchdim.data(),
+          omegaidx.data(), omega_row.data(), omega_dest.data(), omega_val.data(), sketched_t.data(),
+          pgidx.data(), &npmap, pmaps.data());
+      double t_sketch_t = MPI_Wtime() - t_sketch_t0;
+      MPI_Allreduce(MPI_IN_PLACE, &t_sketch_t, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+      double sketch_t_error = 0.0, sketch_t_scale = 0.0;
+      {
+        int64_t at_entries = 0, at_sketch = 0, e0 = 0;
+        for (int n = 0; n < nsketch; ++n) {
+          const int nr = rowidx[n], nc = colidx[n], d = sketchdim[n];
+          if (pgidx[n] == rank) {
+            std::vector<double> reference(static_cast<size_t>(d) * nc, 0.0);
+            for (int64_t e = e0; e < e0 + omegaidx[n]; ++e) {
+              const int r = omega_row[static_cast<size_t>(e)] - 1, i = omega_dest[static_cast<size_t>(e)] - 1;
+              for (int j = 0; j < nc; ++j) {  // (A(J, I): nc x nr)
+                reference[static_cast<size_t>(i + j * d)] +=
+                    omega_val[static_cast<size_t>(e)] * values_t[static_cast<size_t>(at_entries + j + static_cast<int64_t>(r) * nc)];
+              }
+            }
+            for (size_t q = 0; q < reference.size(); ++q) {
+              sketch_t_error = std::max(sketch_t_error, std::abs(sketched_t[static_cast<size_t>(at_sketch) + q] - reference[q]));
+              sketch_t_scale = std::max(sketch_t_scale, std::abs(reference[q]));
+            }
+            at_entries += static_cast<int64_t>(nr) * nc;
+            at_sketch += static_cast<int64_t>(d) * nc;
+          }
+          e0 += omegaidx[n];
+        }
+      }
+      MPI_Allreduce(MPI_IN_PLACE, &sketch_t_error, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+      MPI_Allreduce(MPI_IN_PLACE, &sketch_t_scale, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+      if (rank == 0) {
+        std::cout << std::setprecision(4) << "H2 extraction check: " << ninter << " blocks, " << entries
+                  << " entries in " << t_extract << " s; random blocks against the kernel "
+                  << std::sqrt(kernel_error2 / kernel_norm2) << " (Frobenius, relative); "
+                  << "rows of 2 columns against the matvec " << matvec_error / matvec_scale
+                  << " (max, relative); the random blocks sketched (" << t_sketch
+                  << " s) against their entries sketched " << sketch_error / sketch_scale << " (max, relative)"
+                  << "; transposed (" << t_sketch_t << " s) " << sketch_t_error / sketch_t_scale
+                  << std::setprecision(6) << std::endl;
+      }
+    }
 
     int number_of_rhs = driver_options.nrhs;
     const size_t value_count = static_cast<size_t>(local_points) *
@@ -1113,6 +1499,159 @@ int main(int argc, char** argv) {
                     << ", relative residual=" << relative_residual
                     << std::setprecision(6) << std::endl;
         }
+      }
+    }
+
+    auto mult = [&](char trans, const double* in, double* out, int ncol) {
+      int n_in = local_points, n_out = local_points;
+      d_c_bpack_mult(&trans, in, out, &n_in, &n_out, &ncol,
+                     &resources.matrix, &resources.option, &resources.stats,
+                     &resources.process_tree);
+    };
+    if (driver_options.inv_mult_check > 0 && driver_options.precon == 2) {
+      bpack_example::check_mult_transpose<double>(
+          MPI_COMM_WORLD, local_points, driver_options.inv_mult_check, mult,
+          driver_options.format == 7 ? "H2" : "HODLR");
+    } else if (driver_options.inv_mult_check > 0) {
+      auto inv_mult = [&](char trans, const double* in, double* out, int ncol) {
+        int n_in = local_points, n_out = local_points;
+        d_c_bpack_inv_mult(&trans, in, out, &n_in, &n_out, &ncol,
+                           &resources.matrix, &resources.option, &resources.stats,
+                           &resources.process_tree);
+      };
+      bpack_example::check_inv_mult<double>(
+          MPI_COMM_WORLD, local_points, driver_options.inv_mult_check, 5,
+          rhs, solution, number_of_rhs, inv_mult, mult,
+          driver_options.format == 7 ? "H2" : "HODLR");
+    }
+
+    // The Fortran entry points must reach the same H2 code as the C++ ones:
+    // BPACK_Inv_Mult and BPACK_Mult have no format-7 case, so C_BPACK_Inv_Mult
+    // and C_BPACK_Mult hand an H2 straight to the C++ wrapper.  This is the
+    // path c_bf_schur_deterministic takes to F11's inverse, and before it
+    // existed an H2 there returned its output array untouched.
+    if (driver_options.inv_mult_check > 0 && driver_options.format == 7 &&
+        driver_options.precon != 2) {
+      const int ncol = 2;
+      const size_t n = static_cast<size_t>(local_points) * ncol;
+      std::vector<double> u(n), a(n, 0.0), b(n, 0.0);
+      for (size_t i = 0; i < n; ++i)
+        u[i] = std::sin(0.37 * static_cast<double>(i + 1) + 0.11 * rank);
+      int n_in = local_points, n_out = local_points, nc = ncol;
+      double worst = 0.0;
+      for (char trans : {'N', 'T'}) {
+        std::fill(a.begin(), a.end(), 0.0);
+        std::fill(b.begin(), b.end(), 0.0);
+        d_c_bpack_inv_mult(&trans, u.data(), a.data(), &n_in, &n_out, &nc,
+                           &resources.matrix, &resources.option,
+                           &resources.stats, &resources.process_tree);
+        d_c_bpack_inv_mult_fortran(&trans, u.data(), b.data(), &n_in, &n_out, &nc,
+                                   &resources.matrix, &resources.option,
+                                   &resources.stats, &resources.process_tree);
+        double d2 = 0.0, r2 = 0.0;
+        for (size_t i = 0; i < n; ++i) {
+          d2 += (a[i] - b[i]) * (a[i] - b[i]);
+          r2 += a[i] * a[i];
+        }
+        MPI_Allreduce(MPI_IN_PLACE, &d2, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+        MPI_Allreduce(MPI_IN_PLACE, &r2, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+        const double rel = r2 > 0.0 ? std::sqrt(d2 / r2) : std::sqrt(d2);
+        worst = std::max(worst, rel);
+        std::fill(a.begin(), a.end(), 0.0);
+        std::fill(b.begin(), b.end(), 0.0);
+        d_c_bpack_mult(&trans, u.data(), a.data(), &n_in, &n_out, &nc,
+                       &resources.matrix, &resources.option,
+                       &resources.stats, &resources.process_tree);
+        d_c_bpack_mult_fortran(&trans, u.data(), b.data(), &n_in, &n_out, &nc,
+                               &resources.matrix, &resources.option,
+                               &resources.stats, &resources.process_tree);
+        d2 = 0.0; r2 = 0.0;
+        for (size_t i = 0; i < n; ++i) {
+          d2 += (a[i] - b[i]) * (a[i] - b[i]);
+          r2 += a[i] * a[i];
+        }
+        MPI_Allreduce(MPI_IN_PLACE, &d2, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+        MPI_Allreduce(MPI_IN_PLACE, &r2, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+        worst = std::max(worst, r2 > 0.0 ? std::sqrt(d2 / r2) : std::sqrt(d2));
+      }
+      if (rank == 0) {
+        std::cout << "H2 Fortran entry check (inv_mult and mult, N and T): "
+                  << "worst relative difference from the C++ entry = "
+                  << std::setprecision(3) << worst << std::setprecision(6)
+                  << std::endl;
+      }
+    }
+
+    // --logdet_check: the log-determinant and a solve of the factored H2
+    // again after another H2 operator was built in the process (a
+    // compression-only H2 of the same kernel on all ranks): the device data
+    // is kept per operator, and each call must find this one's
+    if (driver_options.logdet_check > 0 && driver_options.format == 7 && driver_options.precon != 2) {
+      double phase_before = 0.0, logabs_before = 0.0;
+      d_c_bpack_logdet(&phase_before, &logabs_before, &resources.option, &resources.matrix);
+      ButterflyResources other;
+      d_c_bpack_createoption(&other.option);
+      d_c_bpack_createstats(&other.stats);
+      d_c_bpack_createptree(&mpi_size, groups.data(), &fortran_comm, &other.process_tree);
+      set_options(&other.option);
+      d_c_bpack_set_I_option(&other.option, "precon", 2);
+      d_c_bpack_set_I_option(&other.option, "ErrSol", 0);
+      d_c_bpack_set_I_option(&other.option, "elem_extract", 2);
+      F2Cptr other_quantities = nullptr;
+      if (driver_options.distributed64 == 1) {
+        int bounds_provided = 1;
+        const double global_bounds[6] = {0.0, 1.0, 0.0, 1.0, 0.0, 1.0};
+        int64_t internal_local_points = 0;
+        d_c_bpack_construct_init_distributed64(
+            &point_count_64, &distributed_input.count, &dimension, distributed_input.global_ids.data(),
+            distributed_input.coordinates.data(), &bounds_provided, global_bounds, &internal_local_points,
+            &other.matrix, &other.option, &other.stats, &other.mesh, &other_quantities, &other.process_tree);
+      } else {
+        int point_count = static_cast<int>(point_count_64);
+        int nlevel = 0;
+        int user_tree = point_count;
+        int other_local_points = 0;
+        std::vector<int> permutation(static_cast<size_t>(point_count));
+        d_c_bpack_construct_init(
+            &point_count, &dimension, application.locations(), nullptr, &nlevel, &user_tree, permutation.data(),
+            &other_local_points, &other.matrix, &other.option, &other.stats, &other.mesh, &other_quantities,
+            &other.process_tree, &distance_callback, &near_far_callback, &application);
+      }
+#ifdef BPACK_EXAMPLE_GPU
+      if (driver_options.h2_use_gpu > 0 && driver_options.gpu_evaluator == 1) {
+        laplace3d_gpu_register_general(&other.matrix, application.inverse_4pi_n(), application.diagonal(),
+                                       application.skew(), application.skew_direction(),
+                                       application.column_weight());
+      }
+#endif
+      if (driver_options.distributed64 == 1) {
+        d_c_bpack_construct_element_compute_distributed64(
+            &other.matrix, &other.option, &other.stats, &other.mesh, &other_quantities, &other.process_tree,
+            &laplace_entry_callback64, &laplace_block_callback64, &application);
+      } else {
+        d_c_bpack_construct_element_compute(
+            &other.matrix, &other.option, &other.stats, &other.mesh, &other_quantities, &other.process_tree,
+            &laplace_entry_callback, &laplace_block_callback, &application);
+      }
+      d_c_bpack_factor(&other.matrix, &other.option, &other.stats, &other.process_tree, &other.mesh);
+      double phase_after = 0.0, logabs_after = 0.0;
+      d_c_bpack_logdet(&phase_after, &logabs_after, &resources.option, &resources.matrix);
+      std::vector<double> again(value_count, 0.0);
+      d_c_bpack_solve(again.data(), rhs.data(), &local_points, &number_of_rhs, &resources.matrix, &resources.option,
+                      &resources.stats, &resources.process_tree);
+      double difference = 0.0, scale = 0.0;
+      for (size_t i = 0; i < again.size(); ++i) {
+        difference = std::max(difference, std::abs(again[i] - solution[i]));
+        scale = std::max(scale, std::abs(solution[i]));
+      }
+      MPI_Allreduce(MPI_IN_PLACE, &difference, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+      MPI_Allreduce(MPI_IN_PLACE, &scale, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+      if (rank == 0) {
+        std::cout << std::setprecision(17) << "H2 logdet check: log|det| " << logabs_before << " (phase "
+                  << phase_before << ") before and " << logabs_after << " (phase " << phase_after
+                  << ") after another H2 was built, difference " << std::abs(logabs_after - logabs_before)
+                  << "; the solve again: max difference " << difference / scale << " (relative)"
+                  << std::setprecision(6) << std::endl;
       }
     }
 

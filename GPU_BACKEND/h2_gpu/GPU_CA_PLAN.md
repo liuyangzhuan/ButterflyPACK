@@ -1852,6 +1852,69 @@ there; CA3 might take a further ~0.3-0.7 s off the leaf and avoid CA0's
 8^3-level loss. The CA3-only work runs in small component batches (15
 components, 294 boxes at the 64-rank leaf), the GPU's weak spot.
 
+#### Known issue, not fixed (2026-10-15): full-rank boxes on GPU CA3 levels
+
+A box with no redundant points (r = 0, k = n) eliminated on an owner level
+sends nothing: `plan_owner_generators` (and `copy_owner_generators`) take
+the wave's boxes with a redundant part only (`active`), so its home rank
+never gets its FULL state and the level stops at its end in ca_owner.hpp:
+"owner level: box N was never eliminated".  Color levels had the same gap
+(no wave for a full-rank box) and were fixed in 73aed23 (unstructured) and
+ea023e6 (structured); replicated CA0 is not affected (every rank eliminates
+its ghost copies itself, nothing arrives from another rank).  The CPU CA3
+is right: it ships the whole box state, the Schur complement included,
+whatever the rank (core/owner_schedule.hpp).
+
+Reproducer (RBF3D_H2Test, Gaussian kernel: at these tolerances every leaf
+box, or nearly every one, is full rank), 4 nodes, 8 ranks:
+
+    srun -N 4 -n 8 --ntasks-per-node=2 -c 64 --cpu-bind=cores --gpus-per-node=4 crbf3d_h2 \
+      --grid-size 64 --Nmin_leaf 64 --length_scale 0.05 --scattered 1 \
+      --reduction_threshold 8 --tol_comp 1e-6 \
+      --H2_use_sketch 2 --H2_lazy_schur 2 --H2_XRR_factor 1 \
+      --H2_use_gpu 1 --H2_compress_factors 1 --verbosity 1 --H2_CA_owner_component 3
+
+(the leaf is a CA level by the driver's default CA_level 0 and its 512
+boxes a rank).  It fails at the leaf at tol 1e-6 ("box 1064 was never
+eliminated") and at 1e-10 ("box 3072").  The references, tol 1e-6, without
+compression:
+
+| | logdet | acc_mvp | acc_backward |
+|---|---|---|---|
+| CPU CA3 (`--H2_use_gpu 0 --H2_compress_factors 0`, factor 890 s) | -1137223.4681469242 | 4.8e-6 | 3.4e-15 |
+| CPU CA0 (the same without `--H2_CA_owner_component 3`) | -1137223.1779893097 | 4.9e-6 | 3.2e-15 |
+| GPU CA0, compressed (`--H2_compress_factors 1`, factor 15.1 s) | -1137223.3951199437 | 2.6e-5 | 4.8e-15 |
+
+(Logs: h2_c1_work/rbf/R_ca3_tol6.log, R_ca3_tol6_cpu.log, R_ca0_tol6_cpu.log,
+R_tol6.log.)
+
+Why it is more than sending a short entry: a home rank does not maintain
+the blocks of its boxes eliminated elsewhere (owner_plan.hpp: "foreign
+local boxes ... their FULL state lands here").  The FULL payload carries
+the box's Schur block after its elimination, which replaces the home's
+copy; for a full-rank box that block is its whole self block (n x n) with
+the updates its owner applied.  A FULL entry without it would let the
+level finish and leave the home's copy stale - silently wrong.  The fix,
+owner paths only (Color and CA0 never reach them):
+
+1. `plan_owner_generators`: every wave box, not only `active`; a full-rank
+   box's COMPACT and SKELETON recipients get the no-fill entry the receiver
+   already accepts (it marks the box eliminated with its skeleton through
+   `set_remote_skeletons`), its FULL recipient an entry with the n x n
+   block (OwnerLayout with r = 0: only the Schur part), k sent for it.
+2. The block on the owner as the wave takes a box's A_SS: its stored Schur
+   block (gathered from the packed form if it is packed), else the kernel's
+   entries (no update yet) - if that reuses the wave's gather batch, behind
+   the owner check, so the Color and CA0 batches stay as they are.
+3. `install_owner_messages`: a FULL entry with r = 0 and a payload installs
+   the block as the box's Schur block (as `land_full_factors` does for the
+   others).
+4. Checks: the reproducer at tol 1e-6 against CPU CA3 (logdet to ~1e-7,
+   acc_mvp ~5e-6 uncompressed); a Laplace CA3 run (no full-rank boxes)
+   bitwise as before; Color and CA0 bitwise as before.
+
+Not done for now (the user's decision, 2026-10-15).
+
 ### M6. Hybrid level selection
 Choose CA vs Color per level from brick size and measured costs instead of
 the fixed `CA_level` / 343-box rule.
@@ -5509,6 +5572,1943 @@ such as VIE3D_H2Test and EMSURF call with all of their own arguments):
 getopt returns for an option it does not know, so a driver's own options
 went to the pack_shared case.  New options take codes from 1000 up:
 `h2_compress_factors` 1001, `h2_ca_pack_shared` 1002, `h2_ca_solve` 1003.
+
+#### The unstructured Color loop takes the GPU changes (2026-10-13)
+
+The unstructured loop (`h2_parallel/unstructured/`, Color only, as decided:
+it has no CA levels) runs on the same `ColorGpuDriver` and
+`LevelEliminator` with `occupancy` on, so most of what went into the GPU
+path since it last ran there came with it: the kept factors and their
+host staging, the GPU solve and matvec with the column passes, the memory
+pressure paths (near and parent blocks packed, waves chunked).  What did
+not:
+
+1. **It no longer factored at all** (HEAD 370eca4): every unstructured GPU
+   run stopped in its first transport, "box N is neither local nor an
+   assisting box".  In occupancy mode a generator also goes to the ranks
+   that hold it as an assisting box (the lazy requesters), not only to its
+   neighbours' owners, so a receiver need not know every neighbour of it;
+   three lookups added for the factor compression (fad4d1a, 9bd0630) asked
+   for the state of each.  ee6ce3e: the packed-block pre-pass and
+   `process_gen` skip, on a Color level, a neighbour this rank has no state
+   for (it updates nothing of one), and `fill_item` takes the neighbours'
+   point counts from the generator's own header.  On a full grid every
+   neighbour of a received generator is known: structured runs bitwise
+   unchanged.
+2. **`H2_compress_factors` did not reach it**: the unstructured factorization
+   built its GPU options without it, so 192^3 on 8 ranks of 40 GB ran out
+   of device memory (fill temp2^T raw 14.23 GB on rank 2, the sketch's
+   [P; W] the request that failed).  `hierarchical_factorization_unstructured`
+   now takes it.
+3. **The fill store's bound** (`decide_fill_precision`, which picks 0.2 or
+   0.002 of tol_comp for the packed fill sources) counted 27 blocks a box;
+   with occupancy it counts the box's own one-hop list plus itself.  On a
+   full grid that is 27 inside and fewer on the boundary (192^3 leaf: 6.5
+   against 6.9 GB); every level's decision at 192^3 and 384^3 is the
+   structured one.
+4. **The C parser** (which EMSURF and VIE3D pass their arguments through)
+   knew `--H2_compress_factors` only in lower case, and e5db657 had moved
+   only the lower-case spellings of the other two new options:
+   `--H2_CA_pack_shared` still had 63 (the '?' for an unknown option) and
+   `--H2_CA_solve` 64 (no case).  Every H2/HODLR option now has both
+   spellings on one code (checked by a script over the table, and by a
+   test that parses both spellings among options the parser does not know).
+5. **`c_bpack_construct_init` never passed it on** (since af9e726): the
+   format-7 constructor that EMSURF and the VIE3D tensor driver's diagonal
+   blocks call read and checked `H2_compress_factors` but did not copy it
+   into the solver's options (`read_h2_program_options64`, behind
+   `construct_init_distributed64` - the Laplace driver, VIE3D_H2Test - did).
+   So no EMSURF run compressed, whatever its command line said: with 4.
+   fixed, the 512K sphere still printed `h2_compress_factor 1` and then
+   "16 waves not requested", 1.0x at every level.  The two now copy the
+   same fields.
+
+Laplace, 8 ranks of 40 GB, tol 1e-3, `H2_compress_factors 1`, `H2_use_gpu 2`:
+
+| | structured | unstructured |
+|---|---|---|
+| 192^3 factor | 7.43 s | 7.84 s |
+| 192^3 logdet | -89253588.472325146 | bitwise the same |
+| 192^3 solve, 1 / 8 columns | 0.333 s | 0.333 / 0.617 s |
+| 384^3 factor | 77.0 s | 78.8 s |
+| 384^3 logdet | -792567583.07 | -792567597.47 |
+| 384^3 acc_backward | 6.5e-16 | 6.6e-16 |
+| 384^3 GPU solve | 2.356 s | 2.353 s |
+
+192^3 is bitwise the structured run (the quick verification and the
+solution): no level is under memory pressure there.  At 384^3 the leaf
+is, and the unstructured rank holds a little more - the generators the
+lazy requesters receive (rank 0: 36327 fill-source blocks against 35937,
+generator boxes 0.90 against 0.81 GB) - so the pressure paths, which pack
+lossily, take a few more blocks: 728 owner groups packed against 720 at
+the leaf, 59 against 56 at level 5.  Hence the logdets' 8th digit; the
+backward errors are the same.  With 8 columns the two are bitwise equal too,
+every column (192^3).  Uncompressed, 192^3 does not fit 8 ranks of 40 GB on
+either path (the sketch's [P; W] on top of 14 GB of raw fill temp2^T).
+
+On a sparse tree - the EMSURF sphere, 1160 of 4096 leaf boxes occupied at
+128K - two more things, once the option reached it (5.):
+
+6. **A full-rank box sent no generator** on the device exchange
+   (`plan_generators` took the boxes with a redundant part only), only its
+   skeleton to the ranks that requested it, and the unstructured loop marks
+   such a box eliminated when its skeleton arrives
+   (`refresh_installed_lazy_remote_state`), without a wave; the lazy far
+   fill's `collect_lazy_far_sources` then threw "eliminated source ... has no
+   wave/generator on this rank" for one next to a two-hop pair.  With
+   occupancy a full-rank box now sends its generator without fill (wave and
+   one-hop list), as the host transport always did; the receiver already took
+   such a generator ("full rank: nothing to add").  Structured levels were
+   left as they were, and then needed it too (ea023e6, 2026-10-15): the
+   structured loop marks other ranks' boxes eliminated by their colour, so
+   RBF3D_H2Test (Gaussian, length scale 0.05, tol 1e-10, 8 ranks: every leaf
+   box and some level-3 boxes full rank) stopped the same way.  Every Color
+   level sends them now; Laplace 192^3 bitwise unchanged.  Rank 0 needs
+   nothing: the device ID keeps column 0 with a zero row of T for a zero
+   target, and its relative rank rule gives a nonzero one rank >= 1 (RBF at
+   length scale 0.001, every sketch exactly zero: acc_mvp 2.6e-15).  That
+   RBF case at tol 1e-10 or 1e-8 then runs out of device memory at level 2
+   (level-3 skeletons 499 and 436 of 512: hardly compressible); 1e-6 runs.  It showed with compression only because compression changed
+   the ranks: 56 full-rank leaf boxes uncompressed, 176 compressed (one rank).
+   Uncompressed runs are bitwise unchanged (128K, 8 ranks: logdet and
+   solution checksum; Laplace 192^3 both paths).
+7. **The quick verification took 108 s on one rank** at 128K (3.3 s on 8)
+   and did not finish at 512K: EMSURF's block evaluator sorts the block's
+   element list with `PIKSRT_INT_Multi`, a straight insertion sort, and the
+   verification asks for one block of every local row by 20 columns, so the
+   sort is O(rows^2).  It is a stable bottom-up merge sort now above 32 rows
+   (SRC/MISC_utilities.f90; the same order - 401 random cases with
+   duplicate keys - and bitwise the same runs): 128K on one rank 108 -> 15.9 s,
+   and 512K on one GPU completes (factor 17.3 s, verification 65 s, host RSS
+   19 GB).
+
+**H2_compress_factors does not suit this EFIE.**  Uncompressed the sphere is
+right on 1 and 8 ranks (128K: acc_mvp 1.5e-4, acc_backward 9e-14 - though
+acc_forward is 0.10, 20-48 at 512K: the mesh has 235 edges a wavelength at
+wavelength 2, deep in the EFIE's low-frequency breakdown).  Compressed it is
+not (128K, one rank: acc_mvp 4.5, the leaf's average skeleton 85.7 against
+33.2).  Taken apart with temporary switches (BPACK_TRACE=id, one rank, 128K):
+
+| quantization steps (fraction of tol_comp) | leaf boxes whose rank changed | rank sums L4 / L3 / L2 | acc_mvp |
+|---|---|---|---|
+| uncompressed | - | 38544 / 11314 / 2682 | 1.5e-4 |
+| as built (fill 0.2 at the leaf, 0.002 above; X_NR 0.2) | 980 / 1160 | 99463 / 27193 / 7995 | 4.5 |
+| fill 0.002 at the leaf too | 812 / 1160 | 42345 / 14070 / 4085 | 0.16 |
+| all steps 1e-3 | 765 / 1160 | 40736 / 13017 / 3463 | 1.2e-3 |
+| all steps 1e-9 | 1 / 1160 | 38545 / 11261 / 2316 | 2.0e-4 |
+| uncompressed, the compressed mode's summation order | 0 | 38544 / 11314 / 2682 | 1.5e-4 |
+
+It is the problem's cancellation, not a defect of the compressed path: the
+summation order alone moves the sketch norms by up to 1e-6 at the leaf,
+9e-5 at level 3 and 2e-3 at level 2 (a 1e10 amplification of rounding), so
+a step of 2e-13 of a box's largest temp2^T entry already moves the leaf's
+by 3.6e-3, and steps that save memory give no accuracy.  With every step at
+1e-9 the factorization is right (acc_mvp 2.0e-4, acc_backward 9.5e-14) and
+saves nothing.  At wavelength 0.25 (29 edges a wavelength) the same: acc_mvp
+3.8e-3 -> 6.3e-2.  The leaf's coarse fill step stands on Laplace (whose leaf
+skeletons do not depend on its fill store); for a kernel like this one the
+answer is H2_compress_factors 0.  Compressed, the 512K sphere does not fit
+one GPU either (its inflated ranks), where uncompressed it does.
+
+#### H2_use_gpu=1 is the tensor-core mode (2026-10-14)
+
+`H2_use_gpu` took 1 (the backend's double GEMM batches on MAGMA) and 2 (on
+the FP64 tensor cores, `launch_dgemm_vbatched_tc`).  2 was never the slower:
+when it came in (2026-09-26, one A100) the 96^3 factorization went 4.1 ->
+3.31 s and 48^3 0.99 -> 0.92 s, the GEMM shapes 5.4 -> 13.2 TF/s
+(256x256x256), 6.2 -> 8.4 (216x216x176) and 2.6 -> 4.9 (40x40x176); and its
+products are bitwise MAGMA's (the DMMA rounds each product-add as MAGMA's
+kernel does, in the same order).  Again on 73aed23, each run twice:
+
+| Laplace | 1 (MAGMA) | 2 (tensor cores) |
+|---|---|---|
+| 192^3, 8 ranks, compressed: factor | 8.77 / 8.44 s | 7.05 / 7.00 s |
+| 96^3, one GPU: factor | 5.15 / 5.01 s | 4.47 / 4.41 s |
+
+The solves are the same (0.333 s, 0.129 s), and every run is bitwise its
+pair in the other mode.  So 1 is now the tensor-core mode: every H2 GPU
+run sets `tensor_core_gemm()`.  2 is still accepted and stored as 1, so the
+scripts that pass it keep working; other values are refused.  Complex
+batches stay on MAGMA either way (the kernel is double only), and a level's
+line says "on (FP64 tensor-core GEMMs)" only for real data now (it said so
+for complex runs with 2 too).  `HODLR_use_gpu` keeps its 0 / 1 / 2.
+Checked after the change: `--H2_use_gpu 1` and `2` are each bitwise the
+old 2 (192^3 on 8 ranks, 96^3 on one GPU; 7.50 and 7.14 s, 4.54 s), the
+EMSURF sphere bitwise the same (its levels now read "on"), and 3 is refused.
+
+#### The solve's X_NR scratch: one per process, its own where that is too small (2026-10-14)
+
+ce999d4 (from the block-diagonal preconditioner work: 8 H2 diagonal blocks a
+GPU held 16.7 GB of X_NR scratch, as much as their kept factors) allocates
+the solve's X_NR scratch only when a kept factor is compressed, and one per
+process, shared by the operators' set-ups.  Sharing is safe: a solve
+decompresses every segment it reads anew (the buffer state is a
+DeviceSolveRun's, one per solve or multiply), the set-ups' collectives sit
+with the existing ones, and a release drops a reference.  Checked here:
+Laplace 192^3 (1 and 8 columns) and 384^3 compressed bitwise as before with
+the same 4.29 GB scratch, 96^3 uncompressed bitwise without one; the tensor
+VIE's block-diagonal preconditioner (80^3, 8 blocks of 40^3, 2 a GPU,
+BPACK_CHECK=solve) bitwise the previous library, compressed or not, the
+second block on a GPU taking no scratch.
+
+What sharing left open: the shared buffers are sized by the room of the
+set-up that allocated them, and a later operator with a box they cannot hold
+(the first set up on a fuller card) failed ("a box's compressed factors exceed
+the X_NR scratch's buffer"), where its own scratch would have been sized by
+its own room.  Such an operator now gets a scratch of its own, as before the
+sharing (`DeviceSolveStore::xnr_scratch_own`, freed with it); the shared one
+is not regrown, since every set-up's decompression plans hold addresses in
+it.  A box's width is its compressed factors uncompressed (T and X_SR
+counted wherever compressed: an upper bound).  Forced on every second
+operator (a temporary switch), the 8 blocks took 4 shared and 4 own
+scratches, released cleanly, and the numbers were bitwise the shared run's.
+
+#### Any number of ranks on the unstructured Color path (2026-10-15)
+
+`H2_unstructured=1` now runs on any number of ranks (CPU and GPU, Color
+only).  The structured loop and the CA modes keep (2^d)^k and refuse
+anything else ("3D tree requires process count to be 8^k (any count with
+H2_unstructured=1)"); a CA level on such a layout throws in
+`compute_assisting_boxes`.
+
+**The layout** (`h2_parallel/core/region_partition.hpp`).  A rank's boxes on
+a level are still one contiguous Morton range, but the ranges need not be
+equal cubes: a level stores its count + 1 range starts (`TreeLevel::
+region_start`) and finds a box's region by binary search (`region_of`,
+`owner_rank_of`).  Nothing grows with the number of boxes; the largest new
+structure is the P + 1 starts of a level, like `morton_to_rank`.
+
+1. *Counts*: the old reduction rule, rounded up - all ranks at the leaf; a
+   level with fewer than the threshold's boxes a rank has the level below's
+   count over 2^d, rounded up (12 ranks in 3D: 12 -> 2 -> 1).  The groups are
+   as even as they can be (`region_first_child`: 50 under 7 is groups of 7
+   and 8, not six of 8 and one of 2).
+2. *Ranges, top down*: where the count does not change a region's range is
+   its parent range times 2^d (a box's children on its rank).  Where it does
+   (a reduction), the parent region's boxes are divided among its child
+   regions in whole boxes of the parent's level, in proportion to the leaf
+   regions under each - so each child rank builds whole parent boxes from
+   its own children, which the transitions (CPU and GPU), the H2 build and
+   the solve's gathers all assume (option a3 of the discussion).
+3. *Threshold*: whole parent boxes are coarse where a reduction happens, so
+   `plan_regions` takes the first reduction a level finer (threshold x 2^d)
+   while the largest leaf region is more than 1.15 of the mean (50 ranks in
+   3D: 2.3x at the caller's threshold, 1.07 at 64).  Rank 0 prints the
+   imbalance, the threshold if raised and the ranks of every level.
+4. *(2^d)^k ranks*: the caller's threshold, the old counts and the equal
+   ranges - the bricks as before, and the rest of the code (CA, structured,
+   the device reduction) sees what it always saw.  A non-uniform layout
+   takes the host reduction path (`device_reduction_possible`).
+
+**What changed besides the layout.**  The owner lookups (the generator,
+factor-update, solve and matvec exchanges; `device_solve`, the level
+eliminator) go through `owner_rank_of` in place of the brick arithmetic;
+`distribute_boxes` uses the starts; `scatter_solution_to_children` splits a
+parent by its child ranks' actual ranges; the unstructured parent
+transition's boundary range comes from the parent region's starts.  The
+one-hop neighbour ranks of a non-cubic level (`region_peers`) are the owners
+of the boxes within 3 hops of the rank's boundary boxes, found from its own
+boxes (no global map): two hops cover the factorization's assisting boxes,
+three the H2 interaction lists.  On the layouts measured 3 added no peer
+over 2.  The CA-only sites are unchanged.
+
+**Checks.**  `make h2_region_partition_test` (h2_parallel/tests): 3114
+layouts (2D and 3D, every depth, 1-300 ranks) against the invariants above,
+the (2^d)^k layouts against the old counts and ranges; 0 failures, worst
+leaf imbalance 1.178 with 64 or more leaf boxes a rank.  8 ranks bitwise as
+before (structured and unstructured Laplace 192^3 compressed, the 128K
+sphere's logdet and solution checksum).  Unstructured Laplace 96^3, one GPU
+a rank, tol 1e-3, every acc_backward ~1e-15:
+
+| ranks | logdet | acc_mvp | layout | factor |
+|---|---|---|---|---|
+| 8 | -9928892.0403 | 7.47e-4 | bricks | 1.37 s |
+| 12 | -9928891.9501 | 8.34e-4 | 1.125; ranks 1 1 2 12 12 | 2.24 s |
+| 6 | -9928892.0068 | 6.96e-4 | threshold 8 -> 64; 1.03 | 2.46 s |
+| 16 | -9928891.9586 | | 1.0 | 2.46 s |
+| 5 | -9928892.0029 | | threshold -> 64 | 3.27 s |
+| 3 | -9928892.0434 | | 1.125 | 2.77 s |
+
+The CPU path on 12 and 6 ranks agrees with the GPU to ~1e-16; 3 columns on
+12 ranks are right; `--precon 2` on 12 ranks converges (BiCGSTAB 252
+iterations GPU, 242 CPU, 205 on 8; the compressed operator's acc_mvp is the
+same 7.9477e-4, the solutions agree to 5e-8).  The EMSURF sphere (128K):
+acc_mvp 1.40e-4 / 1.87e-4 / 1.58e-4 on 8 / 12 / 6 ranks, acc_backward
+4e-14 to 1e-13, logdets within 6e-5 relative.  The CPU-only build compiles.
+
+**Limits, not addressed.**
+1. *Coarse levels get fewer ranks* than with the next (2^d)^k count below:
+   RBF3D_H2Test at tol 1e-6 on 12 ranks runs out of device memory at level 2
+   (17.8 GB on rank 0), which has 2 ranks where 8 ranks keep 8.  A planner
+   that reduces by factors of the count (12 -> 6 -> 3 ...) would keep more.
+2. *More boundary*: Laplace 192^3 compressed factors in 8.73 s on 12 ranks
+   against 7.51 s on 8 and 6.27 s on 16.  The leaf's transport doubles (1.42
+   against 0.68 s, MPI wait): 42% of a 12-rank region's boxes are boundary
+   boxes (18% of a brick on 8, 34% on 16), up to 11 peers against 7.
+3. *Boxes, not work, are balanced*: on a sparse tree (the sphere: 14-28% of
+   the leaf boxes occupied) equal box ranges are not equal loads - next to
+   discuss (weighting by occupancy).
+4. 2D is checked by the unit test only (no 2D unstructured driver), and the
+   occupied-leaf allgather of `discover_occupied_topology` (from before) is
+   still global.
+
+#### The ranges split by points (2026-10-15)
+
+Limit 3 above, as decided: on the unstructured path a level's ranges are
+split by the points in the boxes, so an empty box counts for nothing; this
+holds for (2^d)^k ranks too, which keep the bricks unless their points are
+more uneven than 1.15 of the mean or a brick has none.  Points rather than
+occupied leaves or a cost model (n^3 a leaf box): on the meshes at hand the
+three agree within a few percent a rank (the 128K sphere's boxes hold 4 to
+322 points, but each rank holds ~100 of them), and points add up over
+ranks, so they are counted before the points are routed - one collective,
+no second routing pass.
+
+1. *The weights* (`RegionWeights`, `region_weights_of_points`): the points
+   in each box of the weight level, the finest level with at most 512 boxes
+   a rank (`kRegionWeightBoxes`), each point binned at the leaf as the
+   trees bin it.  `h2_initiate` (every rank holds every point) counts on
+   rank 0 and broadcasts; `bpack_initiate_distributed64` (each rank its
+   own) all-reduces.  A finer level spreads a weight-level box's points
+   evenly over its boxes.  Size: at most 512 P counts.
+2. *The splits*: where a level reduces, each child region's start is the
+   box before which the parent region's points are nearest to the child's
+   share (by the leaf regions under it), the later on a tie, one box at
+   least each.  Without weights this is the old rounding: every unweighted
+   layout of 14848 configurations (2D/3D, all depths, 1-300 ranks,
+   thresholds 4-64) is the committed planner's, and the same weight in
+   every box gives the same layouts.
+3. *The choice*: a layout with a leaf region of no points is worse than
+   any imbalance; otherwise as before (the first reduction a level finer
+   while the largest leaf region is over 1.15 of the mean).
+4. `TreeLevel::regions_cubic` now means the equal cubes by the ranges, not
+   by the count; `device_reduction_possible` and `reduce_parent_blocks`
+   check it (they derived bricks from the count, which an 8-rank layout
+   split by points need not be).  Rank 0 prints the layout ("H2 tree: 12
+   ranks, Morton ranges: the largest leaf region holds 1.067 of the mean
+   points; ...") on every unstructured run.
+
+`make h2_region_partition_test` adds weighted layouts (a thin shell, a
+dense cluster, random weights with a third of the boxes empty): every
+invariant holds, the bricks flag matches the ranges.  What the shell shows
+is the price of whole parent boxes: uneven weights often need the first
+reduction several levels finer (64 ranks on a shell: 1 1 1 1 8 64 64 ranks
+by level against the bricks' 1 1 8 64 64 64 64), so the coarse levels keep
+fewer ranks (limit 1 above).  On the real meshes it is milder.  The 128K
+sphere's largest leaf region by points, box-count layout -> points layout:
+
+| ranks | 8 | 10 | 12 | 16 | 20 | 24 | 32 | 48 | 64 |
+|---|---|---|---|---|---|---|---|---|---|
+| box count | 1.008 | 1.215 | 1.196 | 1.010 | 1.368 | 1.509 | 1.315 | 1.747, a rank empty | 1.433, a rank empty |
+| points | bricks | 1.079 | 1.067 | 1.010 | 1.062 | 1.067* | 1.096* | 1.166 | 1.341* |
+
+(* the first reduction a level finer: level 2 on one rank.)  The 512K
+sphere: 10 ranks 1.216 -> 1.067, 12 ranks 1.197 -> 1.053.
+
+Runs (GPU, 40 GB A100s, uncompressed sphere, Laplace as before):
+- bitwise as before: Laplace 192^3 compressed on 8 ranks (bricks) and 96^3
+  on 12 ranks (equal points a box: the same ranges), the 128K sphere on 8
+  ranks (bricks; logdet and solution checksum), RBF3D_H2Test through
+  distributed64 (48^3 scattered, tol 1e-6) on 12 ranks (its points split as
+  its boxes did, 1.135) and on 8 (bricks);
+- the 128K sphere on 10, 12, 16 ranks with the new ranges: acc_mvp 2.0e-4,
+  1.19e-4 (1.87e-4 before), 1.80e-4; acc_backward 7e-14 to 9e-13; the CPU
+  path on 12 ranks acc_mvp 1.31e-4, acc_backward 7.6e-14.  (Accuracy moves
+  with the layout on this EFIE: the 512K sphere's acc_mvp is 6.2e-4 on 8
+  ranks, 9.6e-4 on one, 3.9e-4 to 1.27e-3 on 10 and 12 either way.)
+
+**It balances the work but does not shorten the factorization** (512K
+sphere, 12 ranks, three runs each):
+
+| | box-count ranges | point ranges |
+|---|---|---|
+| factor | 3.48 / 3.58 / 3.42 s | 3.73 / 3.32 / 3.39 s |
+| leaf ID/elimination, min / mean / max a rank | 743 / 928 / 1094 ms | 894 / 931 / 972 ms |
+| leaf transport, min / mean / max | 248 / 414 / 599 ms | 375 / 416 / 453 ms |
+| leaf elimination, longest rank | 1506 / 1541 / 1469 ms | 1795 / 1486 / 1486 ms |
+
+(10 ranks, one run each: 4.54 -> 4.40 s, the leaf's ID/elimination max
+1285 -> 1175 ms.)  The leaf's slowest rank is set by the boundary, not by
+its points: a rank's time is its boxes plus its transport waits, and the
+ranks with the most boundary boxes - 168 on ranks 1 and 10, whose ranges
+the points did not move - are as before.  The levers left are compact
+ranges (fewer boundary boxes) or weights that count boundary boxes; and,
+for the coarse levels, a planner that keeps more ranks there.
+
+#### Coarse levels keep more ranks (2026-10-15)
+
+Limit 1 above, as decided.  The reduction rule divides a level's count by
+2^d where it has fewer than reduction_threshold boxes a rank, so 12 ranks
+keep 2 on level 2 of a 3D tree where 8 keep 8.  Keeping the most ranks that
+have the threshold's boxes (12 -> 8) does not work with whole parent boxes:
+12 regions under 8 are groups of 1 and 2, each group under one level-1 box,
+and a leaf region alone in its group is 1.5x the mean.  It is a matter of
+factors: 12 -> 4 puts groups of 3 under 2 level-1 boxes each (1.125).
+
+1. *The counts* (`region_counts_keeping_ranks`, the unstructured path):
+   leaf first, where the rule reduces, the largest ceil(count / k), k = 2 ..
+   2^d - 1, that leaves the threshold's boxes a rank (at most 2^d (level-1)
+   ranks, so level 1 stays one) and whose layout - the levels above by the
+   rule - has its leaf regions within 1.15 of the mean or no worse than the
+   rule's (and no empty region the rule avoids); else the rule.  The
+   structured path keeps the rule; (2^d)^k in 3D at threshold 8 gives the
+   rule's counts, so the bricks (other thresholds, and 2D, may keep more).
+   `region_starts` takes any reduction now (it required ceil(below / 2^d)).
+2. *The device reduction* (device_reduction.hpp) took the bricks only: it
+   found a parent's child rank and owner from the brick arithmetic.  It uses
+   the levels' ranges now (`owner_rank_of`) and needs only that every child
+   region is whole parent boxes, which the unstructured layouts are; so their
+   reductions merge on the device too (Laplace 192^3 on 12 ranks: 7.90 ->
+   7.03 s, bitwise the host path's numbers).
+
+The self-test adds the counts keeping ranks (3114 layouts without weights,
+3114 with the shell): every invariant, level 1 on one rank, 3D (2^d)^k at
+threshold 8 the bricks; more ranks on some level in 2387 / 2325, fewer on
+none / one; never over 1.15 and over the rule.  3D, 6 levels, ranks by
+level: 12: 1 1 4 12 12 12 (rule 1 1 2 ...); 16: 1 1 8 16 16 16 (1 1 2 ...);
+36: 1 1 8 36 36 36 at threshold 8 (the rule needs 64: 1 1 1 5 36 36);
+192 (8 levels): 1 1 8 64 192 ... (1 1 3 24 192 ...).
+
+Runs (GPU, 40 GB A100s; factor times):
+
+| | before (rule, host reduction) | keeping ranks | + device reduction |
+|---|---|---|---|
+| Laplace 192^3, 12 ranks | 8.73 s (1 1 2 12 12 12) | 7.90 s (1 1 4 12 12 12) | 7.03 s |
+| Laplace 192^3, 16 ranks | 6.27 s (1 1 2 16 16 16) | 5.62 s (1 1 8 16 16 16) | 5.30 s |
+| 512K sphere, 12 ranks | 3.42-3.58 s (3 runs) | 3.15 s (1 1 4 12 12 12) | 3.00 s |
+| Laplace 96^3, 12 ranks | 2.24 s (1 1 2 12 12) | | 1.82 s (1 1 4 12 12) |
+
+8 ranks bitwise as before (Laplace 192^3, the 128K sphere with its solution
+checksum).  The 12-rank layouts change the numbers within the compression
+(192^3 logdet -89253588.465 against -89253588.472 on 8 ranks; 96^3 the CPU
+path agrees with the GPU to 2e-16, acc_backward 5e-16 / 8e-16).
+
+**The RBF case of limit 1 is not fixed.**  RBF3D_H2Test (64^3 scattered,
+tol 1e-6, compressed) on 12 ranks now gets past level 2 (4 ranks, 10.3 GB at
+its peak, where 2 ranks asked for 17.8 GB) and runs out in level 2's
+transition: rank 0 restores 15.7 GB of packed fill sources and then asks
+for 7.6 GB more (G;P).  A 4-rank run has the same level-2 regions and stops
+at the same request (15.6 + 7.4 GB): level 2 of this problem needs 8 ranks,
+which 12 can have only with a leaf region 1.5x the mean.  What would fix it:
+the transition holding fewer restores at once (its chunking), or a planner
+that weighs a coarse level's memory against the leaf's balance.
+
+#### inv_mult and the transposed apply on format 7 (BP-6a, BP-6b; 2026-10-15)
+
+From the STRUMPACK integration plan: a front applies F11^{-1} to blocks of
+vectors many times after the factorization (the Schur sampling), with
+`trans` 'N', 'T' and 'C'; `c_bpack_inv_mult` had no format-7 route (it was
+the Fortran routine, which knows no H2) and `c_bpack_mult` took 'N' only.
+
+1. `c_bpack_inv_mult` is a C++ entry now, as `solve` and `mult` are: format
+   7 applies the factorization (the direct solve's sweeps, CPU or GPU, the
+   factors kept on the device from the first solve), other formats go to the
+   Fortran (`c_bpack_inv_mult_fortran`).  It needs a factorized H2 (precon
+   other than 2), square blocks, and is quiet below verbosity 1 (at 1 a line
+   a call: the time to the tree's order, the sweeps, the gather, back).
+2. 'T' and 'C' (both entries): the H2 matrix is transpose-symmetric
+   (option%sym=1, required), so 'T' is 'N', and 'C' is 'N' on conjugated
+   vectors, A^{-H} x = conj(A^{-1} conj(x)).  That this is exact and not an
+   approximation of the factorization is checked: the factorized inverse is
+   symmetric to rounding (below).
+3. The input-to-tree redistribution of distributed64 handles
+   (`DistributedLayout64::redistribute`, used by solve, mult and inv_mult)
+   packed each point's columns together, a read a stride of the local length
+   apart per value, on one thread: 0.51 s each way for 64 columns of 885K
+   points a rank.  A chunk is now column by column, packed and unpacked in
+   threads: 0.16 s in, 0.13-0.24 s back; bitwise the same.
+
+`--inv_mult_check <columns>` in the Laplace and EMSURF drivers
+(EXAMPLE/bpack_inv_mult_check.hpp): inv_mult 'N', 'T', 'C' on test
+vectors, their residuals through mult 'N', 'T', 'C', inv_mult against the
+solve, and the bilinear symmetry u0^T F^{-1} u1 - u1^T F^{-1} u0 (and of F):
+
+| run (8 columns unless noted) | 'T' - 'N' | 'C' - conj(N(conj)) | residuals | vs solve | F^{-1} symmetry | a call |
+|---|---|---|---|---|---|---|
+| Laplace 96^3 unstructured, 8 ranks GPU | 0 | 0 | 5.4e-15 | 0 | 7.7e-15 | 0.183 s |
+| the same, 12 ranks | 0 | 0 | 4.2e-15 | 0 | 4.5e-15 | 0.162 s |
+| the same, 8 ranks, CPU path | 0 | 0 | 1.4e-15 | 0 | 7.2e-15 | 0.486 s |
+| the same, distributed64 0 (legacy) | 0 | 0 | 6.2e-15 | 0 | 5.0e-15 | 0.176 s |
+| Laplace 192^3 compressed, 8 ranks GPU, 64 columns | 0 | 0 | 1.9e-15 | 0 | 5.4e-15 | 4.30 s (4.99 before 3.) |
+| 128K sphere (complex EFIE), 8 ranks GPU | 0 | 0 | 2.1e-11 | 0 | 1.0e-13 | 0.095 s |
+| the same, CPU path | 0 | 0 | 6.9e-11 | 0 | 5.4e-13 | 0.189 s |
+| HODLR (format 1) Laplace 48^3, the Fortran behind the new entry | 0 | 0 | 5.2e-15 | 0 | 2.0e-15 | 0.046 s |
+
+The structured loop passes the same check (96^3: as the unstructured run).
+The solve is bitwise as before (Laplace 192^3 on 8 ranks, the sphere's
+checksum).  At 64 columns a call is 4.30 s, of which the GPU sweeps 3.78
+(0.06 s a column); the sweeps are the solve's, unchanged.
+
+#### An H2 factored from the entries of a compressed H2 (2026-10-16)
+
+The example the STRUMPACK fronts need (F22 from the children's compressed
+F22; BP-5 and BP-7 of the integration plan), on the unstructured Color path:
+a compression-only H2 on some ranks (`--extract_ranks P`, format 7, precon 2
+on the source), and an H2 factored on all ranks whose block callback takes its
+entries from the first through `c_bpack_extractelement_bridge`.  Laplace3D
+driver: `--format 7 --distributed64 0 --H2_unstructured 1 --extract_ranks P
+--elem_extract 1`.
+
+**1. Batched extraction from a compressed H2** (unstructured/extraction.hpp;
+`c_bpack_extractelement` and `_bridge` route format 7 there, other formats
+to the Fortran, now `*_fortran`).  The compressed H2 holds every number its
+matvec uses, so an entry needs no kernel: K_near(t, s)(a, b) for neighbouring
+leaf boxes, else u_a^T K(S_tl, S_sl) u_b at the one level l where the
+ancestors are in each other's interaction lists, u being a point's
+interpolation vector carried up the tree (v[S] + T v[R], the children's
+skeletons concatenated in the parent).  It runs like the matvec on the
+requested points only: the u vectors up the tree (to the parents' owners at a
+reduction), the column side's to the row side's owner of each level, which
+computes the block; the blocks to their owners.  Collective over the caller;
+the source on a subset of its ranks.  Checked (`--extract_check N`, precon 2):
+random blocks against the kernel 6.5e-4 to 7.4e-4 (the compression's
+accuracy), rows of single columns against the compressed matvec of the unit
+vectors 3e-17 to 5e-17 (the same representation), on 1, 8, 12 and 16 ranks,
+GPU- and CPU-compressed sources (the GPU keeps host copies of every block).
+
+**2. Entries through a collective callback** (core/collective_entries.hpp).
+H2 called its block callback for one block on one rank, from OpenMP loops, at
+different times on different ranks; a bridge needs every rank in each call.
+`elem_extract=1` with a block callback now makes the kernel collective (with
+elem_extract 0 or 2 nothing changes: Laplace 192^3 and the 128K sphere on 8
+ranks bitwise as before):
+- the blocks are fetched in rounds: each phase of the factorization (a wave's
+  primary loop, its owner replay, transport's generator updates and a
+  fetch-only pass before its apply, the parent transition, the quick
+  verification) runs its items with the blocks it has; a request for another
+  one records it and the item goes on with zeros (discovery: its other
+  requests are recorded in the same pass), doomed, and is abandoned at its
+  next checkpoint, before it changes anything outside itself; a round fetches
+  every rank's records in one callback call; the abandoned items run again
+  (deterministic: the sketches are seeded per box), until a round finds no
+  request anywhere;
+- every item is replayable: the primary loop's last request comes before step
+  2's updates (a checkpoint there); the owner replay holds its remote
+  additions until its last request; a parent rebuilds from a fresh box; a
+  generator source writes only its own slot; transport's apply changes the
+  boxes as it goes, so its requests (the same indices and existence tests)
+  are made first by a pass that writes nothing;
+- the rounds are collective over all ranks: the ranks of a level run its
+  phases, the others serve the rounds (from the level's start) until the
+  level's parents are built; a rank with no boxes in a wave joins its rounds
+  with nothing to run.
+
+Laplace, tol 1e-3, host path (H2_use_gpu 0; the factor time against the same
+H2 factored from the kernel):
+
+| | source ranks | target ranks | factor | from the kernel | acc_mvp (target vs source) | acc_backward |
+|---|---|---|---|---|---|---|
+| 32^3 | 1 | 1 | 11.8 s | 5.29 s | 3.5e-4 | 5.2e-16 |
+| 48^3 | 4 | 8 | 10.1 s | 4.17 s | 3.4e-4 | 4.7e-16 |
+| 64^3 | 5 | 12 | 37.1 s | 17.3 s | 3.9e-4 | 4.5e-16 |
+
+48^3 on 8 ranks: 143 rounds (36 fetching), 81376 blocks, 1.4e9 entries,
+5.7 s in rounds; the rest (4.4 s) is about the factorization from the kernel
+(4.17 s), so the replays cost little: the time is the entries' extraction
+(mostly the ID's two-hop rows), not the rounds.  Without discovery (each
+item abandoned at its first request) 32^3 took 72.9 s.
+
+**4. The GPU path** (H2_use_gpu 1; gpu/collective_evaluator.hpp).  The
+device box path takes its entries from the application's GPU evaluator; with
+entries through a collective callback the library registers its own in its
+place: a block evaluator over the fetched blocks (the blocks' ids on the
+host), which fetches the blocks a batch lacks in one round on the spot
+(`fetch_now`) and drops each block once it is on the device.  Nothing is
+abandoned: the device goes on with the real values.  A round is the same
+calls wherever a rank makes it, so a rank fetching in the middle of a wave is
+joined by the others at their own next round (a fetch, a host phase, a
+quiesce, serving).  What must not happen is a rank blocked in other
+communication (a transport's exchange, the level's collectives) while another
+waits for it in a round:
+- before and after each transport and before the level's end, the level's
+  ranks quiesce: rounds until one in which no rank is busy (flag kRoundBusy,
+  set by the device's fetches and by the host phases);
+- the level's section ends once its parents are built, inside the device
+  transition between the build and the reduction's decisions (a rank whose
+  parents are built on the host builds them before the transition), so the
+  parent-only ranks serving its rounds are free for the reduction; a rank
+  ending its section serves the others' rounds until all have ended it;
+- the host IDs of a level without the device sketch run as a phase;
+  BPACK_CHECK=kernel is skipped (no host entries of its own to compare).
+
+Laplace, tol 1e-3, the same runs on the GPU (rounds: the slowest rank's time
+in them; from the kernel: the same H2 factored on the GPU from the kernel):
+
+| | source ranks | target ranks | factor | in rounds | from the kernel | host path | acc_mvp | acc_backward |
+|---|---|---|---|---|---|---|---|---|
+| 32^3 | 1 | 1 | 3.58 s | 2.54 s | 0.45 s | 11.8 s | 3.5e-4 | 6.1e-16 |
+| 48^3 | 4 | 8 | 5.06 s | 3.98 s | 0.39 s | 9.85 s | 3.4e-4 | 6.6e-16 |
+| 64^3 | 5 | 12 | 13.6 s | 12.3 s | 1.37 s | 36.7 s | 3.9e-4 | 5.3e-16 |
+
+Every level and transition ran on the device, the reductions too (48^3:
+8 -> 1; 64^3: 12 -> 4 -> 1, the last into rank 4, idle at level 2 and serving
+its rounds until the section's end).  Fewer rounds than on the host (84 with
+38 fetching vs 143 with 36; 69 with 23 vs 130 with 23) for the same entries
+(1.4e9, 7.21e9): about 1 s of the factor time is the factorization, the rest
+is the extraction.  With elem_extract 0 or 2 nothing changed (Laplace 192^3
+and the 128K sphere on 8 ranks, GPU, bitwise); the host path's rounds are as
+before (143, 130).
+
+**Where the time goes** (verbosity 1 now prints it with the rounds: the
+rounds' parts, the blocks by what asked for them, the extraction's steps;
+core/extraction_profile.hpp).  64^3 on 12 ranks from 5 (factor 13.8 s; from
+the kernel 1.37 s):
+
+| | s |
+|---|---|
+| resolving the requested ids (every rank, the whole list, each round) | 2.36 |
+| source: tasks and interpolation vectors | 0.6 |
+| source: computing the entries (GEMMs, near-block copies) | 1.37 |
+| source: packing the values (serial) | 2.10 |
+| routing: the exchange's own copies | 1.1 |
+| routing: the all-to-alls (57.7 GB, up to 12.3 GB from one of the 5) | 2.37 |
+| unpacking into the callback's output | 0.5 |
+| target: request lists, storing, the device's copies | 1.5 |
+| target: waiting for the other ranks at a round (mean; max 2.35) | 1.46 |
+
+(the callback's path is the slowest source rank's: resolve, its work to the
+pack, its route, unpack = 10.4 s; the other ranks' route time is mostly
+waiting for it).  The arithmetic is 1.37 s; the same values are copied five
+times (pack, the exchange twice, unpack, store, then to the device: about
+5 s) and moved once (2.4 s), and the id resolution is replicated.  By origin:
+the ID sketch 5.21e9 entries of 7.21e9 (72%, 576 blocks: one per box, its
+two-hop ring by its columns), the owner pass's new fill targets 1.06e9 (15%),
+remote generators 0.48e9, the box region 0.35e9, the transition 0.11e9, host
+phases 5e6.  48^3 on 8 from 4: the sketch 1.02e9 of 1.4e9 (73%); resolve
+1.14 s, compute 0.57, pack 0.62, route 2.20 (max).
+
+**5. Sketched rows instead of entries** (2026-10-16).  The ID's sketch
+needs only Y = Omega K(R, B) (d = n rows, Omega the sparse sign draws, 4 a
+row), not the ring rows K(R, B) themselves.  A sketch callback
+(`c_bpack_set_sketch_callback`, set before the construction; ignored by
+other formats) makes those requests sketched: the request carries R, B and
+Omega's entries (row, destination, value), and the answer is d x n.
+`c_bpack_extractsketch_bridge` serves it: from a compressed H2 (format 7)
+without forming A far from the diagonal (on the owner of each row box t,
+(Omega U_t^T) K(S_t, S_s), d x k_s, summed there over its boxes t, then over
+the ranks on the owner of s, times U_s of the columns; near blocks sketched
+where they are stored; unstructured/extraction.hpp, the plan shared with the
+entries); from other formats by extracting the entries and sketching them on
+their owners.  The target asks for the kernel rows of each box's sketch in
+one request: the host's streamed sketch keeps their draws as Omega instead of
+evaluating them (one request a box after its ring), the device's sketch_rows
+reads back each box's row and column ids and its packed draws.  Without a
+sketch callback, with elem_extract 0 or 2, and for HODLR nothing changes
+(Laplace 192^3 and the 128K sphere on 8 ranks bitwise; the HODLR-from-HODLR
+example as before, its logdet varying run to run by 2e-1 as it did).
+
+Checked: the bridge against the same sketch of the extracted entries 1.7e-16
+(--extract_check, 8 ranks); the H2 factored from the source with the same
+logdet (all printed digits) and accuracy as with entries.  Laplace, tol 1e-3:
+
+| | ranks (source / target) | entries fetched | factor, GPU | before | factor, host | before |
+|---|---|---|---|---|---|---|
+| 32^3 | 1 / 1 | 1.58e8 (was 4.54e8) | not run | 3.58 s | 10.2 s | 11.8 s |
+| 48^3 | 4 / 8 | 4.06e8 (was 1.40e9) | 3.19 s | 5.06 s | 8.11 s | 9.85 s |
+| 64^3 | 5 / 12 | 2.15e9 (was 7.21e9) | 8.33 s | 13.6 s | 29.9 s | 36.7 s |
+
+The sketches are 1.42e8 values for 5.21e9 entries of their rows at 64^3
+(37x).  What is left at 64^3 on the GPU (7.4 s in rounds): resolving the
+requested ids, 2.4 s on every rank and unchanged (the sketches' row ids are
+still in the lists), routing 2.4 s (17.2 GB), the fill targets' entries now
+the largest request (1.06e9 of 2.15e9).
+
+Not yet: planners (fetching a phase's structural requests before it runs),
+which by the profiles above would save rounds and replays but not the
+extraction volume.
+
+#### The tree depth from the occupied boxes (H2_unstructured, 2026-10-16)
+
+The depth came from N alone (butterfly_init.hpp: the deepest level at which
+round(nmin_leaf^(1/d)) doublings fit in round(N^(1/d)), i.e. N over all the
+leaf boxes at least about nmin_leaf), as if the points filled the bounding
+box.  Points on a surface or in clusters occupy few of the boxes, so their
+leaves held far more than nmin_leaf: 164 a leaf on the 128K-patch sphere
+(190K unknowns) with nmin_leaf 8, up to 2,388 on the 542K SST grid of the GPTune runs (whose
+compression-only GPU matvec then stops at "near block too wide", leaves over
+512 points; GPTune examples/GPTune-Demo/spatial_h2/near_block_too_wide.md).
+
+With H2_unstructured=1 the depth is now the deepest at which the N points
+over the occupied leaf boxes are still at least nmin_leaf
+(fmm::occupancy_num_levels, tree_impl.hpp): never shallower than the rule
+from N (volume-filling points keep their depth: Laplace 192^3 on 8 ranks
+bitwise, both init paths), and at most 4 leaf boxes a point in all, since the
+unstructured slabs hold the empty boxes too (1.3 KB each; a curve in 3D would
+otherwise ask for ~N^3 boxes).  A level's occupied boxes are counted by
+hashing each rank's distinct boxes to an owner rank (no table over the
+boxes); the options' num_levels (the solve arrays) and CA_level follow.
+Rank 0 prints the choice at verbosity 1.  The structured path is unchanged.
+
+The EMSURF sphere (CFIE, tol 1e-4, GPU, nmin_leaf 8 in its scripts) is
+therefore deeper and its leaves smaller:
+
+| | nmin_leaf | levels (from N) | occupied leaves | points a leaf | factor | acc_mvp |
+|---|---|---|---|---|---|---|
+| 128K, 8 ranks (190K unknowns) | 8 (before) | 5 | 1,160 | 164 | 1.68 s | 1.4e-4 |
+| | 8 | 7 (5) | 17,272 | 11 | 1.95 s | 1.9e-4 |
+| | 64 | 5 (4) | 1,160 | 164 | | bitwise as before |
+| 512K, 12 ranks (761K unknowns) | 8 (before) | 6 | 4,714 | 161 | 3.15 s | 8.4e-4 |
+| | 8 | 8 (6) | 69,998 | 11 | 4.92 s | 4.2e-3 |
+| | 32 | 7 (5) | 18,369 | 41 | 3.51 s | 1.8e-3 |
+| | 64 | 6 (5) | 4,714 | 161 | 3.02 s | 8.4e-4 (as before) |
+
+so nmin_leaf now means what it says on surfaces too, and the sphere scripts'
+8 (chosen under the old rule) was small: they now pass 64, which keeps the
+128K and 512K trees (the 9000 mesh: 3 levels instead of 4).  A
+compression-only run (precon 2, 128K, 7 levels) compresses to 1.0e-5 (2e-7
+with the old 5 levels) and its BiCGSTAB stalls at 1000 iterations as it did
+with the old tree (7.8e-3 vs 5.0e-3: the unpreconditioned CFIE).
+
+#### Nonsymmetric matrices, steps N1-N2 (2026-10-17)
+
+Plan (user decisions): unstructured Color only, CPU and GPU; one skeleton
+and one interpolation T per box for rows and columns, from an ID of the
+stacked [K(F, B); K(B, F)^T] (F: the two-hop ring and the training rows), so
+the compression-only H2 (T up and down) and the extraction stay as they are
+and only the blocks stop being each other's transposes.  N1 plumbing and
+tests, N2 compression only, N3 the CPU factorization without lazy fill
+(lazy_schur 0: the legacy nonsymmetric code, which never ran, fixed), N4 the
+CPU lazy and streamed modes (the GPU's, its reference), N5 the GPU
+factorization, N6 'T'/'C' and collective entries (until then they stop with
+a message).
+
+N1: option%sym=0 for format 7 with H2_unstructured=1
+(check_h2_symmetry_option, ProgramOptions::symmetric, H2Kernel::symmetric;
+X_RR by LU).  Not yet, with a clear error: the factorization (precon 1, 3),
+'T'/'C', elem_extract=1, H2_ID_proxy 2.  Test problems: the Laplace driver's
+--skew c (times 1 + c (d . (x - y)) / r, d = (1, 2, 3)/sqrt(14)) and
+--column_weight a (columns times 1 + a sin(2 pi (y0 + 2 y1 + 3 y2)): log
+det(A W) = log det(A) + sum log w, printed), both with their GPU entry
+evaluator (laplace3d_gpu_register_general); EMSURF's CFIE GPU evaluator
+registered for format 7 too (the driver's option is --cfie_alpha, lower
+case: em.sh's --CFIE_alpha is ignored, so its runs were the EFIE).
+
+N2: the stacked ID in gather_id_workspace (the ring's K(B, N) rows,
+transposed, with the same row sets); the compression takes the kernel's
+symmetry; on the GPU the nonsymmetric IDs run on the host, the blocks on the
+device, every near block kept (no pair kernel), and any evaluator is
+accepted.  Compression-only, BiCGSTAB:
+
+| | ranks | acc_mvp | BiCGSTAB | max rank (sym) |
+|---|---|---|---|---|
+| Laplace 32^3, --skew 0.5, CPU = GPU | 1 | 4.2e-4 (sym 4.8e-4) | 106 its | |
+| Laplace 48^3, --skew 0.5, CPU = GPU | 8 | 4.4e-4 | 134-136 | |
+| Laplace 64^3, --skew 0.5, GPU | 12 | 4.2e-4 (sym 5.0e-4) | 216 | 37 (32) |
+| Laplace 64^3, --column_weight 0.5, GPU | 12 | 6.6e-4 | 194 | 39 |
+| EMSURF CFIE alpha 0.5, 128K, CPU / GPU | 8 | 8.4e-8 both | 253 / 277 | |
+| the same, GPU | 12 | 8.4e-8 | 259 | |
+
+(CPU and GPU solutions agree to the BiCGSTAB tolerance.)  The GPU matvec
+applies both near blocks instead of a pair: 1.3x its symmetric time a call
+at 64^3, 1.3x its memory.  Symmetric runs bitwise as before (Laplace 192^3,
+the 128K sphere, the collective extraction; the extraction check).
+
+#### Nonsymmetric matrices, step N3: the CPU factorization (2026-10-17)
+
+A nonsymmetric matrix runs the eager Color levels (no streamed sketch, no lazy
+fill, no owner-deferred X_NN: lazy_schur 0 whatever is asked, until N4), on
+the CPU (H2_use_gpu=1 stops with a message until N5).  Each box holds two
+directed views of each neighbor N, A_NS[N] = K(N, B) in the near/far map and
+A_SN[N] = K(B, N) in the *_nonsymmetry map, each its own ModifiedBlock; no
+view is shared.  A box's elimination (X_RR = A_RR - T^T A_SR - A_RS T + T^T
+A_SS T, by LU): S += temp1 X_RS, A_NS += temp2 X_RS, A_SN += X_SR temp4, and
+X(LG, RG) = temp2 X_RN for every ordered pair of its neighbors.  The legacy
+nonsymmetric code had never run; what it took:
+
+- Step 7 set only G's A_SN[B], without G's lock: now both of G's views of B
+  under its lock (A_NS[B] from B's A_SN[G], A_SN[B] from B's A_NS[G]); a
+  remote G gets two replacements, ReplaceKey::slot 0 (A_NS) and 1 (A_SN).
+- Step 9 wrote transposed views into the wrong maps: now X(LG, RG)
+  untransposed into LG's A_SN[RG] and RG's A_NS[LG] (both K(LG, RG)), the
+  diagonal into the Schur block untransposed.  A remote endpoint's share
+  travels with EdgeKey::rows_lo (0: the block K(hi, lo), the symmetric
+  meaning; 1: K(lo, hi)), and apply_updates_with_kernel_nonsymmetric applies
+  it to the local endpoints' views (chosen by the kernel's symmetry).
+- The X_RN gather read an eliminated assisting neighbor at its full point set
+  (X_NR's at its skeleton).
+- The stacked ID reads a stored far K(B, N) (A_SN) for its transposed rows
+  (gather_id_workspace stopped there in N2); slice_far_field_blocks slices
+  the A_SN rows, and the neighbors' A_SN columns (it sliced their A_NS in the
+  wrong map).
+- The parent transition, rewritten: a parent's A_SN[B2] = K(B1, B2) and
+  A_NS[B2] = K(B2, B1) and its Schur block from the children's directed views
+  (a child on process, else the kernel); the lower of two parents on process
+  builds both's views; parallel over the parents.
+- The solve and the multiply by the factors take the backward kernel's
+  nonsymmetric branch (X_RS, X_RN; ParallelTree::factor_symmetric, set by the
+  factorization); the level teardown also clears the *_nonsymmetry maps.
+
+Speed: the views a wave updates are formed before it, each kernel block once
+and in parallel (form_nonsymmetric_wave_views: several boxes of a wave update
+one pair, and each evaluated it under a lock); Step 9 gives each neighbor all
+its updates under one hold of its lock, the free ones first, reading X_NN in
+place; the kernel blocks of the ID gather, of Step 9 and of the transition,
+and the X_NN and X_RR^-1 X_RN products, split over the threads a small wave
+leaves idle (EMSURF 9000 elements, 1 rank: 457 -> 133 s).
+
+| problem | ranks | logdet | check | acc_forward | factor (sym eager) |
+|---|---|---|---|---|---|
+| Laplace 48^3, --column_weight 0.5 | 1 | -1095138.28586 | sym -1087470.18152 + sum log w -7668.05825: 4e-8 | 4.2e-3 | 22.5 s (5.3) |
+| the same | 8 | -1095138.27686 | sym on 8: 5e-8 | 4.2e-3 | 12.0 s (5.0) |
+| the same | 12 | -1095138.27705 | sym on 12: 5e-8 | 4.1e-3 | 12.5 s |
+| Laplace 48^3, --skew 0.5 | 1 / 8 / 12 | -1082910.8994 / .8958 / .8947 | | 3.0-3.2e-3 | 22.9 / 12.8 / 12.9 s |
+| Laplace 24^3, the symmetric matrix with sym 0 | 1 | -116686.16282 | sym -116686.16271 | 1.4e-3 | |
+| EMSURF CFIE alpha 0.5, 9000 elements | 1 / 8 | 3763.5952412634 (both) | sym 1: acc_forward 1.1e-3 | 7.3e-5 | 133 / 111 s (82 s on 1) |
+| VIE3D 32^3, scaleGreen 0 (heterogeneous) | 1 / 8 | 340527.78217 / .78219 | sym 1: 340527.78214 | 1.9e-5 / 1.7e-5 | 29.7 / 19.3 s (15.9 / 11.4 with sym 1) |
+
+(acc_backward 1e-16 to 1e-15 throughout: the solve inverts the factors'
+product.)  The symmetric eager reference is --sym 1 --h2_lazy_schur 0; the
+default symmetric path (lazy, streamed) is 5.4 s at 48^3 on 1 rank and 97 s
+on the 9000 sphere.  With one thread the nonsymmetric factorization costs
+2.3x the symmetric eager one (Laplace 32^3: 60 vs 27 s; 1.9x on the 2300
+sphere), the work of both orientations; at the leaf of Laplace 48^3 it is
+5x, bound by memory: X_NN of a box with full neighbors is 26 x 216 points
+square (250 MB), written, read and added into two views of each pair that
+hold the same K(LG, RG).  N4's lazy fill and owner-deferred updates (or one
+storage for the two views of a pair) are where that goes.  Symmetric runs
+bitwise as before (Laplace 192^3 on the GPU, the 128K sphere, the collective
+extraction, the extraction check).
+
+#### Nonsymmetric matrices, step N4: the CPU lazy and streamed path (2026-10-18)
+
+A nonsymmetric matrix with H2_lazy_schur=2 and H2_use_sketch=2 now runs the
+symmetric matrix's lazy, streamed Color levels (lazy_schur 0 keeps N3's
+eager ones, the reference).  What each piece takes for the two orientations:
+
+- A source E keeps temp4 = -X_RR^-1 X_RN (r x one-hop points) beside temp2,
+  pending in deferred_xnn_temp4 until finalize_deferred_xnn_source_box puts
+  it in X_RN.  A far block is regenerated as K(rows, cols) - sum_E
+  temp2_E[rows] X_RR_E temp4_E[:, cols] (lazy_far_gather_column_side: the
+  column side from temp4 for a nonsymmetric source, temp2 otherwise), in
+  the ID's fill and in the parent transition's two-hop child pairs.
+- The ID: gather_id_target_streamed_nonsymmetric sketches the stacked
+  [K(F, B); K(B, F)^T; K(T, B); K(B, T)^T] in gather_id_workspace's row order
+  and with compute_id_sparse_sketch's draws, the fill in sketch space a
+  source at a time: O' -= P1^T W1 + P2^T W2, P1 = X_RR temp4[:, B], P2 =
+  X_RR^T temp2[B]^T, W1 (W2) the sketched temp2 rows (temp4 columns) of the
+  ring.  (With no fill it gives the materialized sketch bitwise: EMSURF and
+  VIE3D on 8 ranks, one box a wave, factor as N3 did to the last digit.)
+- The owner pass (apply_unstructured_owner_deferred_xnn_updates_nonsymmetric):
+  a local candidate C takes from each wave source B its two views of B (B's
+  of C), the Schur update temp2_B[C] X_RN_B[:, C] and, for each neighbor D
+  of B one hop from C, A_SN[D] += temp2_B[C] X_RN_B[:, D] and A_NS[D] +=
+  temp2_B[D] X_RN_B[:, C].  Of two local candidates the lower one computes
+  the pair and the other copies its views (C's A_SN[D] is D's A_NS[C]); the
+  views are formed from the kernel before the wave, near pairs only.
+- Remote sources: the generator carries temp4, the original X_RN and the
+  solved X_SR too; form_near_updates_from_generators_nonsymmetric forms a
+  local box's Schur update, the replacements of its two views of the source
+  and both orientations of its near pairs.
+
+| problem | ranks | logdet | check | factor N4 (N3, sym lazy) | peak RSS N4 (N3, sym) |
+|---|---|---|---|---|---|
+| Laplace 48^3, --column_weight 0.5 | 1 | -1095138.28969 | sym + sum log w: 4.6e-8 | 14.5 s (22.5, 5.5) | 7.5 GB (15.4, 3.8) |
+| the same | 8 / 12 | -1095138.27926 / .27721 | 4.8e-8 / 4.9e-8 | 9.4 / 9.5 s (12.0 / 12.5, 4.2) | |
+| Laplace 48^3, --skew 0.5 | 1 / 8 / 12 | -1082910.8999 / .8978 / .8957 | N3: 1e-9 | 14.1 / 10.1 / 10.3 s | |
+| EMSURF CFIE alpha 0.5, 9000 elements | 1 / 8 | 3763.595192 / 3763.595241 | N3: 1.3e-8 / 0 | 186 / 98 s (133 / 111, 97 on 1) | |
+| VIE3D 32^3, scaleGreen 0 | 1 / 8 | 340527.78214 / .78219 | N3: 1e-10 / 0 | 28.4 / 20.6 s (29.7 / 19.3, 15.9 on 1) | |
+
+(acc_forward as N3's: 4.1e-3, 3.0e-3, 7.5e-5, 1.7e-5; acc_backward 1e-15.)
+Peak memory halves against the eager levels, as the far blocks are never
+stored; time and memory are about 2x the symmetric lazy path's, the two
+orientations: the ring's kernel rows and both views of each pair.  On
+EMSURF the lazy path is slower than the eager one (186 vs 133 s), as for a
+symmetric matrix (97 vs 82 s): its endpoints and transition evaluate their
+far blocks from the kernel, which the eager path forms once.  Symmetric runs
+bitwise as before.
+
+#### Nonsymmetric matrices, step N5: the GPU factorization (2026-10-18)
+
+The user's choices: one device block per ordered pair; the stages N5a (gates),
+N5b (one-rank device levels; host transition and solve), N5c (several ranks:
+the generators), N5d (device transition), N5e (device solve, kept factors),
+N5f (the memory features: compressed fill sources, the packed near store),
+with those features off for a nonsymmetric matrix until N5f; and the device
+two-sided sketch (the host sketch is not an option for it).
+
+**N5a, the gates.**  C_BPACK_wrapper no longer refuses a nonsymmetric GPU
+factorization.  level_eliminator_supported takes a nonsymmetric matrix whose
+evaluator gives entries one at a time (inline_entries; the sketch reads K(F, B)
+rows as K(row, col)), not on CA levels.  The driver's start_level asks
+!is_hermitian rather than a symmetric matrix, and the warm-up registers the
+evaluator with the matrix's symmetry.  The device solve declines a
+nonsymmetric tree (materialize_host_factors, then the host solve).  The
+device transition (builds_parents, box_path_runs) stays symmetric-only, so a
+nonsymmetric level's transition runs on the host.
+
+**N5b, the level eliminator.**
+- Blocks: K(row, col) under dkey(row, col) = (col << 32) | row, both
+  orientations.  A symmetric level's edge_key(lo, hi) is dkey(hi, lo), so its
+  keys do not change.  begin() uploads a box's A_NS[N] = K(N, B) and A_SN[N] =
+  K(B, N) untransposed; download_blocks_to_host puts K(row, col) back into the
+  column box's A_NS[row] and the row box's A_SN[col] (no shared edges).
+- Elimination: X_RR = A_RR - A_RS T - T^T A_SR + T^T A_SS T (no
+  symmetrization), X_SR = A_SR - A_SS T, X_RS = A_RS - T^T A_SS, X_RN = A_RN -
+  T^T A_SN.  With X_RR = P L U and W = U^-1 L^-1: temp1 = -X_SR X_RR^-1 and
+  temp2 = -X_NR X_RR^-1 as for a symmetric matrix (W, then the column swaps);
+  temp3 = -X_RR^-1 X_RS and temp4 = -X_RR^-1 X_RN from P^T applied to copies
+  (row_swap_kernel's forward order, as getrs does) and then W.  S += temp1
+  X_RS, and the near store's two adds: K(N, B) += temp2 X_RS, K(B, N) += X_SR
+  temp4.  The host gets X_RS = temp3 and X_RN = temp4, the solve's factors.
+- Owner pass: every ordered pair K(x, y) += temp2[x] X_RN[:, y] (NN); the
+  lower candidate of a pair makes both blocks (the device needs no mirror).
+- Sketch: the stacked [K(F, B); K(B, F)^T; K(T, B); K(B, T)^T].  The sketch
+  kernel's chunk_values evaluates entry(B point, row point), the K(B, F)^T
+  rows, and inside an item's swap ranges (OrderedSketchItem swap_lo/hi)
+  entry(row point, B point), the K(F, B) and K(T, B) rows.  The fill has two
+  terms a source: W from temp2's rows with P1 = X_RR temp4[:, B] (NN), and W
+  from temp4's columns with P2 = X_RR^T temp2^T[B] (TN).  temp4 is a second
+  fill-source store (persist_temp4).
+- Off until N5f: H2_compress_factors (forced to 0) and the kept solve factors
+  (set_solve_keep).
+
+**N5c, several ranks.**  A box's generator for its neighbors' ranks carries,
+after the symmetric generator's temp2, X_RS and X_RR_full, the original X_RN
+whole, temp4, and the solved X_SR (temp1).  It carries X_RN whole because the
+pair updates K(L, N) read the columns of every N one hop from a destination
+box, not only the destination's.  It carries no X_NR, so the sender makes no
+copy of it.  The receiver (apply_remote_generators, process_gen_nonsym) forms
+what form_near_updates_from_generators_nonsymmetric forms on the host, all NN:
+- Schur(L) += temp2_L X_RN[:, L].
+- K(B, L) := K(S_B, L) + temp1 X_RN[:, L] and K(L, B) := K(L, S_B) + temp2_L
+  X_RS, from the stored blocks gathered at B's skeleton, else from the kernel.
+- K(L, N) += temp2_L X_RN[:, N] and K(N, L) += temp2_N X_RN[:, L].
+
+The receiver keeps temp4 as the remote source's fill side (BoxState::persist_t4)
+and copies it to the host generator box's X_RN for the host transition.
+persist_t4 is released with temp2^T once the source's local readers are
+eliminated, for the local sources too: early freeing now applies to them.  Only
+the device exchange (CUDA-aware MPI) carries these generators; without it a
+nonsymmetric level on several ranks runs on the host.
+
+The table compares H2_use_gpu 1 against the CPU N4 on the same ranks (GPU
+nodes, 16 threads a rank):
+
+| problem | GPUs | logdet GPU (CPU N4) | factor GPU (CPU N4) |
+|---|---|---|---|
+| Laplace 24^3, --column_weight 0.5 | 1 | -117644.67022630958 (...955) | 0.82 s |
+| Laplace 48^3, --column_weight 0.5 | 1 / 8 / 12 | -1095138.2896874286 (...282) / .2792582037 (...039) / .2772080074 (same) | 3.86 / 2.84 / 3.03 s (14.5 / 9.4 / 9.5) |
+| Laplace 48^3, --skew 0.5 | 1 / 8 / 12 | -1082910.8998527119 / .8977820259 (same) / .8957173009 (...007) | 4.02 / 2.73 / 3.29 s (14.1 / 10.1 / 10.3) |
+| EMSURF CFIE alpha 0.5, 9000 elements | 1 / 8 | 3763.5951924148 (...147) / 3763.59524126339 (...343) | 34.9 / 51.1 s (186 / 98) |
+| Laplace 96^3, --column_weight 0.5 | 8 / 16 | -9990237.19587 / -9990237.13701 (sym + sum log w: 6.9e-8 / 7.1e-8) | 11.7 / 10.3 s (symmetric 1.31 / 1.32) |
+| EMSURF CFIE alpha 0.5, 128K elements | 8 | -286910.450510524 (no CPU run) | 165 s (EFIE symmetric 1.65) |
+
+acc_forward is the CPU's to all digits shown (4.1e-3, 2.9e-3, 7.3e-5); the
+128K CFIE gives 1.4e-3 (the symmetric EFIE 0.11).
+Symmetric runs are bitwise unchanged on 8 GPUs: Laplace 192^3, the collective
+entries (s4), the EFIE sphere 128K checksums, and the extraction check.  VIE3D
+(cvie3d_h2) registers no GPU evaluator and stays on the host.
+
+Where the nonsymmetric GPU time goes, and so what N5d-N5f are for:
+- The host transitions.  At 96^3 on 8 GPUs the three levels' transitions take
+  7.2 of the 11.7 s; the symmetric levels' device transitions take 0.1 s
+  together.  On the 9000-element EMSURF the one transition with the 8 -> 1
+  reduction takes 43 of the 51 s (the CPU's own 42.8 s); on the 128K CFIE the
+  three take 134 of the 165 s.  That is N5d.
+- The elimination is 1.8x the symmetric one (level 4 of 96^3: 0.66 vs 0.37 s),
+  about what the two orientations cost on the CPU.
+- The generators are 2.6x the symmetric bytes (level 4: 4.21 vs 1.62 GB sent a
+  rank).  Bandwidth is not the limit: rank 0's own exchanges add up to about
+  0.8 s, and the rest of the transport wall waits for slower peers.  But the
+  exchange arena reached 2.45 of 2.65 GB on rank 0, and past it a message goes
+  through the main heap, about 30x slower.  A larger case needs a larger arena,
+  or the receiver must release its buffers sooner.
+- Memory: resident peak 8.0 vs 6.0 GB at level 4 of 96^3, mostly temp4 beside
+  temp2^T (fill raw 6.35 vs 3.60 GB), with nothing compressed until N5f.
+
+**N5d, the device transition (2026-10-18).**  A nonsymmetric level's parents are
+built on the device (build_parent), and their blocks go to the next level's
+eliminator, through the device reduction, or to the host as for a symmetric
+matrix.
+- DeviceLevelBlocks::directed: the parent near blocks are K(P, Q) and K(Q, P)
+  under dkey (both from the lower local parent; this rank's copies of a pair
+  with another rank's parent).  The Schur block holds every ordered child pair.
+- A child block C(R, S) (rows R): the child's Schur block, the stored K(R, S)
+  for a one-hop pair (else the kernel), and for a two-hop pair K(R, S) -
+  sum_E temp2_E[R] X_RR_full_E temp4_E[:, S] = G_{E,R}^T P_{E,S}.  Here P_{E,S} =
+  X_RR_full_E temp4_E[:, S], with g_for's column side: temp4's columns, laid
+  out as temp2^T is, in a table of their own (g4_index).  The sources are R's
+  and S's common eliminated neighbors, in the host's order.
+- A fill source freed during the waves comes back from its host copies as
+  [G_all | X_RR_full | temp4 at the same points] (the staging's L grows by the
+  rows; temp4 from the host box's X_RN).
+- The next level's begin() checks that the adopted blocks have the matrix's
+  symmetry; the symmetric check of their shapes already reads a dkey right (the
+  key's low half is the rows' box).  download_level_blocks puts K(row, col) into
+  the column box's A_NS[row] and the row box's A_SN[col].
+  reduce_parent_blocks sends both blocks of a pair under the pair's
+  contribution rule (a key as its two halves), and a receiver without blocks
+  takes the tree's symmetry (ParallelTree::factor_symmetric).
+- The driver's builds_parents, box_path_runs and device_reduction_possible ask
+  !is_hermitian rather than a symmetric matrix; level_eliminator_would_run
+  tests the rest.
+
+| problem | GPUs | logdet | factor N5d (N5c) |
+|---|---|---|---|
+| Laplace 48^3, --column_weight 0.5 | 1 / 8 / 12 | as N5c (...4286 / ...2037 / ...0074) | 1.18 / 0.71 / 0.87 s (3.86 / 2.84 / 3.03) |
+| Laplace 48^3, --skew 0.5 | 8 / 12 | as N5c | 0.76 / 0.90 s (2.73 / 3.29) |
+| EMSURF CFIE alpha 0.5, 9000 elements | 1 / 8 | 3763.59519241477 / 3763.59524126339 (N5c: 1e-15) | 4.17 / 3.11 s (34.9 / 51.1) |
+| Laplace 96^3, --column_weight 0.5 | 8 / 16 | as N5c (...8651 / ...3983, 2e-16) | 3.10 / 2.68 s (11.7 / 10.3; symmetric 1.31 / 1.32) |
+| EMSURF CFIE alpha 0.5, 128K elements | 8 | -286910.4505105183 (N5c: 1.8e-14) | 15.2 s (165) |
+
+acc_forward is N5c's in all of them.  Checked besides:
+- The host restore: with BPACK_GPU_HEAP_FRACTION 0.35 / 0.28, 96^3 on 8 GPUs
+  restores 0.23 / 0.59 GB of freed sources at the level-4 transition (3 / 5
+  chunks), and the logdet stays bitwise -9990237.1958708651.
+- download_level_blocks: a test build that never kept the parents on the device
+  (not committed) gives the same logdets on 1/8/12 GPUs and EMSURF on 8.
+- Both device reductions run: 8 -> 1 ("merged on this device") and, on 12
+  ranks, "sent to their owner's device".
+- Symmetric runs are bitwise unchanged (192^3, s4, the sphere 128K checksums,
+  the extraction check, 96^3 on 16).
+
+The transitions take 0.1-0.3 s a level now.  Where the time goes:
+- 96^3 on 8 GPUs (3.1 s) is 2.4x the symmetric run, the two orientations in
+  the waves and the exchange.
+- On the 128K CFIE the sketch's kernel rows are 10 of the 15.2 s (5.44 s at
+  level 4, against 0.17 s for the symmetric EFIE).  That is the example's
+  evaluator: the EFIE has a block evaluator that shares an edge's four
+  triangle pairs, while the CFIE's entry evaluator computes each entry alone,
+  EFIE and MFIE parts apart, and the nonsymmetric sketch evaluates twice the
+  rows.  The EFIE as a nonsymmetric matrix (--sym 0) does not run on the GPU
+  at all: the nonsymmetric sketch takes only entry evaluators.  Both are
+  done in the next section (block evaluators in the sketch, a CFIE block
+  evaluator): the 128K CFIE factors in 2.5 s.
+
+N5e (the device solve and the kept factors) and N5f (the compressed fill
+sources and the packed near store) are next.
+
+#### Nonsymmetric matrices: the sketch with block evaluators, and EMSURF's CFIE block evaluator (2026-10-18)
+
+The user asked for this before N5e.  It covers the two gaps the N5d profile
+showed.
+
+- **The library side** (Evaluator::sketch_rows).  The sketch of a block or list
+  evaluator evaluates an item's kernel rows into scratch first, as the block
+  K(B, F) (block(c, row) = K(B_c, F_row)).  An item's swap ranges (a
+  nonsymmetric matrix's K(F, B) rows) are split off as segments.  Each is
+  evaluated as K(F_rows, B) into scratch of its own and transposed into its
+  place (launch_transpose), and the stored-rows sketch reads them unchanged.
+  A symmetric item is one segment, the evaluation it had before.
+  level_eliminator_supported now refuses only the collective callback for a
+  nonsymmetric matrix, not every evaluator but the entry form.  A first
+  version sized an item's scratch as one aligned block for all its swapped
+  rows, but laid the segments out aligned one by one.  An item with both
+  swap ranges (ring and training rows) then wrote up to an alignment unit
+  past its group's scratch.  On one GPU that cost the 9000-element EFIE (sym
+  0) 1e-3 of its logdet, and the CFIE 1e-10 at 9000 elements and 2e-7 at
+  128K.  Eight GPUs happened to agree with the CPU.  The scratch is now
+  sized as laid out (scratch_of), and the layout checks it.
+- **The example side** (EXAMPLE/gpu/emsurf_gpu.cu).  The CFIE is a block
+  evaluator by triangle pairs like the EFIE: the EFIE's 9 sums a pair, and 27
+  more for the MFIE.  With (n x (a x g)) . b = (b . a)(n . g) - (b . g)(n .
+  a) and the test and source points relative to their triangles' third
+  vertices, the pair's MFIE term is -sT sS sum_pq [(F_p . E_q)(n_T . G_pq) -
+  (n_T . E_q)(F_p . G_pq)], with G_pq = sum_ij w_i w_j alpha_ip beta_jq dG_ij
+  (mfie_pairs_kernel).  A triangle with itself has only the identity term,
+  taken from its geometry (mfie_identity).  cfie_entries_kernel combines
+  both.  The entry-at-a-time EFIE, MFIE and CFIE entry evaluator are gone.  A
+  group whose pair sums do not fit splits a single block by its columns
+  instead of aborting.
+
+BPACK_CHECK=kernel against the host's Zelem: at 9000 elements self 2.6e-15,
+near 8.5e-15, far 2.7e-12; at 128K, far at most 6.9e-12.  The entry
+evaluator gives 2.6e-15, 6.0e-15, 1.9e-12 and 6.0e-12: the far error is the
+MFIE far term's own cancellation.
+
+| problem | GPUs | logdet (reference) | factor (entry evaluator; CPU) |
+|---|---|---|---|
+| EMSURF CFIE alpha 0.5, 9000 elements | 1 | 3763.59519241470 (CPU ...472, 5e-15) | 0.85 s (4.17; 186) |
+| the same | 8 | 3763.59524126346 (CPU ...343, 9e-15) | 0.47 s (3.11; 98) |
+| EMSURF CFIE alpha 0.5, 128K | 8 | -286910.4505103347 (entry ...5185, 6e-16) | 2.54 s (15.2) |
+| EMSURF EFIE, sym 0, 9000 elements | 1 / 8 | 2203.19029478266 / 2203.19117538651 (CPU ...200 / ...416, 3e-13 / 1e-12) | 0.53 / 0.37 s (CPU 50 / 24.5) |
+| EMSURF EFIE, sym 0, 128K | 8 | -393630.886497571 (no CPU run) | 2.22 s |
+
+acc_mvp and acc_forward are the reference's.  The 128K CFIE's sketch rows take
+0.67 s at level 4, against 5.44 s with the entry evaluator.
+
+Symmetric runs: the library is bitwise unchanged.  The new library with the
+previous EMSURF binary gives the sphere's checksums as before.  The new
+EMSURF binary does not: the EFIE's source is unchanged, but its pair kernel
+compiles differently without the CFIE entry kernels, which called the same
+helpers (21 fewer DFMA, global instead of generic loads).  The sphere
+reference with the new binary is 2.6700219554585658e-01 -3.6809152728774222e+00
+(logdet -393629.113037164; acc_forward 0.127 against 0.113, the same
+ill-conditioned EFIE at 1e-3).  Laplace 192^3, s4 and the extraction check are
+bitwise unchanged.
+
+Found on the way, not from this change: the Laplace skew case on 8 GPUs
+(N5c, N5d and now) gives -1082910.8977820259 in about three runs of four and
+...0256 in the others.  The column-weight case gave the same digits in all 5
+runs.  The factorization does not vary: every number the runs print before the
+logdet is the same (compression, skeletons, root size, accuracies).  The two
+logdets are 1 ulp apart.  It is hierarchical_logdet_parallel, as at C1 (below,
+2026-09-29): a thread sums its boxes in order (schedule static), but the 16
+threads' partial sums go into the level's sum with `omp atomic`, in the order
+the threads finish.  A symmetric GPU run seldom shows it, because its kept
+levels are summed from the device box by box (device_logdet_kept_level).  A
+nonsymmetric one keeps nothing on the device (until N5e), so every level goes
+through the atomics.  Whether the order changes the rounding depends on the
+values: column weights, as it happens, never did in these runs.  A fix is to
+sum the boxes' contributions in box order, as the device path does, which is
+independent of the thread count too.  It may move a reference's last digit once.
+
+**N5e, the device solve and the kept factors (2026-10-18).**  The nonsymmetric
+host solve differs from the symmetric one in its backward sweep only: x_R +=
+X_RS x_S + X_RN x_N with X_RS = temp3 (r x k) and X_RN = temp4 (r x ntot), in
+place of X_SR^T x_S + X_NR^T x_N.  The factored multiply's W sweep likewise.
+- SolveBox::xrs_t and xrn_t: X_RS^T (k x r) and X_RN^T (ntot x r), laid out as
+  X_SR and X_NR are.  The solve's backward kernels and the multiply's forward
+  ones read them in their place (null: a symmetric matrix, the same code), so
+  the work buffers, chunked X_N and wave tables need nothing new.
+- At the first solve: the upload transposes the host's X_RS and X_RN into the
+  box blocks (put_t).
+- Kept during the factorization: KeptSolveBox::xrs_t and xrn_t, launch_transpose
+  of temp3 and temp4 into the kept block after its spans.  Their item list goes
+  in the same metadata buffer as the spans.  A first version put it in a heap
+  block freed right after the launch, and the transposes then read reused
+  memory (NaN).
+- Every place that moves or rebases a kept box's pointers takes the two new
+  ones: staging, upload, streaming, the plan, and the device compaction between
+  levels (factorization_driver.hpp).  The compaction was the one missed at
+  first: the kept X_RS and X_RN pointed at the blocks' old ranges.  The new
+  BPACK_CHECK=solve comparison of a nonsymmetric level's kept factors with
+  their host copies at the solve's set-up found it.
+- A nonsymmetric level keeps its host copies too (skip_xnr_ off) and its
+  X_RR_full (not rebuilt from the kept LU).  So when the heap is short, the
+  reclaimer may drop the kept factors as a last resort, and the first solve
+  uploads them instead.  The keep decision counts the level's raw fill sources,
+  about the keep bound itself, beside the kept factors (decide_solve_keep).
+  Without that, 96^3 on 8 GPUs with a 0.3 heap ran out at level 4: 4.2 GB kept
+  next to 7.1 GB of fill sources.
+- The device solve no longer declines a nonsymmetric tree.
+
+| problem | GPUs | logdet | solve, device (host, N5d) |
+|---|---|---|---|
+| Laplace 48^3, --column_weight 0.5 | 1 / 8 / 12 | as N5d | 0.042 / 0.036 / 0.032 s (0.140 / 0.072 / 0.063) |
+| Laplace 48^3, --skew 0.5 | 8 / 12 | as N5d | 0.040 / 0.036 s (0.074 / 0.069) |
+| Laplace 96^3, --column_weight 0.5 | 8 / 16 | -9990237.1958708651 / ...1370139793 | 0.093 / 0.085 s (0.292 / 0.209) |
+| EMSURF CFIE alpha 0.5, 9000 | 1 / 8 | CPU's to 5e-15 / 6e-15 | 0.023 / 0.023 s (0.029 / 0.032) |
+| EMSURF CFIE alpha 0.5, 128K | 8 | -286910.4505103347 | 0.060 s (0.119) |
+
+BPACK_CHECK=solve gives multiply 3e-16 and solve 4e-15 relative to the host on
+1 and 8 GPUs; it gives the same with 4 right-hand sides (Laplace, and EMSURF
+1.1e-14).  The factorization's time is unchanged within 5% (the keep's
+copies).  Symmetric runs are bitwise unchanged.
+
+The heap at 0.25 of the card fails at 96^3 on 8 GPUs, as N5d did: the sketch's
+P;W block wants 763 MB in one range and the largest free one is 738 MB.  That
+is N5f's (the memory features), with the host copies that a nonsymmetric level
+still keeps beside its kept factors.
+
+**N5f, the memory features (2026-10-18).**  In order of what they save (level 4
+of 96^3 on 8 GPUs at its peak: raw fill sources 7.1 GB, kept factors 4.0 GB, the
+owner pass's near blocks 1.2 GB): the compressed fill sources (temp2^T and
+temp4), the compressed kept factors with the solve's decompression, the packed
+near store and parent blocks, and the host copies.  The host copies first, as
+they are independent of the compression:
+- *Host copies.*  A kept nonsymmetric level downloads none of a kept box's
+  factors (skip_xnr_ as for a symmetric one): X_RN is fetched with X_NR, and X_RS
+  with the box's other factors, only where those are.  rescue_skipped_xnr brings
+  X_RN back with X_NR and X_RS with X_SR, transposed from the kept copies.  The
+  reclaimer's last resort rescues before it drops the kept factors.  Host
+  high-water: 48^3 on 1 GPU 5.76 -> 1.30 GB, 96^3 on 8 GPUs 9.05 -> 4.92 GB, the
+  128K CFIE 3.07 -> 2.02 GB.  Factor time 3.2 -> 2.3 s at 96^3 (the downloads
+  saved).  Results are unchanged; symmetric runs are bitwise unchanged.
+- *The compressed fill sources and the packed near store* (H2_compress_factors
+  for a nonsymmetric matrix).
+  - BoxState gains a temp4 store (t4_packed, t4_host, t4_slots, t4_strides)
+    in temp2^T's slots, indexed by the same t2t_rows.  A box is packed in both
+    or in neither: compress_fill_source_set(store, packed list) leaves the raw
+    blocks to the caller, and a box packed in one only keeps both raw (temp4 in
+    a block of its own).  temp4 is packed straight from the wave's block (it is
+    laid out as temp2^T), so no raw copy is made up front.
+  - The owner pass's second store is X_RN itself (no transpose): from the
+    stores, a nonsymmetric task is a temp2^T slot times an X_RN slot, which is
+    the symmetric product's (Trans, NoTrans) with ld r.
+  - The sketch decompresses a source's temp4 slots into a second region beside
+    its temp2^T ones, at the same offsets, and the two terms take their
+    operands from them.
+  - The transition puts temp4 back whole beside temp2^T.  A remote generator's
+    temp4 is packed from the receive buffer before its temp2^T, which stays raw
+    where temp4 did not pack.  rescue_skipped_xnr brings X_RN back from the
+    kept X_RN^T or the temp4 store.  The eviction records name their store.
+  - The near store: the nonsymmetric wave gather goes through gather_src (a
+    packed block windowed, as for a symmetric one: it was read as the
+    kernel's), step 5 hands its two blocks to the re-pack, and want_of_gen has
+    a nonsymmetric branch (process_gen_nonsym's reads).
+
+  Laplace 96^3 on 8 GPUs: resident peak 11.81 -> 3.55 GB, host 4.92 -> 1.57 GB,
+  factor 2.36 -> 2.43 s; fill sources 14x (3.66 -> 0.26 GB at the 48^3 leaf).
+  The lossy steps move the logdet and accuracy as for a symmetric matrix: 48^3
+  on 1 GPU 1.8e-10 relative and acc_forward 4.1e-3 -> 4.9e-3 (symmetric:
+  1.8e-9, 3.0e-3 -> 4.1e-3).  The column weights' identity holds to 4.4e-8, as
+  uncompressed.  The device solve against the host solve, now from different
+  lossy copies: 1.4e-4 (symmetric 1.3e-4).  EMSURF degrades as the symmetric
+  EFIE does under compression (the EFIE's acc_forward 9e-4 -> 0.64, the CFIE's
+  7e-5 -> 1e-2).  At 0.25 and 0.2 of the heap 96^3 now fits (it did not
+  uncompressed).  Its result moves 1.2e-7, as a symmetric run's does at
+  0.25 (1.5e-6): the room-driven packing.  Symmetric runs are bitwise unchanged,
+  compressed ones included (96^3 on 8 GPUs).
+- *The compressed kept X_RS^T and X_RN^T.*  keep_factor_sources transposes
+  temp3 and temp4 into a staging block (the transposes' list at its end; given
+  back once the gather has run) and compresses them in the batch with T, X_SR
+  and X_NR, X_RS^T at X_SR's step and X_RN^T at X_NR's.  Without room for the
+  staging they are transposed raw into the kept block, as before.  The solve
+  decompresses them with the box's other factors, segment by segment
+  (pending_xrs, pending_xrn; launch_patch_xnr points xrs_t and xrn_t at the
+  scratch).  materialize_host_factors and rescue_skipped_xnr decompress them on
+  the host before transposing back.  96^3 on 8 GPUs: kept factors at the peak
+  1.48 -> 0.05 GB, resident peak 3.55 -> 2.43 GB (11.81 GB uncompressed); the
+  logdet is unchanged (they enter the solve only), acc_forward 6.4e-3 ->
+  7.1e-3.  Symmetric runs and uncompressed nonsymmetric ones are unchanged.
+
+  N5 is complete.  Left for later: N6 ('T'/'C' and collective entries for a
+  nonsymmetric matrix); the logdet's thread-order sum
+  (hierarchical_logdet_parallel, see above); the sketch's P;W block, which
+  wants one contiguous range (a 0.25 heap at 96^3 uncompressed); a pledge of
+  the temp4 store as the kept X_RN^T, as temp2^T is for X_NR (saves the
+  kept copy, small once compressed).
+
+#### Nonsymmetric matrices, step N6a: 'T' and 'C' (2026-10-18)
+
+c_bpack_inv_mult and c_bpack_mult (format 7) take 'T' and 'C' for a
+nonsymmetric H2; 'C' is 'T' on conjugated vectors, as for a symmetric one.
+What N6 still leaves: collective entries (elem_extract=1) with sym 0.
+
+- *The factored matrix (inv_mult, and mult after a factorization).*  With
+  one T per box for rows and columns, A^T's factors are A's transposed: its
+  X_SR and X_NR are A's X_RS^T and X_RN^T, its X_RS and X_RN are A's X_SR^T
+  and X_NR^T, its X_RR (and the root) A's X_RR^T.  So the transposed sweeps
+  need no new data and no new messages:
+  - host (core/solver.hpp, core/apply_mul.hpp, unstructured/solver_impl.hpp):
+    `transposed` swaps apply_forward_elimination's and
+    apply_mul_backward_V_with_pending's X_SR, X_NR for X_RS, X_RN applied
+    with op 'T'; the backward sweep and the multiply's W take the symmetric
+    reads (X_SR^T, X_NR^T); getrs 'T'; lu_transposed_multiply for X_RR^T x
+    (laswp in order, then the unit L and U transposed).
+  - device (device_solve.hpp, solve_kernels.cu): DeviceSolveRun's
+    `transposed` goes to every sweep kernel, which reads xrs_t, xrn_t where
+    it read xsr, xnr and the other way round (forward_xsr/backward_xsr), and
+    to two new kernels, the LU solved transposed (U^T, unit L^T, the
+    interchanges in reverse) and multiplied transposed.  The kept factors,
+    compressed ones included, are decompressed per wave as before (all of a
+    wave's pieces, in either direction).  CA and host levels are refused for
+    a transposed run (require_color_levels; a nonsymmetric matrix has none).
+- *The compression-only matrix (mult with precon 2).*  The passes up and
+  down are A's (one T); only the blocks are applied transposed, and they
+  live with their row box: apply_compressed_transposed multiplies each
+  local box t's K(t, s)^T by t's vector and pushes the product to s (its
+  skeleton at a coupling level, all of its points at the leaf) through the
+  solve's update transport, whose one-hop process graph is the one the
+  pull exchange of 'N' uses.  On the host only: with H2_use_gpu the device
+  matvec serves 'N', and 'T' reads the compression's host copies of the
+  blocks.  A device version needs the reverse exchange planned and a
+  kernel that writes per-block products to be added in order.
+
+The drivers' --inv_mult_check now checks the transposes against 'N' for
+any matrix (u0^T F^{-T} u1 against u1^T F^{-1} u0, and the same with F), and
+'C' against conj(F^{-T} conj(U)) (bitwise the old reference for a
+symmetric matrix, whose 'T' is 'N'); with precon 2 it checks the
+transposed mult alone (check_mult_transpose).
+
+| case (sym 0) | transpose of F^{-1} | of F | residual T (N) |
+|---|---|---|---|
+| Laplace 48^3 column weights, 1 GPU | 1.3e-14 | 3.4e-15 | 4.6e-15 (4.0e-15) |
+| the same, 8 GPUs | 2.8e-16 | 0 | 3.8e-15 (4.7e-15) |
+| the same, H2_compress_factors 1 | 1.7e-15 | 2.0e-15 | 4.9e-15 (2.7e-15) |
+| the same, 8 columns (nrhs 4) | 2.8e-16 | 0 | 4.4e-15 |
+| the same, H2_use_gpu 0 / the CPU build | 8.5e-16 | 3.4e-16 | 1.0e-15 |
+| Laplace 48^3 skew 0.5, 8 GPUs | 2.2e-15 | 1.4e-15 | 3.6e-15 |
+| EMSURF CFIE alpha 0.5, 9K, 8 GPUs | 2.1e-16 | 9.1e-16 | 1.2e-14 (C 1.2e-14) |
+| precon 2: Laplace weights 1 / 8 GPUs, skew, CFIE | | 1.6e-14 / 1.7e-16, 1.2e-15, 3.6e-16 | |
+
+'C' against conj(F^{-T} conj(U)) is 0 in every case.  BPACK_CHECK=solve
+(every call of the 8-GPU weights run, 'T' among them): device against host
+solves 1.5e-15 to 9.4e-15, multiplies 3.5e-16 to 1.1e-15.  A transposed device solve costs what 'N' does (48^3 on 8 GPUs, 4
+columns: 0.053 s both).  Symmetric runs are bitwise unchanged (192^3, s4,
+the 128K sphere, the extraction check, 96^3 compressed; the symmetric
+inv_mult check prints the same numbers), and so are the nonsymmetric
+factorizations.
+
+#### Nonsymmetric matrices, step N6b: entries through a collective callback (2026-10-18)
+
+A nonsymmetric H2 takes its entries through a collective block callback
+(elem_extract=1), on the CPU and the GPU, as STRUMPACK's fronts will.
+
+- CollectiveEntries knows the matrix's symmetry: a symmetric one serves a
+  block from its transpose's fetch (lookup, release), a nonsymmetric one
+  fetches each orientation of a pair of boxes apart.  It also takes no
+  sketch callback for a nonsymmetric matrix (set_sketch): the callback
+  sketches A(rows, columns) from the left, and the stacked ID's K(B, F)^T
+  rows would need A(B, F) sketched from the right, so the ID asks for its
+  kernel rows' blocks.
+- The host phases that evaluate the kernel outside an item became entry
+  phases or got a fetch first, as their symmetric twins are:
+  form_nonsymmetric_wave_views (its pairs evaluated as items, before the
+  wave changes anything; a rank with an empty wave runs an empty phase, as
+  for the wave's other phases), form_near_updates_from_generators_nonsymmetric
+  (as items, a source writing only its own updates),
+  apply_updates_with_kernel_nonsymmetric (the blocks it starts views and
+  Schur blocks from fetched first, the same blocks at the same points), and
+  the owner pass (apply_unstructured_owner_deferred_xnn_updates_nonsymmetric:
+  it adds to what it finds, so with collective entries a dry run asks for
+  the blocks it will start from, then a checkpoint before the candidate
+  changes).  The parent transition already ran as items from fresh boxes;
+  its nonsymmetric views of an on-process neighbor are deferred blocks, so
+  the gate there went.  On the device the collective evaluator serves the
+  sketch's K(F, B) segments like any block, and the eliminator's gate went.
+- A request for a block not fetched yet after an item's checkpoint now
+  throws (entry_item_miss) instead of dooming an item whose changes have
+  begun: the item could not run again, so it would have been silently
+  wrong.  No run here hits it.
+
+The H2 under test from the entries of a compression-only one (Laplace 48^3,
+the source on 4 ranks, the test on 8, the s4 set-up), column weights 0.5:
+
+| | logdet | factor | rounds | entries fetched |
+|---|---|---|---|---|
+| GPU | -1.09513833117441810e+06 | 8.2 s | 7.0 s | 2.8e9 |
+| CPU path (H2_use_gpu 0) | -1.09513833117441786e+06 | 19.3 s | 10.0 s | 2.7e9 |
+| CPU, lazy_schur 0 | -1.09513832842332823e+06 | 19.7 s | 11.8 s | 2.9e9 |
+| the CPU build | -1.09513833117441810e+06 | 19.8 s | | |
+| symmetric (s4), GPU | -1.08747022864894662e+06 | 3.2 s | 2.7 s | 4.1e8 |
+
+GPU and CPU agree to 2e-16 (the skew 0.5 matrix: to every digit printed,
+-1.08291090422541834e+06).  The column weights' identity holds as for the
+kernel: the logdet less the symmetric one is -7668.103 against sum log w
+-7668.058 (direct from the kernel: -7668.111).  The inv_mult check on it:
+transposes 8.8e-16 (F^{-1}) and 2.6e-15 (F), residuals 5e-15 to 8e-15.  The
+extraction from a nonsymmetric compressed H2 (precon 2, the extraction
+check): random blocks against the kernel 8.6e-4 (symmetric 6.3e-4), rows
+against the matvec 3.3e-17.
+
+The cost is the ID's kernel rows: 2.1e9 of the 2.8e9 entries (the symmetric
+H2 asks for 2.9e7 sketched values instead), and the transition's blocks,
+twice the symmetric count (88128 against 44064, both orientations).  A
+right sketch in the callback (Omega A(B, F)^T, which a compressed source
+can form with the transposed blocks of N6a) would bring the rows back to
+the symmetric volume; it is an addition to the callback's interface, left
+for now.  Symmetric runs are bitwise unchanged (GPU: 192^3, s4, the 128K
+sphere, the extraction check; the CPU path's s4 with lazy_schur 2 and 0).
+
+**The transposed sketch request (2026-10-18, user decision).**  The right
+sketch, as an addition that leaves the existing interface as it is:
+c_bpack_set_sketch_transpose_callback takes a second callback of the same
+type, whose request n asks for Y_n = Omega_n A(columns, rows)^T, and
+c_bpack_extractsketch_transpose_bridge serves it from a matrix on a subset
+of the ranks, as c_bpack_extractsketch_bridge does the plain one.  A
+nonsymmetric H2 sketches its kernel rows only with both callbacks set
+(CollectiveEntries::has_sketch); a symmetric one never asks the second.
+
+- CollectiveEntries: a sketch request carries `transposed`; a round fetches
+  the plain and the transposed ones in a call of their own callback each
+  (every rank makes the calls the global counts say).
+- The compressed source (extract_compressed_sketches, transposed): the
+  blocks of A(J, I) are stored on the column side's boxes s, so the owner of
+  a row side's box t forms M = U_t Omega^T (k_t x d) and sends it to the
+  owner of s, which sums (K(S_s, S_t) M)^T over the t and multiplies by U_s;
+  the near blocks K(B_s, B_t) are sketched on s's owner.  Other formats
+  extract A(J, I) and sketch it on the requests' owners.
+- The CPU ID (gather_id_target_streamed_nonsymmetric): the draws of the
+  K(F, B) rows become a plain request, those of the K(B, F)^T rows a
+  transposed one, each box's after its row pass (the draws as before).
+- The device sketch (Evaluator::collective_sketch_rows,
+  collective_sketches): an item's rows go to the request as before, its
+  swap ranges' rows (the K(F, B) rows) to a second part; the first part is
+  fetched transposed for a nonsymmetric matrix (the device's rows are K(B,
+  F)^T there), the second plain, and the two summed (a request of one part
+  is copied as it came).
+- The Laplace driver registers both callbacks, and its --extract_check
+  sketches the random blocks transposed too, against the sketch of their
+  extracted A(J, I): 2.2e-16 from a nonsymmetric source, 1.9e-16 from a
+  symmetric one (the plain sketch 2.1e-16, 1.7e-16).
+
+The s4 set-up with column weights again:
+
+| | logdet | factor | rounds | entries fetched |
+|---|---|---|---|---|
+| GPU, rows sketched | -1.09513833117441786e+06 | 6.3 s | 5.5 s | 8.0e8 |
+| CPU path, rows sketched | -1.09513833117441786e+06 | 16.1 s | 7.0 s | 8.0e8 |
+| GPU, rows' blocks (above) | -1.09513833117441810e+06 | 8.2 s | 7.0 s | 2.8e9 |
+| symmetric (s4), GPU | -1.08747022864894662e+06 | 3.2 s | 2.7 s | 4.1e8 |
+
+The ID's rows are 6.0e7 sketched values for their 2.1e9 entries (the
+symmetric H2: 2.9e7 for 1.0e9); the results move 2e-16 (skew 0.5: not in
+the digits printed).  What is left of the gap to the symmetric H2 is the
+other blocks, twice the symmetric volume each (both orientations of a pair
+of boxes: box regions, fill targets, remote generators, the transition).
+Symmetric runs are bitwise unchanged (GPU: 192^3, s4, the 128K sphere, the
+extraction check's earlier numbers; the CPU path's s4).
+
+#### Nonsymmetric matrices: H2_ID_proxy 2, and the compression's IDs on the device (2026-10-18)
+
+The adaptive ID rows (H2_ID_proxy 2, GPU_PROXY2_PLAN.md) for a nonsymmetric
+matrix: a sampled or hold-out far point gives the two rows the stacked
+target holds of it, K(p, B) and K(B, p)^T (a node's rows: its sampled
+points' K(P, B), their K(B, P)^T, then the hold-out points' the same); the
+rest of the selection (residuals, row IDs, hold-out test, subdivision) is
+the symmetric one's over those rows.
+- Host: append_adaptive_id_training_rows evaluates both blocks; the
+  nonsymmetric streamed ID (gather_id_target_streamed_nonsymmetric) selects
+  against its sketch, as the symmetric one does.  The compression's
+  selection on the sketch (h2_skeletonize_box) passed a symmetric kernel
+  whatever the kernel was; it passes the kernel's symmetry now (unreachable
+  before: the option was refused for sym 0).
+- Device: AdaptiveRowSelector takes nonsym; K(B, P) of a node is evaluated
+  into its block and transposed into place before the residuals, and the
+  targets' first capacity counts two rows a point.
+- The compression's IDs on the device (compress_level_ids) for a
+  nonsymmetric kernel: the stacked rows as gather_id_workspace stacks them
+  (the ring blocks, the ring again, the training rows twice), the K(F, B)
+  and K(T, B) rows the sketch items' swap ranges, as the factorization's
+  device sketch has them (N5).
+
+Laplace 48^3 with column weights 0.5 on 8 ranks (H2_ID_proxy 2 takes the
+legacy input, --distributed64 0):
+
+| | logdet | factor |
+|---|---|---|
+| proxy 2, CPU path (H2_use_gpu 0) | -1095138.2791892029 | 9.60 s |
+| proxy 2, 8 GPUs | -1095138.2791892032 | 1.21 s |
+| symmetric, proxy 2, 8 GPUs | -1087470.169157051 | 0.49 s |
+
+k and the adaptive statistics are identical on CPU and GPU in all 576
+boxes; the column weights' identity: -7668.110 against sum log w -7668.058
+(proxy 0: -7668.111); acc_mvp 6.5e-4 (proxy 0: 7.5e-4).  Skew 0.5: CPU and
+GPU -1082910.8975613471 in every digit (10.4 / 0.79 s).  EMSURF CFIE alpha
+0.5, 9K, 8 GPUs: 3.76359516736682053e+03 against the CPU path's
+...687692 (1.5e-14), 0.61 s.  The inv_mult check on 1 GPU: transposes
+1.8e-15 (F^{-1}), 3.4e-15 (F).
+
+The compression-only H2 (precon 2) on 8 GPUs, IDs on the device against
+the host's:
+
+| | k vs host | compression check acc_mvp | construction: IDs on the host / device / CPU path |
+|---|---|---|---|
+| Laplace 48^3 weights | identical (576 boxes) | 6.9393585e-04 both | 0.98 / 0.41 / 1.02 s |
+| the same, proxy 2 | identical, adaptive statistics too | 6.9324034e-04 both | - / 0.50 / 1.06 s |
+| EMSURF CFIE 128K | | 8.3952718e-08 both | 358 / 2.37 / 458 s |
+
+(BiCGSTAB counts move by a few iterations between equal ranks: 161 / 149 /
+154 at 48^3, 275 / 273 / 253 for the CFIE.)  Symmetric runs are bitwise
+unchanged (GPU: 192^3, s4, the 128K sphere, the extraction check, the
+symmetric proxy-2 factorization and compression; the CPU path's proxy-2
+logdet as before, which one run flipped in the last digit: the logdet's
+thread-order sum).
+
+#### Nonsymmetric matrices: several GPUs without CUDA-aware MPI, and the transposed device matvec (2026-10-18)
+
+*Generators through the host.*  Without the device exchange (no CUDA-aware
+MPI, or BPACK_GPU_AWARE_MPI=0) a nonsymmetric level on several ranks ran on
+the host.  It runs on the device now, as a symmetric one does: the
+generators go through the host transport (emit_generators ->
+transport_and_apply_factor_updates_symmetric_onehop -> install_remote_generators)
+and the device applies them (apply_remote_generators from the generator
+boxes).  The pieces are the device exchange's: the eliminator copies a
+boundary box's original X_RN where the symmetric one copies X_NR (the source
+group's off_xnr_orig) and downloads it into the box's lazy_original_x_rn;
+its temp4 (the host's X_RN) and solved X_SR are host copies already (a level
+whose generators go through the host keeps them, skip_xnr_ off);
+emit_generators sends them as the host's emit_lazy_generators does; the
+receiver uploads [temp2 | original X_RN | X_RS | temp4 | X_SR] and reads them
+where the device exchange's GenLayout puts them.
+
+| case (column weights unless noted) | without CUDA-aware MPI | with it |
+|---|---|---|
+| Laplace 48^3, 8 GPUs | -1095138.2792582037, 2.61 s | ...039, 0.76 s |
+| the same, skew 0.5 | -1082910.8977820256 | ...259 |
+| Laplace 64^3, 12 GPUs | -2747101.4654117348, 10.1 s | the same, 3.15 s |
+| Laplace 48^3, H2_compress_factors 1 | -1095138.2815808542 | ...854 |
+| EMSURF CFIE 9K, 8 GPUs | 3.76359524126346014e+03 | ...059 |
+
+Both levels run on the device (the messages through the host); the solve
+check 4e-15, the inv_mult check's transposes 3e-16.  The host transport takes
+about 3x the device exchange's factor time here (a symmetric 48^3 on 8 GPUs
+without CUDA-aware MPI: 1.74 s).
+
+*The transposed device matvec.*  The compression-only H2's A^T x ran on the
+host (N6a).  For a nonsymmetric kernel commit_device_matvec now also plans
+the transposed products: per target box (a local one, or a remote one in
+the level's receive layout) the blocks of the local boxes it is the source
+of.  device_h2_mul(transposed) runs the passes up and down as A's and each
+level's products backwards: h2_accumulate_t (y_s += sum K^T x_t, a warp an
+entry, the blocks in order) into compact skeleton vectors and the send
+entries, the exchange in reverse (exchange_t: what a rank receives for A x,
+it sends for A^T x), the peers' sums added a peer at a time
+(h2_unpack_add, in peer order: deterministic), then into the skeletons
+(h2_scatter_add_q); the leaf's near blocks the same on the full vectors.
+BPACK_CHECK=matvec compares it with the host's transposed product:
+2.7e-16 (Laplace weights, 8 GPUs, with and without CUDA-aware MPI), 2.9e-16
+(skew, 12 GPUs), 5.3e-16 (CFIE 9K); the mult check's transposes 3e-16 to
+6e-16.  The check's multiplies (N, T and C on 8 columns, 8 GPUs) take 0.058 s
+against 0.44 s with the host's transposed product.
+
+Also: a nonsymmetric factorization with H2_use_sketch 2 and H2_lazy_schur 0
+prints a note that its levels do not stream (use_streamed_level).
+Symmetric runs are bitwise unchanged (GPU: 192^3, s4, the 128K sphere, the
+extraction check; without CUDA-aware MPI 48^3 on 8; compression-only with the
+inv_mult check).
+
+#### The ID sketch: n + 4 rows, or the rows themselves (2026-10-19)
+
+*The report.*  GPTune's GP fits saw the determinant sign -1 for SPD
+covariance matrices (GPTune spatial_h2/near_block_too_wide.md; reproducer
+logdet_sign_repro/ in this checkout: K(i, j) = exp(-|x_i - x_j| / 0.01) +
+0.05 [i == j] on n of the KAUST 2023 dataset-2 locations, tol 1e-10,
+H2_ID_proxy 2, nmin_leaf 8, 16 GPUs): -1 at 100K and 400K, +1 at 20K and
+200K, log|det| and the solves seemingly right.
+
+*Not the sign bookkeeping.*  Every level from the leaf to level 2 has an
+even number of sign flips (BPACK_TRACE=wave); the root (839 points) has 7.
+Its block, dumped before the LU, has one negative eigenvalue (-0.029, next
+to 0.008, 0.009, ...); MAGMA's LU of it is exact (P L U - A 2e-16) and
+numpy's slogdet agrees.  By Sylvester's law the factored operator is
+indefinite: its determinant is negative.  The CPU path (eager) gives the
+same log|det| to 16 digits.  The quick verification cannot see it: it
+probes 20 point sources, and the reproducer's residual applies the factored
+operator itself.
+
+*The cause.*  The factorization's ID sketch had d = n rows (the box's point
+count; sketch factor 1, capped at the m target rows), no oversampling.  On
+this problem the boxes are nearly full rank (k/n 0.85-0.97 from level 4 to
+the leaf, m/n 11-20): the sketch of such a target is square, and its small
+singular values make the pivoted QR drop columns the target needs, with
+errors at those columns' size, not the tolerance's.  A box with m only a
+little above d gets a nearly square sparse mixing of its rows, which can be
+ill-conditioned too.  (CPU eager, use_sketch 2; "=" is the unsketched ID's
+log|det| to all printed digits; 20K against a dense Cholesky.)
+
+| sketch rows d | the rows themselves when | 20K error | 100K | 400K |
+|---|---|---|---|---|
+| n (before) | - | -3.2e-2 | sign -1 | sign -1 |
+| n + 16 (2n, 8n: the same) | - | -2.6e-3 | +1, 0.98 off | sign -1 (n + 16) |
+| n | m <= n | -3.0e-2 | sign -1 | +1, 9.7 off |
+| n + 1 | m <= d | = | +1, 0.026 off | +1, 0.22 off |
+| n + 1 | m <= 2d | = | = | = |
+| **n + 4** | **m <= d** | **-1.6e-4 (=)** | **=** | **=** |
+| n + 8, n + 16 | m <= 2d | = | = | = |
+| unsketched (use_sketch 0) | | -1.6e-4 | +1 | +1 |
+
+*The change.*  id_sketch_shape (core/id_decomposition.hpp): d = n + 4, 4
+nonzeros a target row; when m <= n + 4, the rows themselves (row q of the
+target is row q of Y, sign +1; d = max(m, n)).  One rule at every site:
+the streamed sketches (gather_id_target_streamed, its nonsymmetric
+version), the materialized one (use_sketch 1, id_sketch), the compression's
+(butterfly_matvec.hpp), and on the device the factorization's and the
+compression's plans; the device draws have a direct mode
+(sketch_draws_kernel: row q to row q).  The adaptive rows' selector takes
+the sketch's d rows (Target::d; first_capacity from d, not n).
+
+*The reproducer, GPU (16 A100s).*
+
+| n | sign | log\|det\| | vs the CPU path | acc_mvp before -> after |
+|---|---|---|---|---|
+| 20K | +1 | -23372.235681212151 (dense -23372.235520) | 1.6e-16 | 3.0e-8 -> 1.4e-8 |
+| 100K | +1 | -165002.534108074993 | 3.5e-16 | 3.2e-10 -> 1.9e-10 |
+| 200K | +1 | -368011.247353305575 | | 1.4e-10 -> 1.7e-10 |
+| 400K | +1 | -805774.992196830688 | identical | 6.0e-5 -> 3.4e-10 |
+
+The reproducer's whole run takes 1.6 s at 100K (1.8 before) and 4.0 s at
+400K (4.0).  Results of every sketched run change (the IDs do), so the
+regression compares the GPU with the CPU path, and the library before.
+
+*GPU against the CPU path* (8 GPUs unless noted; logdet, relative):
+
+| case | GPU - CPU |
+|---|---|
+| Laplace 48^3 symmetric, column weights, skew 0.5 | 0 (every digit) |
+| proxy 2, weights and symmetric | 0; k and adaptive statistics equal in 576/576 boxes |
+| weights without CUDA-aware MPI | 0 |
+| collective entries (s4, elem_extract 1) | 0 |
+| structured tree (H2_unstructured 0) | 0 |
+| a CA leaf (96^3, CA_level 4) | 2e-16 |
+| EMSURF CFIE 9K | 2.4e-14 |
+| compression only, device IDs vs host IDs (sym, weights, proxy 2) | k equal in 576/576 boxes |
+
+*Against the library before* (8 GPUs):
+
+| case | logdet before -> after | acc_mvp | factor time | peak |
+|---|---|---|---|---|
+| Laplace 192^3, compressed factors | -89253588.4723 -> .3186 | 2.09e-3 -> 1.99e-3 | 7.99 -> 7.39 s | 18.36 GB, the same |
+| Laplace 64^3 | -2728925.2615 -> .2604 | 4.91e-4 -> 4.73e-4 | 1.01 -> 0.99 s | |
+| EMSURF EFIE 128K | -393629.113 -> -393628.532 | 1.41e-4 -> 1.47e-4 | 1.05 -> 1.10 s | 1.66 GB, the same |
+
+On Laplace the change is at the tolerance's level, and the extra 4 rows
+cost nothing measurable.  The EFIE sphere's solution checksum moves (norm
+4.55 -> 3.80): that run is a direct solve whose forward error is 13% before
+and 11% after (acc_forward), so any change of the IDs moves its solution by
+that much; it was only ever a bitwise reference.
+
+#### A level's upload in 1 GiB chunks; the single-rank upper levels of a thin tree (2026-10-19)
+
+*The report.*  GPTune's GP fits on 400K space-time points ran out of GPU
+memory at level 3 (GPTune spatial_h2/upper_level_oom_repro; copied to
+upper_level_oom_repro/ here: K = 0.4537 exp(-|dx|^2/2) + 0.01302 I on the
+points divided by the length scales, 26 x 26 x 106 correlation lengths,
+tol 1e-10, H2_s_op 0.01302, nmin_leaf 32, 8 ranks on 80 GB A100s):
+"request 38.44 GB (other, transient) ... held: uploaded blocks 38.44 GB".
+
+*A second copy of the level.*  begin() uploads the blocks a level starts
+from on the host (here the parent blocks the level-4 reduction sent rank 0
+through the host: 56.3 GB beside its own 4.8 GB) into their device homes,
+and did it through one pageable host image and one device image of all of
+them, gathered into the homes: twice the level's blocks on the device (and
+on the host) for the copy.  It now stages them in chunks of at most 1 GiB
+(one block if a block is larger): a host image of the chunk, one copy, a
+gather.  The copies are the same, so results are bitwise unchanged (Laplace
+48^3 symmetric, weights, proxy 2, compressed factors, s4, CFIE 9K, 192^3;
+192^3 factor time and peak unchanged).
+
+*Why level 3 is on one rank.*  The region plan reduces the active ranks by
+the cube's box counts, and every rank builds whole parent boxes: with 8
+ranks the threshold 8 puts level 2 on 8 ranks (4 occupied level-2 boxes),
+64 puts level 3 on 8 ranks that must split those 4 boxes, and 512 is the
+first with even leaves (1.04): levels 0-3 on rank 0, with all 32 level-3
+boxes of about 4,950 DOFs (8 children x 619 skeleton points).
+
+*Why those blocks are so large.*  Not the kernel's far field (with the
+floor the kernel's own coupling of a level-4 box to its 2-hop ring has rank
+~110 at 400K, 0 at level 3) but the Schur fill: K_BE (K_EE + tau^2 I)^-1 K_ER
+through the neighbours eliminated before a box decays only exponentially
+(about 1.8 correlation lengths: 3.7e-3 across a level-4 box, 9.8e-5 across
+a level-3 one, at 100K), against K's Gaussian decay (8.6e-11 and 3e-43);
+resolving it to tol 1e-10 keeps 500-1000 points a box (100K, full-fill
+estimate: 1000 / 635 / 369 / 187 of 3,528 at level 3 for tol 1e-10 / 1e-8 /
+1e-6 / 1e-4).  The floor tol s_op = 1.3e-12 is far below the fill.
+
+*With the copy gone* (200K on 8 x 40 GB): before, level 3 asked for its
+second 19.66 GB at its start; now it starts, and runs out in its first wave
+(19.66 GB of uploaded blocks still held, 6.4 GB of the wave's X_NR and
+temp2).  With H2_compress_factors 1 the memory-pressure path chunks 3 of
+its 10 waves and packs the fill sources: 200K factors on 40 GB cards (level
+3 peak 26.0 GB, 52.8 s); at 100K H2_compress_factors 1 moves the logdet by
+1e-15.
+
+#### The device solve's shared memory: the plan and the kernels agree (2026-10-19)
+
+*The report.*  The 400K space-time fit at its second point (GPTune
+upper_level_oom_repro, "Second problem": tol 1e-8, H2_compress_factors 1,
+l = (0.036476, 0.036623, 0.009465), amplitude 0.4662, noise 0.012561; 8 x
+80 GB) factored (logdet -1458658.8309091697) and the GPU solve's first
+multiply threw "device solve: box too large for shared memory"; GPTune saw
+the same at a Matern-3/2 point at 100K.
+
+*The mismatch.*  The device-solve plan (device_solve.hpp) took a box when
+its n entries fit kSolveSharedLimit (96 KB: n <= 12,288 doubles), else the
+host solve ("boxes too large").  Two kernels needed more: the factored
+multiply's diagonal step (mul_diagonal_*: x and y = U x, 2 r entries, so r
+<= 6,144) and the chunked sweeps (solve_backward / mul_forward with x_N
+through shared memory: n + kChunkRows).  This tree's level-2 boxes keep 22
+of several thousand points (average skeleton 22.4), so r passes 6,144.
+
+*The change.*  mul_diagonal_large_kernel (N and T, a column at a time) when
+2 r entries do not fit: x in shared memory, each triangle's product written
+to the box's own redundant entries of the vector and read back as the other
+buffer - r entries, so r <= n is enough; the sums are mul_diagonal_kernel's.
+The plan takes a box when n + kSolveChunkRows entries fit (kSolveChunkRows
+= 256, solve_kernels.hpp, the chunked kernels' kChunkRows), which every
+kernel then fits.  allow_shared's message names the kernel, its request
+and the box dimension, should a launch still not fit.
+
+*Checks.*  The large kernel forced on every box (a test build): bitwise the
+regular kernels' results (Laplace 48^3 symmetric, weights, compressed
+factors, s4; CFIE 9K complex; the inv_mult check's transposed multiply,
+1 rank).  The reproducer (80 GB, job 60021619): factors and solves, sign +1,
+logdet -1458658.8309091697 (as before), solve residual 1.6e-13, 68.5 s;
+the solve and the multiply on the device (6.1 s and 3.8 s).
+
+#### The leaf's computation, item by item (2026-10-20)
+
+*Where the leaf goes.*  768^3 on 64 x 80 GB, CA0 with the shared blocks
+never packed (A_x80_ca0np.log), the slowest leaf rank (35): 43.7 s of waves
+= device 36.7 (sketch 10.1, elimination 26.6) + idle 7.0.  The "owner GEMMs"
+mark (16.8 s) is the whole owner group loop, which synchronizes after each
+part, so its host laps are device times: launch+sync (GEMMs and the new
+targets' kernel values) 6.9, pack 4.6, window 1.7, materialize 1.6, stage
+(device idle) 1.2, the owner plan before the loop ~0.8.  The "GF/s: owner"
+figure (2672 on rank 0) divides by the whole mark; the GEMMs themselves run
+at >= 6.4 TF/s.  All the packing is in the 8 interior waves (31.4 of the
+43.7 s): the raw near set needs up to 74 GB against 41 GB under the hold
+limit, and Color packs as much (rank 0: 197 GB raw -> 37 GB a level).  The
+idle 7.0 s matches the two host plans a wave (sketch plan 3.35 + elimination
+plan 3.65).  Three items, in this order: (1) the owner GEMMs, (2) the GPU
+idle, (3) the kernels without floating-point work (near-store churn, the
+window, the 5.4 s of mark 6).
+
+*Item 1, the owner GEMMs, measured.*  These already run on the FP64 tensor
+cores (H2_use_gpu 1/2, launch_dgemm_vbatched_tc), so the lever left is the
+structure: a group launches one sub-batch per source position j (every
+target's j-th source), and a target with d sources is read and written d
+times.  The group loop now records events around the kernel values and each
+sub-batch ("owner pass device" line, always printed with the host laps).
+384^3 on 8 x 40 GB (a 768^3/64 rank's boxes), lib_og1, the leaf, rank 0:
+
+| | Color | CA0 |
+|---|---|---|
+| owner mark | 16.92 s | 19.80 s |
+| GEMMs (events) | 6.01 s, 5.6 TF/s | 6.89 s, 5.5 TF/s |
+| kernel values of new targets | 0.19 s | 0.23 s |
+| materialize / window / stage / pack (host laps) | 3.11 / 1.20 / 1.03 / 4.73 | 3.69 / 1.34 / 1.16 / 5.75 |
+
+By source position (Color): j = 1 3.53 s at 5.2 TF/s (2.8M GEMMs, mean
+(m n)^1/2 135, k 178), j = 2 1.77 s at 5.9, j = 3-4 0.55 s at 7.5, j = 5-8
+0.16 s at ~5.  Targets by their sources: 1.36M with 1, 1.19M with 2, 0.24M
+with 4, 22K with 8.  So a fused kernel (a target's sources summed in turn,
+each from zero and added to C as today, so bitwise the same; C written once,
+one launch a group) can only save the later positions' tile set-up and C
+traffic: their 2.5 s carry 15.4 TFLOP, ~1.8 s at the tile rate, so ~0.7 s
+of the leaf.  The rest of the GEMM rate is the shapes: the one-source
+targets include the pairs with eliminated boxes (fewer rows), whose tiles
+are partly empty.  Not built; items 2 and 3 hold more (the owner pass alone
+spends 7.8 s putting back and re-packing blocks at this size).  The
+references for the next items (lib_og1, job 60077587): Color logdet
+-792567583.48678172, factor 77.4 s, leaf 45.0 s; CA0 -792567539.63804078,
+78.7 s, leaf 45.7 s.
+
+*Item 2, the GPU idle: a timeline.*  The marks undercount it - a mark
+interval spans the gaps inside it - so rank 0 ran under Nsight Systems
+(h2_c1_work/stepOG2.sh: rank 0 under `nsys profile -t cuda,nvtx`, the
+other ranks plain) with NVTX ranges on the host phases (HostRange,
+gpu_runtime.hpp; no-ops without a profiler): the sketch's plan (its box
+loop and its fill part), launch, wait and ID store; the wave's plan, each
+chunk's plan, launch, outputs (fill sources, generators, keep, near plan,
+near stores, np5 pack), the owner plan and each group's put back, window,
+stage, launch and pack (compress, homes, scatter, free); the codec's
+maxabs and sizes waits; a "level N wave" range around each wave.
+h2_c1_work/nsys_idle.py charges each instant the device runs nothing (no
+kernel, copy or memset on any stream) to the innermost host range open
+then; nsys_cpu.py reads the CPU samples (--sample=process-tree
+--backtrace=dwarf --sampling-period=4000000) inside a range.  Color leaf,
+384^3 on 8 x 40 GB, rank 0: 44.3 s of waves, the device busy 27.6 and
+idle 16.7 s (37%), where the marks had said ~7.  The idle, by host range:
+pack homes 3.78 (46 cudaHostRegister calls, 1.49 s, as the near store's
+pinned arena grows during the waves, and the faults around them), between
+waves 2.44 (Color's exchange; CA0 0.01), the sketch plan's box loop 2.25,
+the near plan 1.23 (a heap allocation and map entries per fresh block),
+group stage 1.01, chunk plan 0.83, then the owner plan 0.55, the sketch
+plan's fill part 0.55, the wave store 0.48 and smaller.  The codec's two
+blocking round trips are not idle (the device is busy through them).  The
+kernels, summed: the tensor-core GEMMs 7.7 s (the owner GEMMs 4.4 of it,
+7.7 TF/s), copy_spans 6.6 (the near store's scatters and gathers over
+PCIe), the ordered sketch 3.5, bitcomp decode 3.1 and encode 2.0, qrcp
+0.9, transposes 0.65, abs_max 0.6, gathers 0.5.
+
+The samples named a common cause in four of those ranges: statistics kept
+on every wave whatever was asked for.  note_write (three hash operations
+a target write: the "near-block writes" and "go final" lines), the
+waves' Schur and edge read sets (std::set inserts in the chunk plan: the
+"blocks a wave reads" line), and the sketch plan's fill-source sets,
+updated under a mutex the box loop's 16 threads shared (the loop ran at
+the speed of ~3).  None feeds a decision.  They now run only under
+BPACK_TRACE=memory (LevelEliminator::memory_trace_), and their lines
+print only then.  Bitwise the same (Color -792567583.48678172, CA0
+-792567539.63804078, as in three earlier runs each), and:
+
+| 384^3, 8 x 40 GB, rank 0 | Color leaf | Color factor | CA0 leaf | CA0 factor |
+|---|---|---|---|---|
+| before (lib_og1/og1b/og2np) | 45.0-45.1 s | 77.4 s | 45.5-45.7 s | 78.2-78.7 s |
+| statistics under BPACK_TRACE=memory (lib_og4) | 41.6 s | 73.5 s | 42.0 s | 74.1 s |
+
+A side finding of the profiled runs: with rank 0 slowed by the profiler
+the logdet moves in the 9th digit (Color -792567580.24108958, CA0
+-792567541.30439973), while every unprofiled run is bitwise the same.  So
+some decision under memory pressure depends on timing - plausibly the
+heap's level when a pressure test runs, with the background copier's
+frees landing earlier or later - and the packing it picks is lossy.  It
+may be the one-off CA0 logdet of 2026-10-12 (...543.56).  Not chased.
+
+*The pinning inside pack homes.*  The near store's compact extents double
+up to kCompactMax (512 MB), past the pinned pool's 256 MB chunks, and
+PinnedChunkPool::take pinned any request above a chunk on the spot - on
+the main thread, inside the owner group's pack, with the device idle: 46
+such pins at the 384^3 leaf (fault-in and cudaHostRegister, 0.15 s a GB).
+The chunks pinned ahead (std::async) now take the size of the largest
+request seen, up to kAheadSizeMax = 512 MB, and a request is served from
+them when it fits.  The leaf's "levels waited" for pinning: 3.19 -> 0.15 s
+(pinning 5.08 -> 6.11 s in all, now on the worker threads).
+
+| 384^3, 8 x 40 GB, rank 0 | Color leaf | Color factor | CA0 leaf | CA0 factor |
+|---|---|---|---|---|
+| statistics under BPACK_TRACE=memory (lib_og4) | 41.6 s | 73.5 s | 42.0 s | 74.1 s |
+| + pinned ahead at the request size (lib_og5) | 40.3 s | 72.0 s | 40.9 s | 73.0 s |
+
+The 384^3 logdets moved (Color -792567582.15925455, CA0
+-792567541.69171584): that size packs under pressure, and rank 0's first
+difference is at level 5, 55,740 against 55,738 near blocks packed - the
+timing dependence above, now with a cause.  The pressure tests read
+heap_.used() (under_pressure, the owner group's arena, the wave's chunking,
+the keep's split) and heap_.largest_free(), and both move with the
+background copier's frees (take_finished after the sketch and at the wave
+store, the reclaimer on a full heap), which land when the copies happen to
+finish.  So the gate for these changes is 192^3 on 8 ranks, where nothing
+packs: lib_og4 and lib_og5 bitwise the same (Color -89253588.318572894,
+CA0 -89253588.863782644).  A deterministic pressure test - the heap's level
+as if every block handed to a copier were already freed, and the
+reclaimer's frees not counted - would restore the 384^3 gate; not done.
+
+What is left of the idle at the Color leaf (lib_og4 timeline, 13.0 s):
+pack homes 3.81 (fixed above), between waves 2.35 (the exchange), then
+each under a second: the near plan 0.91 (a heap allocation a fresh block),
+chunk plan 0.66, the sketch plan's fill part 0.60, sketch launch 0.58,
+owner plan 0.56, group window 0.42, pack free 0.37, chunk launch 0.37,
+group stage 0.35, wave store 0.33, fill sources 0.30.
+
+*Item 3, the near store's PCIe traffic: the store on the device by spare
+room (2026-10-21).*  Host staging (c) put every extent of the near store
+in pinned host memory, so each pack's scatter and each put-back's gather
+crossed PCIe (copy_spans 6.6 s at the 384^3 leaf).  First a test with a
+fixed cap (the first N GB of a level's extents in the device heap, counted
+in the pressure tests), 384^3 on 8 x 80 GB, job 60092604:
+
+| near store | Color factor / leaf | CA0 factor / leaf |
+|---|---|---|
+| host (lib_og5) | 64.5 / 35.7 s | 64.4 / 34.7 s |
+| first 8 GB on the device (lib_nd8) | 61.5 / 32.6 s | 63.6 / 33.8 s |
+| first 24 GB on the device | heap exhausted (a 1.4 GB transient; 30 GB free, the largest range 1.31) | the same |
+
+The 8 GB cap packed more (367 -> 450 owner groups) since the store took the
+raw blocks' room, and still gained.  The 24 GB cap is the risk the room
+brings: extents held for the level fragmented the heap.  A cap is a
+property of one problem, so the rule that went in has none:
+
+- An extent goes to the device when the heap has a range for it as it
+  stands (try_alloc_resident without spilling, ResidentKind::NearStore),
+  else to the host region as before.
+- The extents do not count where the heap's level decides anything
+  (decision_used: the pressure tests, the owner group's arena, the wave's
+  chunking, the fill store's step, the shared-packing estimate, the keep's
+  budget), so what is packed is what the host store would pack.
+- A request the heap cannot otherwise meet - after the reclaimer, and in
+  the try_ allocations, whose callers would take a fallback - calls the
+  heap's spiller (DeviceHeap::set_spiller): spill_near_device moves
+  extents to the host, the one whose release leaves the largest free range
+  first, until a range of the request's size is free; the chunk homes,
+  tail and compact extents in them are rewritten.  The streams are
+  synchronized first, and every reader takes the homes' addresses after
+  its own heap allocation (the scatter's span list and the gathers'
+  staging; span lists are cudaMalloc'd), so no address is held across a
+  spill; the store's own extents never spill.  After a spill the level's
+  later extents go to the host (no back and forth).
+- The keep's range check spills before it splits or fails over a range.
+- The level-end compaction reads device extents one at a time through a
+  host buffer (no heap allocation there) and frees them, so the transition
+  has the card as before.
+
+Gate, 192^3 on 8 x 40 GB, where nothing packs under pressure and CA0 with
+H2_CA_pack_shared 1 packs its shared blocks by rule: the host store
+(lib_nd0) and lib_sp1 bitwise the same (CA0 -89253576.918982744, its whole
+2.70 GB store on the device, no spill, the leaf 4.95 -> 4.46 s; Color
+-89253588.318572894).  384^3 on 8 x 40 GB, same job and nodes (60094601):
+
+| 384^3, 40 GB, rank 0 | Color leaf | CA0 leaf | on the device at most | spills |
+|---|---|---|---|---|
+| host store (lib_nd0) | 40.2 s | 40.9 s | - | - |
+| by spare room (lib_sp1) | 39.0 s | 39.6 s | 12.4 / 11.3 GB | 10 / 7, 7.5 / 9.1 GB in 0.8 s |
+
+Even at 8x boxes on 40 GB the reserve above the hold limit holds 11-12 GB
+of the store for part of the level.  The spills' host extents are pinned
+when they happen: the levels' wait for pinning 0.2 -> 2.2 s (Color).
+Tried and reverted: pinning host chunks ahead in the background as the
+device extents grow (PinnedChunkPool::reserve_ahead, the spill then takes
+idle chunks).  Same job, lib_sp1 against it: the wait for pinning rose
+2.27 -> 3.02 s (Color) and 2.50 -> 3.71 (CA0), the spills 0.80 -> 1.34 s,
+the leaf 39.2 -> 39.7 s and 39.4 -> 40.1 s - the pinning threads' register
+calls stall the main thread's CUDA calls, as measured before (pinning
+cannot be hidden behind a thread).  A second lib_sp1 run: Color leaf 39.2,
+CA0 39.4 s (39.0 / 39.6 in the first).
+
+*Dropped (2026-10-22).*  At 768^3: on 64 x 80 GB the leaf gained 1.4-3.4 s
+but the level-end compaction (every device extent copied whole) and the
+transition and level 6 gave most of it back (Color factor 80.4 -> 78.8,
+CA0 81.4 -> 82.6 s); on 64 x 40 GB CA0 died in the leaf's waves, first
+with the owner pass's 1 GB window finding no range once every extent had
+spilled (extents placed best-fit among the resident blocks had moved the
+level's long-lived blocks and left a hole each), and, with the extents
+placed from the top while the transient reserve stayed contiguous (and the
+compaction gathering only the live pieces), with a 1.4 GB wave result
+finding no range at 10.6 GB used of 33.4: 4,193 free ranges on that rank
+against 141 at the host-store leaf's end.  A store that lives for the
+level perturbs where everything else lands, and spilling cannot undo
+fragmentation in the other blocks.  Color on 40 GB had gained 1.6 s
+(90.7 -> 89.1).  The attempt is kept as
+h2_c1_work/near_store_device_attempt.diff; what stays is the teardown
+that reports instead of throwing (the "free of an unknown pointer" was the
+destructor freeing a half-updated level over the real error).  The
+32^3-brick replay model (h2_c1_work/near_replay.py: a block's reads and
+writes from the geometry, calibrated to the run's pack count) says a
+"pack the block written furthest ahead first" rule would cut the codec
+traffic 17% on 80 GB (481 -> 398 GB) and 2% on 40 GB, where nearly every
+block must be packed between uses whatever the rule.
+
+*Item 2 again: the two plans under the launches (2026-10-22).*  The
+timeline's remaining idle, by host range (lib_og4, Color 384^3 leaf):
+near plan 0.91 s, owner plan 0.56, group stage 0.35.  Both plans had been
+placed to run under the device's work and no longer did: the fill-source
+and kept-factor compressions, added later between the box-region launches
+and step 5, synchronize the stream, so step 5's allocations and then the
+owner plan (after the last chunk) ran with the queue empty.  Now: step
+5's planning (the allocations and store items) right after the box
+region's launches, before those compressions; the owner plan as a lambda
+(plan_owner) called under the first chunk's launches when the operands
+come from the stores (entries built with null bases, each group points
+them at its window) and after the chunks otherwise, or again if a store
+failed; and the owner window's bitcomp plan and pointer lists released
+after the group's end sync instead of a sync of their own, so the window's
+decompression runs under the group's staging.  192^3 bitwise (Color
+-89253588.318572894, CA0 -89253576.918982744; leaf 3.43 -> 3.11 and 4.98
+-> 4.69 s).  384^3 on 8 x 40 GB, same job: Color leaf 40.2 -> 39.4 s,
+factor 71.7 -> 71.0; CA0 leaf 40.8 -> 39.7, factor 73.0 -> 71.8.
+
+*Item 3: the sketch of stored rows, measured (2026-10-22).*  The timeline's
+3.5 s of ordered_sketch_kernel at the 384^3 leaf is two things: the sketch
+of kernel rows (the evaluator's, compute) and the sketch of stored rows
+(temp2^T slots).  The latter now counts its items, the bytes its kernel
+streams (every row of each item's rows x ncols slice, whatever the draws)
+and its own device time (events around each group's launch; the "sketch of
+stored rows" line).  Color, 384^3 on 8 x 40 GB, rank 0:
+
+| level | items | bytes read | kernel | rate |
+|---|---|---|---|---|
+| 6 (leaf) | 415,679 | 1,083 GB | 1.77 s | 611 GB/s |
+| 5 | 50,655 | 336 GB | 0.86 s | 392 GB/s |
+| 4 | 5,999 | 93 GB | 0.48 s | 195 GB/s |
+
+So the stored sketch is 1.8 s of the leaf, at 40-45% of the card's
+bandwidth, and it reads 6.5x the level's raw fill sources (165 GB): a
+source's slot rows are streamed once per box that reads them.  Neither a
+kernel rewrite (at most ~0.9 s if it reached the bandwidth) nor a
+per-source pass (reads the slots once, applies every reader's draws in one
+sweep; the apply work is unchanged) is clearly worth it at the leaf; the
+upper levels run at a third of the rate on larger, fewer items (level 4:
+6,000 items, 195 GB/s), which a per-item tile over a 32-column warp
+explains, and would gain more from a different block shape than the leaf
+would.  Left as measured.
+
+#### logdet of an operator after another one is built (2026-10-17)
+
+GPTune's GP training factors K, builds the derivative operators (compression
+only), then asks for K's logdet: "logdet: level 7: 1428 boxes without a host
+LU, 0 covered by the device" (GPTune spatial_h2/near_block_too_wide.md,
+follow-up).  The device stores are per operator, chosen by the active one
+(device_heap.hpp), and every call activated its operator except the logdet,
+which read the last-built operator's store: no kept levels there, while K's
+leaf LUs are on the device only (040fa78).  hierarchical_logdet_parallel now
+activates its tree first.  Also: an eviction (begin_operator_build, when the
+other operators hold over half a heap) dropped an operator's device-only
+factors with them; it now copies them into the operator's host boxes first
+(DeviceSolveStore::spill, materialize_host_factors), so its later solve and
+logdet run from the host's factors.
+
+Checked with the Laplace driver's --logdet_check (logdet and a solve of the
+factored H2 again after a compression-only H2 of the same kernel is built):
+the previous library fails as GPTune did (48^3 on 8 ranks: "level 3: 64
+boxes without a host LU"); now the logdet and the solution are the same as
+before the second build (48^3 on 8, 64^3 on 12 ranks).  With a test build
+that evicts at every build, the second build spills K: its solve sets up
+again from the host factors (the same solution), its logdet sums them on the
+host (1.7e-16 relative from the device's sum).  Single-operator runs bitwise
+as before (Laplace 192^3, the 128K sphere, the collective extraction).
 
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 

@@ -34,6 +34,12 @@
 //
 // The box's ID is left as launch_qrcp leaves it: rank, pivots, flag in the
 // target's outputs, T in id_factor() with leading dimension id_ld().
+//
+// A nonsymmetric matrix (nonsym): each sampled or hold-out point gives the
+// two rows the stacked target holds of it, K(p, B) and K(B, p)^T (a node's
+// rows: its sampled points' K(P, B), their K(B, P)^T, then the hold-out
+// points' the same), as the host's selection does; K(B, P) is evaluated
+// into the node's block and transposed into place.
 
 #ifdef H2_HAVE_GPU
 
@@ -66,11 +72,12 @@ public:
     using Box = BoxData<CoordType, DataType>;
 
     // One box: its points (the columns), its ID target w (cap x n: the
-    // sketch in rows 0..n-1), a block f of the same shape for the in-place
+    // sketch in rows 0..d-1), a block f of the same shape for the in-place
     // ID, and the outputs of its ID.
     struct Target {
         const Box* box = nullptr;
         int n = 0;
+        int d = 0;  // rows of the sketch
         IndexList cols;
         S* w = nullptr;
         S* f = nullptr;
@@ -91,8 +98,9 @@ public:
             eval;
     };
 
-    AdaptiveRowSelector(const Tree* tree, double tolerance, DeviceHeap& heap, Hooks hooks)
-        : tree_(tree), tolerance_(tolerance), heap_(heap), hooks_(std::move(hooks)) {}
+    AdaptiveRowSelector(const Tree* tree, double tolerance, DeviceHeap& heap, Hooks hooks, bool nonsym = false)
+        : tree_(tree), tolerance_(tolerance), abs_tolerance_(id_absolute_tolerance(tree, tolerance)), heap_(heap),
+          hooks_(std::move(hooks)), nonsym_(nonsym) {}
     AdaptiveRowSelector(const AdaptiveRowSelector&) = delete;
     AdaptiveRowSelector& operator=(const AdaptiveRowSelector&) = delete;
     // (after the stream has run the last round)
@@ -107,8 +115,11 @@ public:
     static int holdout_count(const Tree* tree) {
         return static_cast<int>(std::min<int64_t>(4, std::max<int64_t>(1, sample_batch(tree) / 2)));
     }
-    // Rows of a box's target for its sketch and the rows its first node can add.
-    static int first_capacity(const Tree* tree, int n) { return n + sample_batch(tree) + holdout_count(tree); }
+    // Rows of a box's target for its sketch (d rows) and the rows its first
+    // node can add (nonsym: two a point).
+    static int first_capacity(const Tree* tree, int d, bool nonsym = false) {
+        return d + (nonsym ? 2 : 1) * (sample_batch(tree) + holdout_count(tree));
+    }
 
     void start(std::vector<Target> targets) {
         validate_id_source_index(tree_);
@@ -121,7 +132,7 @@ public:
             try {
                 State& st = states_[static_cast<size_t>(i)];
                 st.t = targets[static_cast<size_t>(i)];
-                st.rows = st.t.n;
+                st.rows = st.t.d;
                 st.stats.active = true;
                 const std::vector<IDAdaptiveFrame> far = make_initial_id_far_frames(tree_, st.t.box);
                 if (!far.empty()) {
@@ -172,9 +183,10 @@ public:
         grow_.clear(); copies_.clear(); late_copies_.clear();
         appends_.clear(); sample_appends_.clear();
         ids_.clear(); selections_.clear(); extra_ids_.clear();
-        evals_.clear(); residuals_.clear(); transposes_.clear();
+        evals_.clear(); residuals_.clear(); transposes_.clear(); eval_transposes_.clear();
         max_id_n_ = max_sel_n_ = max_extra_n_ = 0;
         max_copy_m_ = max_copy_n_ = max_eval_m_ = max_eval_n_ = max_tr_m_ = max_tr_n_ = 0;
+        max_etr_m_ = max_etr_n_ = 0;
         const size_t nb = states_.size();
         const size_t D = sizeof(S), I = sizeof(int);
 
@@ -193,8 +205,10 @@ public:
                 pick_evenly_spaced_unused(*st.unused, st.frame.lo, st.frame.hi, batch, true);
             st.holdout_positions =
                 pick_evenly_spaced_unused(*st.unused, st.frame.lo, st.frame.hi, holdouts, false);
-            st.s = static_cast<int>(samples.size());
-            st.h = static_cast<int>(st.holdout_positions.size());
+            // (s, h: the node's rows; nonsym: two a point)
+            const int rows_per_point = nonsym_ ? 2 : 1;
+            st.s = rows_per_point * static_cast<int>(samples.size());
+            st.h = rows_per_point * static_cast<int>(st.holdout_positions.size());
             ++st.stats.frames;
             st.stats.sampled += st.s;
             point_at[i] = static_cast<int>(point_ids.size());
@@ -206,7 +220,8 @@ public:
             frame_at[i] = frame_bytes;
             frame_bytes += 2 * align_up(sh * n * D) + align_up(n * static_cast<size_t>(st.s) * D) +
                            align_up(n * static_cast<size_t>(st.h) * D) + align_up(static_cast<size_t>(st.s) * I) +
-                           align_up(static_cast<size_t>(st.h) * I);
+                           align_up(static_cast<size_t>(st.h) * I) +
+                           (nonsym_ ? align_up(n * (sh / 2) * D) : 0);  // (K(B, P))
         }
         int frame_block = -1;
         char* frame = nullptr;
@@ -285,7 +300,7 @@ public:
                     // room for the node's rows
                     const int need = st.rows + st.append_holdout + st.s + st.h;
                     if (need > st.t.cap) {
-                        const int cap = need + 2 * (batch + holdouts);
+                        const int cap = need + 2 * (nonsym_ ? 2 : 1) * (batch + holdouts);
                         const size_t bytes = align_up(static_cast<size_t>(cap) * n * D);
                         S* w = heap_.template alloc<S>(bytes);
                         S* f = heap_.template alloc<S>(bytes);
@@ -305,14 +320,36 @@ public:
                     st.rest = reinterpret_cast<S*>(at);  at += align_up(static_cast<size_t>(n) * st.s * D);
                     st.hrest = reinterpret_cast<S*>(at); at += align_up(static_cast<size_t>(n) * st.h * D);
                     st.sel = reinterpret_cast<int*>(at); at += align_up(static_cast<size_t>(st.s) * I);
-                    st.hsel = reinterpret_cast<int*>(at);
+                    st.hsel = reinterpret_cast<int*>(at); at += align_up(static_cast<size_t>(st.h) * I);
                     st.frame_block = frame_block;
                     ++frame_blocks_[static_cast<size_t>(frame_block)].live;
                     IndexList rows;
                     rows.base = point_slot0_ + point_at[i];
-                    evals_.push_back(EvalItemT<S>{st.sh, st.s + st.h, st.s + st.h, n, rows, st.t.cols});
-                    max_eval_m_ = std::max(max_eval_m_, st.s + st.h);
-                    max_eval_n_ = std::max(max_eval_n_, n);
+                    const int ld = st.s + st.h;
+                    if (!nonsym_) {
+                        evals_.push_back(EvalItemT<S>{st.sh, ld, ld, n, rows, st.t.cols});
+                        max_eval_m_ = std::max(max_eval_m_, ld);
+                        max_eval_n_ = std::max(max_eval_n_, n);
+                    } else {
+                        // K(P, B) of the sampled and the hold-out points at their
+                        // rows, K(B, P) into kb, then transposed into the others
+                        const int sp = st.s / 2, hp = st.h / 2;
+                        S* kb = reinterpret_cast<S*>(at);
+                        IndexList hrows = rows;
+                        hrows.base += sp;
+                        evals_.push_back(EvalItemT<S>{st.sh, ld, sp, n, rows, st.t.cols});
+                        if (hp > 0) evals_.push_back(EvalItemT<S>{st.sh + 2 * sp, ld, hp, n, hrows, st.t.cols});
+                        evals_.push_back(EvalItemT<S>{kb, n, n, sp + hp, st.t.cols, rows});
+                        eval_transposes_.push_back(TransposeItemT<S>{kb, n, st.sh + sp, ld, n, sp});
+                        if (hp > 0) {
+                            eval_transposes_.push_back(
+                                TransposeItemT<S>{kb + static_cast<size_t>(n) * sp, n, st.sh + 2 * sp + hp, ld, n, hp});
+                        }
+                        max_eval_m_ = std::max({max_eval_m_, sp, n});
+                        max_eval_n_ = std::max({max_eval_n_, n, sp + hp});
+                        max_etr_m_ = std::max(max_etr_m_, n);
+                        max_etr_n_ = std::max({max_etr_n_, sp, hp});
+                    }
                     residuals(st.extras.empty() && st.h > 0);
                     transposes_.push_back(TransposeItemT<S>{st.res, st.s + st.h, st.rest, n, st.s, n});
                     max_tr_m_ = std::max(max_tr_m_, st.s);
@@ -356,6 +393,7 @@ public:
         off_copies_ = meta.append(copies_);
         off_ids_ = meta.append(ids_);
         off_evals_ = meta.append(evals_);
+        off_eval_transposes_ = meta.append(eval_transposes_);
         off_late_copies_ = meta.append(late_copies_);
         off_residuals_ = meta.append(residuals_);
         off_transposes_ = meta.append(transposes_);
@@ -372,8 +410,8 @@ public:
             if (items.empty()) return;
             char* work = nullptr;
             if (const size_t w = qrcp_work_bytes<S>(count(items), max_n)) work = heap_.alloc(w, ResidentKind::Adaptive);
-            launch_qrcp(reinterpret_cast<const QrcpItemT<S>*>(md + offset), count(items), max_n, tolerance_, work,
-                        stream);
+            launch_qrcp(reinterpret_cast<const QrcpItemT<S>*>(md + offset), count(items), max_n, tolerance_,
+                        abs_tolerance_, work, stream);
             heap_.free(work);  // later launches are ordered after it
         };
         launch_gather(reinterpret_cast<const GatherItemT<S>*>(md + off_grow_), count(grow_), max_copy_m_, max_copy_n_,
@@ -383,6 +421,8 @@ public:
                       max_copy_n_, md, stream);
         qrcp(ids_, off_ids_, max_id_n_);
         if (!evals_.empty()) hooks_.eval(evals_, *meta_, md, off_evals_, max_eval_m_, max_eval_n_, stream);
+        launch_transpose(reinterpret_cast<const TransposeItemT<S>*>(md + off_eval_transposes_), count(eval_transposes_),
+                         max_etr_m_, max_etr_n_, stream);  // (nonsym: the K(B, P)^T rows into place)
         launch_gather(reinterpret_cast<const GatherItemT<S>*>(md + off_late_copies_), count(late_copies_),
                       max_copy_m_, max_copy_n_, md, stream);
         launch_id_residual(reinterpret_cast<const IdResidualItemT<S>*>(md + off_residuals_), count(residuals_), md,
@@ -412,7 +452,7 @@ public:
                     st.stats.appended += selected;
                     st.rn = dstat[kResidualNorm];
                     st.ref = dstat[kTargetNorm];
-                    const bool converged = st.rn < st.ref * tolerance_;
+                    const bool converged = st.rn < threshold(st);
                     if (converged && !st.extras.empty()) {
                         ++st.stats.recomputes;
                         st.step = Step::Recheck;
@@ -424,7 +464,7 @@ public:
                 case Step::Recheck:
                     st.rn = dstat[kResidualNorm];
                     st.ref = dstat[kTargetNorm];
-                    judge(st, st.rn < st.ref * tolerance_, dstat[kHoldoutNorm], istat[kHoldoutSelected]);
+                    judge(st, st.rn < threshold(st), dstat[kHoldoutNorm], istat[kHoldoutSelected]);
                     break;
                 case Step::Extra: {
                     const int rank = istat[kExtraRank];
@@ -534,8 +574,10 @@ private:
     // After the residual of a node's sampled rows (norm rn against the
     // target's norm ref): the hold-out test of a converged node, then whether
     // the node is subdivided, as append_adaptive_id_training_rows decides.
+    // The residual tests' threshold: max(tol ||W||_F, tol s_op), as on the host.
+    double threshold(const State& st) const { return std::max(st.ref * tolerance_, abs_tolerance_); }
     void judge(State& st, bool converged, double holdout_norm, int holdout_selected) {
-        const double threshold = st.ref * tolerance_;
+        const double threshold = this->threshold(st);
         bool holdout_failed = false;
         if (converged && st.h > 0) {
             if (!st.holdout_valid) throw std::runtime_error("AdaptiveRowSelector: hold-out residual missing");
@@ -572,8 +614,10 @@ private:
 
     const Tree* tree_;
     double tolerance_;
+    double abs_tolerance_;  // the H2_s_op floor (id_absolute_tolerance), 0 off
     DeviceHeap& heap_;
     Hooks hooks_;
+    bool nonsym_ = false;
     std::vector<State> states_;
     char* d_status_ = nullptr;
     size_t status_ints_ = 0, status_bytes_ = 0;
@@ -589,11 +633,13 @@ private:
     std::vector<QrcpItemT<S>> ids_, selections_, extra_ids_;
     std::vector<EvalItemT<S>> evals_;
     std::vector<IdResidualItemT<S>> residuals_;
-    std::vector<TransposeItemT<S>> transposes_;
+    std::vector<TransposeItemT<S>> transposes_, eval_transposes_;
     size_t off_grow_ = 0, off_appends_ = 0, off_copies_ = 0, off_ids_ = 0, off_evals_ = 0, off_late_copies_ = 0,
-           off_residuals_ = 0, off_transposes_ = 0, off_selections_ = 0, off_sample_appends_ = 0, off_extra_ids_ = 0;
+           off_residuals_ = 0, off_transposes_ = 0, off_selections_ = 0, off_sample_appends_ = 0, off_extra_ids_ = 0,
+           off_eval_transposes_ = 0;
     int max_id_n_ = 0, max_sel_n_ = 0, max_extra_n_ = 0;
     int max_copy_m_ = 0, max_copy_n_ = 0, max_eval_m_ = 0, max_eval_n_ = 0, max_tr_m_ = 0, max_tr_n_ = 0;
+    int max_etr_m_ = 0, max_etr_n_ = 0;
 };
 
 }  // namespace gpu

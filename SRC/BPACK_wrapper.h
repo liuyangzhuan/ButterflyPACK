@@ -46,7 +46,11 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 void c_bpack_construct_element_compute_fortran(F2Cptr* bmat, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, void (*C_FuncZmn)(int*, int*, C_DT*,C2Fptr),void (*C_FuncZmnBlock)(int*, int*, int*, int64_t*, int*, int*, C_DT*, int*, int*, int*, int*, int*, C2Fptr), C2Fptr C_QuantApp);
 void c_bpack_construct_element_compute(F2Cptr* bmat, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, void (*C_FuncZmn)(int*, int*, C_DT*,C2Fptr),void (*C_FuncZmnBlock)(int*, int*, int*, int64_t*, int*, int*, C_DT*, int*, int*, int*, int*, int*, C2Fptr), C2Fptr C_QuantApp);
 void c_bpack_construct_init_fortran(int* Npo, int* Ndim, double* Locations, int* nns, int* nlevel, int* tree, int* perms, int* Npo_loc, F2Cptr* bmat, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, void (*C_FuncDistmn)(int*, int*, double*,C2Fptr), void (*C_FuncNearFar)(int*, int*, int*,C2Fptr), C2Fptr C_QuantApp);
-void c_bpack_set_mesh_h2(int* Npo, int* new2old, int* idxs, int* idxe, F2Cptr* msh_Cptr);
+// nproc, rank_idxs, rank_idxe: every rank's 1-based inclusive index range, so
+// the mesh can carry a basis_group reproducing the H2's own distribution; a
+// butterfly block built on this mesh (c_bf_construct_init) then lands on the
+// same rows.
+void c_bpack_set_mesh_h2(int* Npo, int* new2old, int* idxs, int* idxe, int* nproc, int* rank_idxs, int* rank_idxe, F2Cptr* msh_Cptr);
 void c_bpack_set_mesh_distributed64(const int64_t* N_global, const int64_t* N_input_local, const int64_t* N_internal_local, const int64_t* internal_global_start, F2Cptr* msh_Cptr);
 void c_bpack_wrap_h2(F2Cptr* bmat_Cptr, C2Fptr h2_ptr);
 void c_bpack_get_h2(C2Fptr bmat_Cptr, F2Cptr* h2_ptr);
@@ -66,6 +70,7 @@ typedef void (*c_bpack_func_zmn64)(const int64_t*, const int64_t*, const double*
 typedef void (*c_bpack_func_zmn_block64)(const int64_t*, const int64_t*, const int64_t*, const int64_t*, const double*, const double*, const int*, C_DT*, const int64_t*, C2Fptr);
 void c_bpack_construct_init_distributed64(const int64_t* N_global, const int64_t* N_input_local, const int* Ndim, const int64_t* input_global_ids, const double* input_locations, const int* bounds_provided, const double* global_bounds, int64_t* N_internal_local, F2Cptr* bmat, F2Cptr* option, F2Cptr* stats, F2Cptr* msh, F2Cptr* ker, F2Cptr* ptree);
 void c_bpack_construct_element_compute_distributed64(F2Cptr* bmat, F2Cptr* option, F2Cptr* stats, F2Cptr* msh, F2Cptr* ker, F2Cptr* ptree, c_bpack_func_zmn64 C_FuncZmn, c_bpack_func_zmn_block64 C_FuncZmnBlock, C2Fptr C_QuantApp);
+void c_bpack_get_extraction_profile(double* vals);
 void c_bpack_get_distributed_layout64(F2Cptr* bmat, int64_t* N_global, int64_t* N_input_local, int64_t* N_internal_local, int64_t* internal_global_start);
 /*
  * The matrix's entries on the GPU (H2 with H2_use_gpu, HODLR with
@@ -117,12 +122,43 @@ void c_bpack_mult_fortran(char const * trans, C_DT const * xin, C_DT* xout, int*
 void c_bpack_mult(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* bmat,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);
 void c_bpack_logdet_fortran(C_DT* phase, C_RDT* logabsdet, F2Cptr* option, F2Cptr* bmat);
 void c_bpack_logdet(C_DT* phase, C_RDT* logabsdet, F2Cptr* option, F2Cptr* bmat);
+void c_bpack_extractelement_fortran(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree, int* Ninter, int* Nallrows, int* Nallcols, int64_t* Nalldat_loc, int* allrows,int* allcols, C_DT* alldat_loc, int* rowidx, int* colidx, int* pgidx, int* Npmap, int* pmaps);
 void c_bpack_extractelement(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree, int* Ninter, int* Nallrows, int* Nallcols, int64_t* Nalldat_loc, int* allrows,int* allcols, C_DT* alldat_loc, int* rowidx, int* colidx, int* pgidx, int* Npmap, int* pmaps);
 //------------------------------------------------------------------------------
 // The same extraction from a Bmat matrix built on a subset of the caller's ranks (collective over ptree_caller, the caller's
 // process tree; the source's handles bmat, option, msh, stats and ptree point to nullptr outside the subset)
+void c_bpack_extractelement_bridge_fortran(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree,F2Cptr* ptree_caller, int* Ninter, int* Nallrows, int* Nallcols, int64_t* Nalldat_loc, int* allrows,int* allcols, C_DT* alldat_loc, int* rowidx, int* colidx, int* pgidx, int* Npmap, int* pmaps);
 void c_bpack_extractelement_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree,F2Cptr* ptree_caller, int* Ninter, int* Nallrows, int* Nallcols, int64_t* Nalldat_loc, int* allrows,int* allcols, C_DT* alldat_loc, int* rowidx, int* colidx, int* pgidx, int* Npmap, int* pmaps);
+//------------------------------------------------------------------------------
+// Sketched blocks (format 7 with elem_extract=1): request n < Nsketch asks for Y_n = Omega_n A(rows, columns),
+// sketchdim[n] x colidx[n], column major, for the rows allrows (rowidx[n] of them, stacked as for the block
+// callback), the columns allcols (colidx[n]) and Omega_n (sketchdim[n] x rowidx[n]) given by its omegaidx[n]
+// entries, stacked: omega_row (1-based position among the request's rows), omega_dest (1-based row of Y_n) and
+// omega_val. Y_n goes to alldat_loc on the rank owning n (pgidx and pmaps as for the block callback, 1 x 1
+// grids), in request order. Collective over the matrix's ranks, like the block callback.
+typedef void (*c_bpack_func_zmn_sketch)(int* Nsketch, int* Nallrows, int* Nallcols, int64_t* Nallomega, int64_t* Nalldat_loc, int* allrows, int* allcols, int* rowidx, int* colidx, int* sketchdim, int* omegaidx, int* omega_row, int* omega_dest, double* omega_val, C_DT* alldat_loc, int* pgidx, int* Npmap, int* pmaps, C2Fptr C_QuantApp);
+// An H2 (format 7) whose entries come through a collective block callback (elem_extract=1) asks for the ID
+// sketches of its kernel rows through this callback (its C_QuantApp: that of the construction), set before
+// c_bpack_construct_element_compute; other formats ignore it.  A nonsymmetric H2 (option%sym=0) asks for them
+// only with the transposed callback set too (its ID sketches A(B, F) from the right as well), else for the
+// rows' blocks.
+void c_bpack_set_sketch_callback(F2Cptr* bmat, c_bpack_func_zmn_sketch C_FuncZmnSketch);
+// The transposed sketched blocks, for a nonsymmetric H2: request n asks for Y_n = Omega_n A(columns, rows)^T
+// (= Omega_n A^T(rows, columns)), the arguments as for the sketch callback (Omega_n over the rows).
+void c_bpack_set_sketch_transpose_callback(F2Cptr* bmat, c_bpack_func_zmn_sketch C_FuncZmnSketchT);
+// The sketched blocks from a matrix on a subset of the caller's ranks (as c_bpack_extractelement_bridge): a
+// compression-only H2 (format 7) sketches them from its representation; other formats extract the entries and
+// sketch them on their owners.
+void c_bpack_extractsketch_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree,F2Cptr* ptree_caller, int* Nsketch, int* Nallrows, int* Nallcols, int64_t* Nallomega, int64_t* Nalldat_loc, int* allrows, int* allcols, int* rowidx, int* colidx, int* sketchdim, int* omegaidx, int* omega_row, int* omega_dest, double* omega_val, C_DT* alldat_loc, int* pgidx, int* Npmap, int* pmaps);
+// The same for the transposed sketches, Y_n = Omega_n A(columns, rows)^T.
+void c_bpack_extractsketch_transpose_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree,F2Cptr* ptree_caller, int* Nsketch, int* Nallrows, int* Nallcols, int64_t* Nallomega, int64_t* Nalldat_loc, int* allrows, int* allcols, int* rowidx, int* colidx, int* sketchdim, int* omegaidx, int* omega_row, int* omega_dest, double* omega_val, C_DT* alldat_loc, int* pgidx, int* Npmap, int* pmaps);
+void c_bpack_inv_mult_fortran(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* bmat,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);
 void c_bpack_inv_mult(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* bmat,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);
+// The two above for a Fortran caller: an H2 matrix (format 7), which
+// BPACK_Inv_Mult and BPACK_Mult cannot apply, with any exception reported and
+// aborted here rather than thrown through the Fortran frame.
+void c_bpack_h2_inv_mult(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* bmat,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);
+void c_bpack_h2_mult(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* bmat,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);
 void c_bpack_set_entry_addend(F2Cptr* ker, F2Cptr* bf, F2Cptr* ptree);
 void c_bpack_clear_entry_addend(F2Cptr* ker);
 void c_bpack_createptree(int*nmpi, int*groupmembers, MPI_Fint*MPIcomm, F2Cptr*ptree);

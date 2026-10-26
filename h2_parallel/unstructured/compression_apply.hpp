@@ -108,13 +108,54 @@ void apply_compressed_leaf_near_serial(
     }
 }
 
+// The transposed products of a level (compressed_multiply's A^T x): each
+// local box t's stored blocks K(t, s) applied transposed to t's own vector
+// (its skeleton's at a coupling level, all of its points at the leaf), the
+// products added into s's target (its skeleton, or all of its points): s's
+// local ones at once, the others sent to s's owner by the solve's update
+// transport (the one-hop process graph of the forward exchange, which holds
+// the owners of every coupled box).
+template<typename CoordType, typename DataType>
+void apply_compressed_transposed(
+    ParallelTree<CoordType, DataType>* tree,
+    int level_number,
+    const std::vector<SolveDataRequest<CoordType, DataType>>& source_data,
+    std::vector<std::vector<SolveDataRequest<CoordType, DataType>>>& target_data,
+    int nrhs,
+    bool near) {
+    auto& level = tree->levels[level_number];
+    if (!level.is_process_active) return;
+    PendingSolveUpdates<DataType> pending;
+    auto& updates = near ? pending.full_updates : pending.skel_updates;
+    for (const auto& target : level.local_boxes) {
+        if (target.num_points == 0) continue;
+        const auto& blocks = near ? target.h2_near_blocks : target.h2_interaction_blocks;
+        if (blocks.empty()) continue;
+        const std::vector<DataType> source = h2_local_vector_for_morton(
+            level, source_data, target.morton_index, !near);
+        for (const auto& block : blocks) {
+            std::vector<DataType> contribution;
+            h2_matrix_vector_product(block.matrix, source, contribution, nrhs, 'T');
+            accumulate_replace_then_add(
+                updates, block.source_morton, contribution.data(),
+                static_cast<int64_t>(contribution.size()));
+        }
+    }
+    transport_and_apply_solve_updates_onehop(
+        tree, level, level_number, pending, target_data, true);
+}
+
+// output = A input, or with `transposed` A^T input (a nonsymmetric H2: one T
+// per box, so the passes up and down are A's and only the blocks are applied
+// transposed, apply_compressed_transposed; on the host).
 template<typename CoordType, typename DataType>
 void compressed_multiply(
     ParallelTree<CoordType, DataType>* tree,
     const std::vector<DataType>& input,
     std::vector<DataType>& output,
     int nrhs,
-    bool verbose) {
+    bool verbose,
+    bool transposed = false) {
 
     if (nrhs <= 0 || input.size() % static_cast<size_t>(nrhs) != 0) {
         throw std::invalid_argument(
@@ -130,12 +171,14 @@ void compressed_multiply(
 
 #ifdef H2_HAVE_GPU
     // the whole matvec on the device (h2_gpu/h2_matvec.hpp) when the
-    // compression kept the blocks there on every rank
-    if (gpu::run_device_h2_mul(tree, input, output, nrhs)) {
+    // compression kept the blocks there on every rank, the transposed one
+    // too for a nonsymmetric kernel (the compression keeps the blocks' host
+    // copies, which the host's transposed product reads otherwise)
+    if (gpu::run_device_h2_mul(tree, input, output, nrhs, transposed)) {
         if (gpu::device_matvec_check()) {  // BPACK_CHECK=matvec: the host matvec as the reference
             std::vector<DataType> host_output;
             gpu::device_matvec_suspended() = true;
-            compressed_multiply(tree, input, host_output, nrhs, false);
+            compressed_multiply(tree, input, host_output, nrhs, false, transposed);
             gpu::device_matvec_suspended() = false;
             double sums[2] = {0.0, 0.0};
             for (size_t i = 0; i < output.size(); ++i) {
@@ -144,7 +187,7 @@ void compressed_multiply(
             }
             MPI_Allreduce(MPI_IN_PLACE, sums, 2, MPI_DOUBLE, MPI_SUM, tree->comm);
             if (rank == 0) {
-                std::printf("GPU matvec check: |y_gpu - y_host| / |y_host| = %.3e\n",
+                std::printf("GPU matvec check%s: |y_gpu - y_host| / |y_host| = %.3e\n", transposed ? " (transposed)" : "",
                             sums[1] > 0.0 ? std::sqrt(sums[0] / sums[1]) : 0.0);
                 std::fflush(stdout);
             }
@@ -244,14 +287,22 @@ void compressed_multiply(
                     }
                 }
             }
-            const auto remote_sources = exchange_h2_vectors_onehop(
-                tree, level_number, source_data[level_number],
-                std::move(needed), true, 800 + 8 * level_number);
+            if (transposed) {
+                apply_compressed_transposed(
+                    tree, level_number, source_data[level_number],
+                    target_data, nrhs, false);
+            } else {
+                const auto remote_sources = exchange_h2_vectors_onehop(
+                    tree, level_number, source_data[level_number],
+                    std::move(needed), true, 800 + 8 * level_number);
+                if (level.is_process_active) {
+                    apply_compressed_interactions_serial(
+                        level, source_data[level_number],
+                        target_data[level_number], remote_sources);
+                }
+            }
 
             if (level.is_process_active) {
-                apply_compressed_interactions_serial(
-                    level, source_data[level_number],
-                    target_data[level_number], remote_sources);
                 for (size_t box_index = 0;
                      box_index < level.local_boxes.size();
                      ++box_index) {
@@ -273,24 +324,29 @@ void compressed_multiply(
     }
 
     auto& leaf = tree->levels[leaf_level];
-    std::vector<int64_t> near_needed;
-    if (leaf.is_process_active) {
-        for (const auto& box : leaf.local_boxes) {
-            if (box.num_points == 0) continue;
-            for (const auto& block : box.h2_near_blocks) {
-                if (leaf.find_local_box(block.source_morton) == nullptr) {
-                    near_needed.push_back(block.source_morton);
+    if (transposed) {
+        apply_compressed_transposed(
+            tree, leaf_level, source_data[leaf_level], target_data, nrhs, true);
+    } else {
+        std::vector<int64_t> near_needed;
+        if (leaf.is_process_active) {
+            for (const auto& box : leaf.local_boxes) {
+                if (box.num_points == 0) continue;
+                for (const auto& block : box.h2_near_blocks) {
+                    if (leaf.find_local_box(block.source_morton) == nullptr) {
+                        near_needed.push_back(block.source_morton);
+                    }
                 }
             }
         }
-    }
-    const auto remote_near_sources = exchange_h2_vectors_onehop(
-        tree, leaf_level, source_data[leaf_level],
-        std::move(near_needed), false, 1800 + 8 * leaf_level);
-    if (leaf.is_process_active) {
-        apply_compressed_leaf_near_serial(
-            leaf, source_data[leaf_level], target_data[leaf_level],
-            remote_near_sources);
+        const auto remote_near_sources = exchange_h2_vectors_onehop(
+            tree, leaf_level, source_data[leaf_level],
+            std::move(near_needed), false, 1800 + 8 * leaf_level);
+        if (leaf.is_process_active) {
+            apply_compressed_leaf_near_serial(
+                leaf, source_data[leaf_level], target_data[leaf_level],
+                remote_near_sources);
+        }
     }
 
     output.assign(input.size(), DataType{0});

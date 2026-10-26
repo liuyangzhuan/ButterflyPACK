@@ -16,6 +16,7 @@
 
 // MPI
 #include <mpi.h>
+#include "collective_entries.hpp"
 
 // FMM Verification
 #include <iomanip>
@@ -123,9 +124,15 @@ inline const char* number_kind_to_string(NumberKind kind) {
 
 struct ProgramOptions {
     int num_levels = 0;
+    int64_t nmin_leaf = 0;      // Nmin_leaf (H2_unstructured: the depth also follows the occupied boxes)
     int64_t N = 0;
     int64_t grid_size = 0;
     double tolerance = 0.0;
+    // H2_s_op: an ID keeps column k while |R_kk| > max(tol |R_11|, tol s_op),
+    // tol s_op a global absolute tolerance (0: off, the relative rule only).
+    // At most ||A|| for compression-only H2, at most 1/||A^-1|| for the
+    // factorization (K + tau^2 I: tau^2).
+    double s_op = 0.0;
     //To DO:NumberKind and KernelKind are not used, probably can delete in future
     KernelKind kernel_kind = KernelKind::LAPLACE;
     NumberKind number_kind = NumberKind::REAL;
@@ -146,7 +153,7 @@ struct ProgramOptions {
     int compress_factors = 0;
     int gemm_split = 16;        // Maximum task split for one Color work item; 0 disables splitting
     int xrr_factor = 0;         // X_RR pivot factorization: 0 Bunch-Kaufman, 1 LU with partial pivoting
-    int use_gpu = 0;            // Color levels: 0 CPU, 1 GPU backend, 2 GPU with FP64 tensor-core GEMMs (needs H2_HAVE_GPU)
+    int use_gpu = 0;            // Color levels: 0 CPU, 1 GPU backend with FP64 tensor-core GEMMs for real data (needs H2_HAVE_GPU)
     int ca_staged_halo = 0;     // CA levels: 0 legacy gather, 2 staged/overlapped gather
     int ca_owner_component = 0; // CA levels: 0 replicated, 3 asynchronous component owners
     int ca_pack_shared = 0;     // GPU, replicated CA levels: blocks on more than one rank packed: 0 auto, 1 always, 2 never
@@ -163,12 +170,25 @@ struct ProgramOptions {
     double kappa = 10.0;         // Yukawa screening parameter κ
     int cond_samples = 0;        // Power iteration samples for condition number estimate (0 = skip)
     int precon = 1;              // 1/3: RS-S factorization, 2: compression-only H2
+    // option%sym: 1 transpose-symmetric (also complex symmetric); 0 general
+    // (nonsymmetric: H2_unstructured=1 only, X_RR by LU, one skeleton and
+    // interpolation per box for rows and columns from an ID of the stacked
+    // [K(F,B); K(B,F)^T])
+    bool symmetric = true;
     int verbosity = 0;           // -1: quiet, 0: summaries, 1+: detailed progress
 };
 
 inline void validate_h2_backend_selection(const ProgramOptions& options) {
+    if (!(options.s_op >= 0.0 && std::isfinite(options.s_op))) {
+        throw std::invalid_argument("H2_s_op must be finite and >= 0 (0: off)");
+    }
     if (options.unstructured < 0 || options.unstructured > 1) {
         throw std::invalid_argument("H2_unstructured must be 0 or 1");
+    }
+    if (!options.symmetric) {
+        if (options.unstructured != 1) {
+            throw std::invalid_argument("a nonsymmetric H2 (option%sym=0) needs H2_unstructured=1");
+        }
     }
     if (options.unstructured == 0) return;
 
@@ -185,7 +205,9 @@ inline void validate_h2_backend_selection(const ProgramOptions& options) {
 
 // Bunch-Kaufman reads the lower triangle of X_RR and LU reads the full square;
 // X_RR is assembled with both triangles, so either serves the symmetric path.
+// A nonsymmetric X_RR is always factored by LU.
 inline fmm::FactorizationMethod h2_xrr_factorization_method(const ProgramOptions& options) {
+    if (!options.symmetric) return fmm::FactorizationMethod::LU;
     switch (options.xrr_factor) {
         case 0: return fmm::FactorizationMethod::BUNCH_KAUFMAN;
         case 1: return fmm::FactorizationMethod::LU;
@@ -231,6 +253,21 @@ struct H2Kernel {
     mutable std::vector<double> entryeval_time_per_thread;
     mutable std::unordered_map<int64_t, std::array<CoordType, 3>>
         coordinate_cache;
+    // Entries through a collective block callback (elem_extract=1;
+    // collective_entries.hpp): the blocks fetched in rounds, a request for
+    // another one abandoning the item that made it.  Null: the callbacks
+    // above, called when an entry is needed.
+    std::shared_ptr<fmm::CollectiveEntries<DataType, kerData>> collective;
+    // K(i, j) == K(j, i) (option%sym=1); false: a general matrix, both
+    // orientations of a block evaluated (ProgramOptions::symmetric)
+    bool symmetric = true;
+    // The application's sketch callback (c_bpack_set_sketch_callback): with
+    // collective entries, the ID's sketches of kernel rows are fetched
+    // sketched (sketch_block_by_index).  Null: their entries are.  A
+    // nonsymmetric matrix needs the transposed one too
+    // (c_bpack_set_sketch_transpose_callback).
+    typename fmm::CollectiveEntries<DataType, kerData>::SketchCallback sketch_callback = nullptr;
+    typename fmm::CollectiveEntries<DataType, kerData>::SketchCallback sketch_transpose_callback = nullptr;
 
 
     H2Kernel() = default;
@@ -367,6 +404,30 @@ struct H2Kernel {
     // x_indices index the rows, y_indices the columns. Indices are 0-based
     // global DOF indices (as in BoxData::point_indices); C_FuncZmn expects
     // 1-based, so we add 1.
+    // Entries through a collective callback with a sketch callback: Y (d x
+    // y_size, leading dimension ldy) = Omega K(x_indices, y_indices), Omega
+    // (d x x_size) given by its nnz entries (orow: the position in x_indices,
+    // odest: the row of Y, oval), fetched in rounds as the blocks are (an
+    // item asking for one not fetched yet goes on with zeros, doomed); with
+    // transposed, Y = Omega K(y_indices, x_indices)^T (a nonsymmetric
+    // matrix's K(B, F)^T rows).  False, with Y untouched, without a sketch
+    // callback: the caller sketches the rows' entries itself.
+    bool sketch_block_by_index(const int64_t* x_indices, int64_t x_size, const int64_t* y_indices, int64_t y_size,
+                               int d, int64_t nnz, const int* orow, const int* odest, const double* oval, DataType* Y,
+                               int64_t ldy, bool transposed = false) const {
+        if (!collective || !collective->has_sketch()) return false;
+        const typename fmm::CollectiveEntries<DataType, kerData>::SketchKey key{
+            x_indices, x_size, y_indices, y_size, d, nnz, orow, odest, oval, transposed};
+        if (collective->lookup_sketch(key, Y, ldy)) return true;
+        collective->record_sketch(key);
+        fmm::entry_item_miss();  // (zeros: see collective_entries.hpp)
+        for (int64_t j = 0; j < y_size; ++j) {
+            for (int64_t i = 0; i < d; ++i) Y[i + j * ldy] = DataType{0};
+        }
+        return true;
+    }
+    bool sketches_kernel_rows() const { return collective && collective->has_sketch(); }
+
     void evaluate_block_by_index(const int64_t* x_indices, int64_t x_size,
                                  const int64_t* y_indices, int64_t y_size,
                                  DataType* A, int64_t lda) const {
@@ -375,6 +436,16 @@ struct H2Kernel {
                 "H2Kernel::evaluate_block_by_index: invalid block dimensions");
         }
         if (x_size == 0 || y_size == 0) return;
+
+        if (collective) {
+            if (collective->lookup(x_indices, x_size, y_indices, y_size, A, lda)) return;
+            collective->record(x_indices, x_size, y_indices, y_size);
+            fmm::entry_item_miss();  // (zeros: see collective_entries.hpp)
+            for (int64_t j = 0; j < y_size; ++j) {
+                for (int64_t i = 0; i < x_size; ++i) A[i + j * lda] = DataType{0};
+            }
+            return;
+        }
 
         double t0 = MPI_Wtime();
 

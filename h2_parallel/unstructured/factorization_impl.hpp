@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/butterfly_ca_level.hpp"
+#include <numeric>
 #include "core/butterfly_communicators.hpp"
 #include "core/butterfly_logdet.hpp"
 #include "core/butterfly_types.hpp"
@@ -15,6 +16,143 @@
 namespace butterfly {
 namespace color_unstructured {
 using namespace fmm;
+
+// A nonsymmetric matrix, before a wave: the views its boxes' Step 9 updates
+// and that are not formed yet (of each ordered pair of a wave box's one-hop
+// neighbors, the local endpoints' A_SN[RG] and A_NS[LG], each K(LG, RG), or
+// the Schur block on the diagonal), from the kernel once each and in parallel
+// over the pairs; the wave's boxes then only add to them (several boxes of a
+// wave update one pair).
+//
+// With the lazy fill (lazy_far), only the near pairs: the far ones are never
+// stored.
+template<typename CoordType, typename DataType, typename KernelType>
+void form_nonsymmetric_wave_views(
+    TreeLevel<CoordType, DataType>& level,
+    KernelType* kernel,
+    const std::vector<int64_t>& wave,
+    const OccupiedTopology& occupied_topology,
+    bool lazy_far = false) {
+    const int dimension = level.dimension;
+    auto current_count = [&](int64_t morton) {
+        const std::vector<int64_t>* points = nullptr;
+        const std::vector<int64_t>* skeleton = nullptr;
+        directed_view_endpoint(level, morton, points, skeleton);
+        return level.eliminated_boxes.count(morton) != 0 && !skeleton->empty()
+            ? static_cast<int64_t>(skeleton->size()) : static_cast<int64_t>(points->size());
+    };
+    auto kind_of = [&](int64_t a, int64_t b) {
+        if (a == b) return EdgeKind::Diag;
+        uint32_t ac[3] = {0, 0, 0};
+        uint32_t bc[3] = {0, 0, 0};
+        morton::decode_nd(dimension, a, ac[0], ac[1], ac[2]);
+        morton::decode_nd(dimension, b, bc[0], bc[1], bc[2]);
+        for (int d = 0; d < dimension; ++d) {
+            if (std::abs(static_cast<int64_t>(ac[d]) - static_cast<int64_t>(bc[d])) > 1) return EdgeKind::Far;
+        }
+        return EdgeKind::Near;
+    };
+    auto formed = [&](BoxData<CoordType, DataType>& owner, int64_t neighbor, EdgeKind kind, bool a_sn) {
+        if (kind == EdgeKind::Diag) return owner.schur_complement.is_allocated();
+        const auto* block = find_directed_block(owner, neighbor, kind, a_sn);
+        return block != nullptr && (a_sn ? block->A_SN.is_allocated() : block->a_ns_is_allocated());
+    };
+
+    struct Pair {
+        int64_t lg = -1;
+        int64_t rg = -1;
+        EdgeKind kind = EdgeKind::Near;
+        bool lg_view = false;  // LG's A_SN[RG] (or its Schur block) to form
+        bool rg_view = false;  // RG's A_NS[LG] to form
+        std::vector<DataType> block;
+    };
+    std::vector<Pair> pairs;
+    std::set<std::pair<int64_t, int64_t>> seen;
+    for (int64_t morton : wave) {
+        if (!occupied_topology.contains(level.level, morton)) continue;
+        const auto* box = level.find_local_box(morton);
+        if (box == nullptr || box->num_points == 0) continue;
+        for (int64_t lg : box->one_hop) {
+            for (int64_t rg : box->one_hop) {
+                if (!seen.insert({lg, rg}).second) continue;
+                Pair pair;
+                pair.lg = lg;
+                pair.rg = rg;
+                pair.kind = kind_of(lg, rg);
+                if (lazy_far && pair.kind == EdgeKind::Far) continue;
+                if (auto* lg_box = level.find_local_box(lg)) {
+                    pair.lg_view = !formed(*lg_box, rg, pair.kind, true);
+                }
+                if (lg != rg) {
+                    if (auto* rg_box = level.find_local_box(rg)) {
+                        pair.rg_view = !formed(*rg_box, lg, pair.kind, false);
+                    }
+                }
+                if (pair.lg_view || pair.rg_view) pairs.push_back(std::move(pair));
+            }
+        }
+    }
+
+    // (entries through a collective callback: the pairs that asked for a
+    // block not fetched yet evaluate it again after a round; a pair writes
+    // only its block.  A phase of every wave, an empty one's too: see the
+    // wave loop)
+    std::exception_ptr failure;
+    std::mutex failure_mutex;
+    std::vector<int64_t> pair_items(pairs.size());
+    std::iota(pair_items.begin(), pair_items.end(), int64_t{0});
+    run_entry_phase(kernel_entries(kernel, 0), std::move(pair_items), [&](const std::vector<int64_t>& items) {
+        std::vector<int64_t> abandoned;
+        std::mutex abandoned_mutex;
+        omp_parallel_if(items.size() > 1, [&] {
+            #pragma omp for schedule(dynamic)
+            for (int64_t item = 0; item < static_cast<int64_t>(items.size()); ++item) {
+                const int64_t p = items[static_cast<size_t>(item)];
+                try {
+                    entry_item_begin();
+                    auto& pair = pairs[static_cast<size_t>(p)];
+                    pair.block = directed_view_kernel_block(
+                        level, kernel, pair.lg, current_count(pair.lg), pair.rg, current_count(pair.rg));
+                    entry_item_end();
+                } catch (const H2EntryMiss&) {
+                    std::lock_guard<std::mutex> lock(abandoned_mutex);
+                    abandoned.push_back(p);
+                } catch (...) {
+                    if (entry_item_abandoned()) {
+                        std::lock_guard<std::mutex> lock(abandoned_mutex);
+                        abandoned.push_back(p);
+                        continue;
+                    }
+                    std::lock_guard<std::mutex> lock(failure_mutex);
+                    if (!failure) failure = std::current_exception();
+                }
+            }
+        });
+        if (failure) std::rethrow_exception(failure);
+        return abandoned;
+    });
+
+    for (auto& pair : pairs) {
+        const int64_t n_lg = current_count(pair.lg);
+        const int64_t n_rg = current_count(pair.rg);
+        if (pair.kind == EdgeKind::Diag) {
+            auto& owner = *level.find_local_box(pair.lg);
+            owner.schur_complement.set_owned(n_lg, n_lg, std::move(pair.block), MatrixStorage<DataType>::FULL);
+            continue;
+        }
+        if (pair.lg_view && pair.rg_view) {
+            std::vector<DataType> copy = pair.block;
+            upsert_directed_block(*level.find_local_box(pair.rg), pair.lg, pair.kind, false)
+                .set_a_ns_owned(n_lg, n_rg, std::move(copy), MatrixStorage<DataType>::FULL);
+        } else if (pair.rg_view) {
+            upsert_directed_block(*level.find_local_box(pair.rg), pair.lg, pair.kind, false)
+                .set_a_ns_owned(n_lg, n_rg, std::move(pair.block), MatrixStorage<DataType>::FULL);
+            continue;
+        }
+        upsert_directed_block(*level.find_local_box(pair.lg), pair.rg, pair.kind, true)
+            .A_SN.set_owned(n_lg, n_rg, std::move(pair.block), MatrixStorage<DataType>::FULL);
+    }
+}
 
 template<typename CoordType, typename DataType, typename KernelType>
 void hierarchical_factorization_unstructured(
@@ -36,13 +174,18 @@ void hierarchical_factorization_unstructured(
     int ca_owner_component,
     int ca_owner_serial,
     int verbosity,
-    const OccupiedTopology& occupied_topology) {
+    const OccupiedTopology& occupied_topology,
+    // H2_compress_factors (GPU): lossy compression of the kept factors and
+    // of the factorization's fill sources and packed blocks
+    int compress_factors = 0) {
 
     // To Do: NEED TO FIX KERNEL!!!!!
     using clock = std::chrono::high_resolution_clock;
 
     int rank = tree->mpi_rank;
     int size = tree->mpi_size;
+    // (the solve, the multiply by the factors and the logdet read it)
+    tree->factor_symmetric = is_symmetric || is_hermitian;
     const bool print_summary = verbosity >= 0;
     const bool print_detail = verbosity >= 1;
     const bool print_trace = verbosity >= 2;
@@ -50,7 +193,6 @@ void hierarchical_factorization_unstructured(
 #ifdef H2_HAVE_GPU
     if (color_gpu_enabled()) gpu::begin_operator_build(tree, tree->comm);
     gpu::invalidate_device_solve();  // the device copies of the previous factors
-    if (color_gpu_enabled()) gpu::register_solve_keeper(tree);  // (an eviction brings its kept factors to the host)
 #endif
     DynamicThreadingContext dynamic_threading =
         make_dynamic_threading_context(tree->comm);
@@ -137,6 +279,11 @@ void hierarchical_factorization_unstructured(
         std::cout << "Matrix property: " << (is_symmetric ? "Symmetric" : "Nonsymmetric") << std::endl;
         std::cout << "Factorization: " << factorization_name << std::endl;
         printf("max thread: %d\n", omp_get_max_threads());
+        if (!(is_symmetric || is_hermitian) && use_sketch == 2 && lazy_schur == 0) {
+            // (use_streamed_level below)
+            std::cout << "Note: a nonsymmetric H2 streams its ID sketches with H2_lazy_schur=2 only; with 0 its "
+                         "levels form each box's ID target in full (eager, more memory)" << std::endl;
+        }
         std::cout << "========================================\n" << std::endl;
     }
 
@@ -193,6 +340,7 @@ void hierarchical_factorization_unstructured(
     gpu_options.is_symmetric = is_symmetric;
     gpu_options.is_hermitian = is_hermitian;
     gpu_options.occupancy = true;
+    gpu_options.compress_factors = compress_factors;
     gpu::ColorGpuDriver<CoordType, DataType, KernelType> gpu_driver(tree, kernel, gpu_options);
     {
         // as the full-grid loop: before the first level (the kernels and
@@ -236,6 +384,13 @@ void hierarchical_factorization_unstructured(
         auto& level = tree->levels[current_level];
         auto& parent_level = tree->levels[current_level - 1];
         filter_level_topology(tree, current_level, occupied_topology);
+        // Entries through a collective callback: the level's ranks fetch
+        // their blocks in rounds over all ranks until the level's parents
+        // are built (the section's end below); a rank without work here serves
+        // those rounds first.
+        if (auto* entries = kernel_entries(kernel, 0); entries != nullptr && !level.is_process_active) {
+            entries->serve();
+        }
         const bool participates_in_transition =
             level.is_process_active || parent_level.is_process_active;
         if (!participates_in_transition) {
@@ -254,9 +409,11 @@ void hierarchical_factorization_unstructured(
         }
         const bool CA_requested = tree->level_requests_CA(current_level);
         const bool use_CA_level = tree->level_uses_CA(current_level);
+        // (a nonsymmetric matrix: streamed and lazy with lazy_schur 2, the
+        // eager levels with 0)
         const bool use_streamed_level =
-            current_level > 1 && use_sketch == 2 &&
-            is_symmetric && !is_hermitian;
+            current_level > 1 && use_sketch == 2 && !is_hermitian &&
+            (is_symmetric || lazy_schur == 2);
         const int level_lazy_schur = use_streamed_level
             ? (use_CA_level ? std::min(lazy_schur, 1) : lazy_schur)
             : 0;
@@ -610,8 +767,10 @@ void hierarchical_factorization_unstructured(
             gpu_driver.start_level(current_level, use_streamed_level, level_comm,
                                    print_detail && rank == level_print_rank);
             const bool gpu_level_local = gpu_driver.local();
+            const bool gpu_level_on = gpu_driver.on();
 #else
             const bool gpu_level_local = false;
+            const bool gpu_level_on = false;
 #endif
 
             for (int counter = 0; counter < static_cast<int>(color_bins.size()); ++counter) {
@@ -737,19 +896,31 @@ void hierarchical_factorization_unstructured(
                             << " (" << color_list.size() << " boxes)..." << std::endl;
                 }
 
+                const bool enable_deferred_xnn =
+                    to_store && (store_interior_wave || !is_interior);
+                const bool use_owner_deferred_xnn =
+                    enable_deferred_xnn && !is_hermitian &&
+                    (is_symmetric || use_streamed_level);
+
                 if (color_list.empty()) {
                     // All ranks retain the same wave schedule and have already
                     // participated in this wave's transport.  Avoid numerical
                     // work while still advancing remote assisting-box state.
+                    // (Entries through a collective callback: this wave's
+                    // phase rounds all the same, with nothing to run; a
+                    // device level has no phases here.)
+                    if (auto* entries = kernel_entries(kernel, 0); entries != nullptr && !gpu_level_on) {
+                        auto nothing = [](const std::vector<int64_t>&) { return std::vector<int64_t>{}; };
+                        // (a nonsymmetric matrix: form_nonsymmetric_wave_views's phase first)
+                        if (!(is_symmetric || is_hermitian)) run_entry_phase(entries, {}, nothing);
+                        run_entry_phase(entries, {}, nothing);
+                        if (use_owner_deferred_xnn) run_entry_phase(entries, {}, nothing);
+                    }
                     mark_assisting_boxes_eliminated();
                     continue;
                 }
 
                 const auto wave_setup_start = clock::now();
-                const bool enable_deferred_xnn =
-                    to_store && (store_interior_wave || !is_interior);
-                const bool use_owner_deferred_xnn =
-                    enable_deferred_xnn && is_symmetric && !is_hermitian;
 
                 std::unordered_set<int64_t> wave_box_set;
                 wave_box_set.insert(color_list.begin(), color_list.end());
@@ -818,9 +989,23 @@ void hierarchical_factorization_unstructured(
                 const int wave_team = std::max(1, omp_get_max_threads());
                 const int wave_split = split_threads_for(
                     static_cast<int64_t>(color_list.size()), wave_team);
+                if (!(is_symmetric || is_hermitian)) {
+                    form_nonsymmetric_wave_views(
+                        level, kernel, color_list, occupied_topology,
+                        lazy_far_field_mode() == LazyFarFieldMode::LAZY);
+                }
                 record_deep_phase(DEEP_WAVE_SETUP, wave_setup_start);
                 const auto primary_start = clock::now();
 
+                // The wave's boxes; with entries through a collective
+                // callback, those that asked for a block not fetched yet run
+                // again after a round (their IDs, elimination and the step-2
+                // updates come after their last request: nothing to undo)
+                std::vector<int64_t> wave_items(color_list.size());
+                std::iota(wave_items.begin(), wave_items.end(), int64_t{0});
+                run_entry_phase(kernel_entries(kernel, 0), std::move(wave_items), [&](const std::vector<int64_t>& items) {
+                std::vector<int64_t> abandoned;
+                std::mutex abandoned_mutex;
                 #pragma omp parallel default(shared)
                 {
                     const int tid = omp_get_thread_num();
@@ -828,7 +1013,8 @@ void hierarchical_factorization_unstructured(
                     scratch.split_threads = wave_split;
 
                     #pragma omp for schedule(dynamic)
-                    for (int64_t bi = 0; bi < static_cast<int64_t>(color_list.size()); ++bi) {
+                    for (int64_t item = 0; item < static_cast<int64_t>(items.size()); ++item) {
+                        const int64_t bi = items[static_cast<size_t>(item)];
                         if (wave_failed.load(std::memory_order_relaxed)) {
                             continue;
                         }
@@ -856,7 +1042,12 @@ void hierarchical_factorization_unstructured(
                                 continue;
                             }
 
-                            if (use_streamed_level) {
+                            entry_item_begin();
+                            if (use_streamed_level && !is_symmetric) {
+                                gather_id_target_streamed_nonsymmetric(
+                                    tree, &box, level, kernel, scratch,
+                                    box.on_boundary, tolerance);
+                            } else if (use_streamed_level) {
                                 gather_id_target_streamed(
                                     tree, &box, level, kernel, scratch,
                                     box.on_boundary, tolerance);
@@ -870,20 +1061,29 @@ void hierarchical_factorization_unstructured(
                                     scratch.workspace, scratch.workspace_rows,
                                     scratch.workspace_cols, 0,
                                     box.on_boundary, false,
-                                    &scratch.id_adaptive);
+                                    &scratch.id_adaptive, true,
+                                    scratch.split_threads);
                             }
-
-                            thread_boundary_counts[static_cast<size_t>(tid)] += box.on_boundary;
 
                             compute_and_modify(dimension,
                                 &box, level, kernel,
                                 scratch,
-                                tolerance, use_sketch, is_symmetric, is_hermitian,
+                                make_id_tolerance(tree, tolerance), use_sketch, is_symmetric, is_hermitian,
                                 &thread_pending[tid],
                                 factorization_method, use_owner_deferred_xnn
                             );
+                            entry_item_end();
+                            thread_boundary_counts[static_cast<size_t>(tid)] += box.on_boundary;
 
+                        } catch (const H2EntryMiss&) {
+                            std::lock_guard<std::mutex> lock(abandoned_mutex);
+                            abandoned.push_back(bi);
                         } catch (...) {
+                            if (entry_item_abandoned()) {
+                                std::lock_guard<std::mutex> lock(abandoned_mutex);
+                                abandoned.push_back(bi);
+                                continue;
+                            }
                             if (!wave_failed.exchange(true, std::memory_order_relaxed)) {
                                 std::lock_guard<std::mutex> lock(wave_exception_mutex);
                                 wave_exception = std::current_exception();
@@ -912,6 +1112,11 @@ void hierarchical_factorization_unstructured(
                         }
                     }
                 }
+                if (wave_exception) {
+                    std::rethrow_exception(wave_exception);
+                }
+                return abandoned;
+                });
 
                 if (wave_exception) {
                     std::rethrow_exception(wave_exception);
@@ -1012,6 +1217,15 @@ void hierarchical_factorization_unstructured(
 
                     record_deep_phase(DEEP_OWNER_PREP, owner_prep_start);
                     const auto owner_replay_start = clock::now();
+                    // (with entries through a collective callback, the
+                    // candidates that asked for a block not fetched yet run
+                    // again after a round: a candidate commits its targets,
+                    // updates and mirrors only after its last request)
+                    std::vector<int64_t> owner_items(wave_xnn_candidate_boxes.size());
+                    std::iota(owner_items.begin(), owner_items.end(), int64_t{0});
+                    run_entry_phase(kernel_entries(kernel, 0), std::move(owner_items), [&](const std::vector<int64_t>& items) {
+                    std::vector<int64_t> abandoned;
+                    std::mutex abandoned_mutex;
                     #pragma omp parallel default(shared)
                     {
                         const int tid = omp_get_thread_num();
@@ -1019,10 +1233,10 @@ void hierarchical_factorization_unstructured(
                         scratch.split_threads = owner_split;
 
                         #pragma omp for schedule(dynamic)
-                        for (int64_t idx = 0;
-                             idx < static_cast<int64_t>(
-                                 wave_xnn_candidate_boxes.size());
-                             ++idx) {
+                        for (int64_t item = 0;
+                             item < static_cast<int64_t>(items.size());
+                             ++item) {
+                            const int64_t idx = items[static_cast<size_t>(item)];
                             if (owner_failed.load(
                                     std::memory_order_relaxed)) {
                                 continue;
@@ -1037,6 +1251,12 @@ void hierarchical_factorization_unstructured(
                                 //   local-local   -> local owner replay + local mirror
                                 //   local-remote  -> local replay + remote transport
                                 //   remote-remote -> remote transport only
+                                entry_item_begin();
+                                if (!is_symmetric) {
+                                    apply_unstructured_owner_deferred_xnn_updates_nonsymmetric(
+                                        candidate_morton, level, kernel, wave_box_set, scratch,
+                                        wave_xnn_mirror_targets[static_cast<size_t>(idx)]);
+                                } else {
                                 apply_unstructured_owner_deferred_xnn_updates_for_candidate_box(
                                     candidate_morton,
                                     level,
@@ -1047,7 +1267,17 @@ void hierarchical_factorization_unstructured(
                                         static_cast<size_t>(idx)],
                                     &thread_pending[
                                         static_cast<size_t>(tid)]);
+                                }
+                                entry_item_end();
+                            } catch (const H2EntryMiss&) {
+                                std::lock_guard<std::mutex> lock(abandoned_mutex);
+                                abandoned.push_back(idx);
                             } catch (...) {
+                                if (entry_item_abandoned()) {
+                                    std::lock_guard<std::mutex> lock(abandoned_mutex);
+                                    abandoned.push_back(idx);
+                                    continue;
+                                }
                                 if (!owner_failed.exchange(
                                         true,
                                         std::memory_order_relaxed)) {
@@ -1085,6 +1315,11 @@ void hierarchical_factorization_unstructured(
                             }
                         }
                     }
+                    if (owner_exception) {
+                        std::rethrow_exception(owner_exception);
+                    }
+                    return abandoned;
+                    });
 
                     record_deep_phase(
                         DEEP_OWNER_REPLAY, owner_replay_start);
@@ -1116,10 +1351,15 @@ void hierarchical_factorization_unstructured(
                                     continue;
                                 }
 
+                                if (!is_symmetric) {
+                                    apply_unstructured_owner_deferred_xnn_mirror_nonsymmetric(
+                                        level, wave_xnn_mirror_targets[static_cast<size_t>(idx)]);
+                                } else {
                                 apply_symmetric_owner_deferred_xnn_updates_for_candidate_box(
                                     candidate_box,
                                     wave_xnn_mirror_targets[static_cast<size_t>(idx)],
                                     level);
+                                }
                             } catch (...) {
                                 if (!mirror_failed.exchange(true, std::memory_order_relaxed)) {
                                     std::lock_guard<std::mutex> lock(mirror_exception_mutex);
@@ -1135,7 +1375,7 @@ void hierarchical_factorization_unstructured(
                     record_deep_phase(DEEP_MIRROR, mirror_start);
 
                     const auto share_start = clock::now();
-                    share_symmetric_level_edges(level);
+                    if (is_symmetric) share_symmetric_level_edges(level);
                     record_deep_phase(DEEP_SHARE, share_start);
 
                     const auto generator_start = clock::now();
@@ -1544,19 +1784,8 @@ void hierarchical_factorization_unstructured(
 #endif
         std::vector<BoxData<CoordType, DataType>> parent_boxes;
         bool transition_on_device = false;
-#ifdef H2_HAVE_GPU
-        // Device transition, or this level's blocks back in the host BoxData
-        // for the host transition.
-        transition_on_device = gpu_driver.transition(
-            level, parent_level, parent_boxes,
-            [&] {
-                return build_parent_level_structure_unstructured(
-                    level, tree->levels[current_level - 1], dimension,
-                    tree->global_bounds, occupied_topology);
-            },
-            print_detail && rank == level_print_rank, level_comm, transition_comm);
-#endif
-        if (level.is_process_active && !transition_on_device) {
+        bool parents_built = false;
+        auto build_parents_on_host = [&] {
             parent_boxes =
                 build_parent_level_interactions_unstructured<
                     CoordType, DataType, KernelType>(
@@ -1568,7 +1797,42 @@ void hierarchical_factorization_unstructured(
                     kernel,
                     tree->global_bounds,
                     occupied_topology);
+            parents_built = true;
+        };
+        // Entries through a collective callback: the level's section of
+        // rounds ends once its parents are built, before the transition
+        // communicates (its parent-only ranks serve the rounds until then).
+        auto* level_entries = kernel_entries(kernel, 0);
+        bool section_open = level_entries != nullptr && level.is_process_active;
+        auto end_level_section = [&] {
+            if (section_open) {
+                level_entries->end_section();
+                section_open = false;
+            }
+        };
+#ifdef H2_HAVE_GPU
+        // (with them, a rank whose parents are built on the host builds them
+        // before the transition)
+        if (section_open && !gpu_driver.builds_parents(level, parent_level)) {
+            build_parents_on_host();
+            end_level_section();
         }
+        // Device transition, or this level's blocks back in the host BoxData
+        // for the host transition.
+        transition_on_device = gpu_driver.transition(
+            level, parent_level, parent_boxes,
+            [&] {
+                return build_parent_level_structure_unstructured(
+                    level, tree->levels[current_level - 1], dimension,
+                    tree->global_bounds, occupied_topology);
+            },
+            print_detail && rank == level_print_rank, level_comm, transition_comm,
+            end_level_section);
+#endif
+        if (level.is_process_active && !transition_on_device && !parents_built) {
+            build_parents_on_host();
+        }
+        end_level_section();
 
         if (memory_diagnostics.enabled()) {
             memory_diagnostics.record(

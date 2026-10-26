@@ -40,10 +40,11 @@ struct IDResult {
  * @brief Normalize an ID input to avoid overflow/underflow in RRQR and R solves.
  *
  * Uniform scaling does not change the column permutation, numerical rank under
- * a relative tolerance, or T = R11^{-1} R12.
+ * a relative tolerance, or T = R11^{-1} R12.  Returns the scale, max|a_ij|
+ * (0: a zero matrix, left as it is): an absolute tolerance is divided by it.
  */
 template<typename DataType>
-bool normalize_id_matrix_in_place(
+double normalize_id_matrix_in_place(
     DataType* matrix,
     int64_t rows,
     int64_t cols,
@@ -60,14 +61,39 @@ bool normalize_id_matrix_in_place(
         }
     }
 
-    if (max_abs == 0.0) return false;
+    if (max_abs == 0.0) return 0.0;
 
     for (int64_t j = 0; j < cols; ++j) {
         for (int64_t i = 0; i < rows; ++i) {
             matrix[i + j * leading_dimension] /= max_abs;
         }
     }
-    return true;
+    return max_abs;
+}
+
+
+/**
+ * @brief The absolute floor of an H2 ID: tol * H2_s_op (0 when H2_s_op is off).
+ *
+ * An ID keeps column k while |R_kk| > max(tol |R_11|, tol s_op).  s_op is in
+ * the units of the matrix's entries: at most ||A|| for compression-only H2,
+ * at most 1/||A^-1|| for the factorization.
+ */
+template<typename CoordType, typename DataType>
+double id_absolute_tolerance(const ParallelTree<CoordType, DataType>* tree, double tolerance) {
+    return tree->id_s_op > 0.0 ? tolerance * tree->id_s_op : 0.0;
+}
+
+// Both tolerances of an ID, for the routines that do not see the tree
+// (no conversion from a double: a caller cannot drop the floor by accident).
+struct IdTolerance {
+    double relative;  ///< tol: |R_kk| > tol |R_11|
+    double absolute;  ///< tol * H2_s_op (0: off)
+};
+
+template<typename CoordType, typename DataType>
+IdTolerance make_id_tolerance(const ParallelTree<CoordType, DataType>* tree, double tolerance) {
+    return IdTolerance{tolerance, id_absolute_tolerance(tree, tolerance)};
 }
 
 
@@ -297,14 +323,18 @@ IDResult<DataType> compute_id(
 }
 
 
+// abs_tolerance: the absolute floor (id_absolute_tolerance; 0: the relative
+// rule |R_kk| > tolerance |R_11| only).  With a floor the rank can be 0 for a
+// nonzero A, which the callers treat as a zero A (ensure_nonempty_box_id_rank).
 template<typename DataType>
 IDResult<DataType> compute_id_complex(
     DataType* A,
     int64_t m,
     int64_t n,
     int64_t lda,
-    double tolerance = 1e-6,
-    int64_t max_rank = 0) {
+    double tolerance,
+    int64_t max_rank,
+    double abs_tolerance) {
     
     static_assert(std::is_same_v<DataType, double> || 
                   std::is_same_v<DataType, std::complex<double>>,
@@ -316,7 +346,8 @@ IDResult<DataType> compute_id_complex(
     
     IDResult<DataType> result;
 
-    if (!normalize_id_matrix_in_place(A, m, n, lda)) {
+    const double scale = normalize_id_matrix_in_place(A, m, n, lda);
+    if (scale == 0.0) {
         result.redundant_indices.resize(static_cast<size_t>(n));
         std::iota(result.redundant_indices.begin(),
                   result.redundant_indices.end(), int64_t{0});
@@ -383,14 +414,16 @@ IDResult<DataType> compute_id_complex(
     }
     
     // Determine rank from diagonal of R
-    // |R(i,i)| <= tolerance * |R(1,1)| means we stop
+    // |R(i,i)| <= max(tolerance * |R(1,1)|, abs_tolerance) means we stop
+    // (A is divided by scale: so is the absolute floor)
     double R11 = std::abs(A[0]);  // |R(1,1)|
     int KMAX = (max_rank > 0) ? static_cast<int>(max_rank) : minMN;
     int K = 0;
+    const double threshold = std::max(tolerance * R11, abs_tolerance / scale);
     
     if (R11 > 0.0) {
         for (int i = 0; i < std::min(KMAX, minMN); ++i) {
-            if (std::abs(A[i + i * LDA]) > tolerance * R11) {
+            if (std::abs(A[i + i * LDA]) > threshold) {
                 K++;
             } else {
                 break;
@@ -698,9 +731,55 @@ inline void sketch_sparse_random(
 }
 
 
+// The H2 ID's sketch of an m x n target (m rows, the box's n points as
+// columns), shared by the host and the device (h2_gpu/device_sketch.cu):
+// Y = S A of d = n + kIdSketchOversampling rows, S with sk = 4 nonzeros a
+// target row (sketch_sparse_random's draws, seed morton + 1); or, when the
+// target has no more rows than that, its rows themselves ("direct": row q of
+// A is row q of Y, sk = 1, sign +1; d = max(m, n), zero rows below m).
+// Without oversampling (d = n) the sketch of a nearly full-rank target is
+// square, and its small singular values make the ID drop columns the target
+// needs (errors far above the tolerance: an SPD matrix factored indefinite,
+// logdet sign -1, at 100K and 400K points of a 2D exponential kernel at
+// 1e-10); a sketch of m <= d rows would only mix them.
+constexpr int64_t kIdSketchOversampling = 4;
+
+struct IdSketchShape {
+    int64_t d = 0;        // rows of Y
+    int sk = 1;           // nonzeros a target row
+    bool direct = false;  // Y = A
+};
+
+inline IdSketchShape id_sketch_shape(int64_t m, int64_t n) {
+    IdSketchShape s;
+    const int64_t d = n + kIdSketchOversampling;
+    if (m <= d) {
+        s.d = std::max(m, n);
+        s.sk = 1;
+        s.direct = true;
+    } else {
+        s.d = d;
+        s.sk = static_cast<int>(std::min<int64_t>(4, d));
+    }
+    return s;
+}
+
+// Y (id_sketch_shape(m, n).d x n, column-major, resized) = the ID sketch of
+// A (m x n, leading dimension lda).
+template<typename DataType>
+void id_sketch(const DataType* A, int64_t m, int64_t n, int64_t lda, std::vector<DataType>& Y, uint64_t seed) {
+    const IdSketchShape s = id_sketch_shape(m, n);
+    Y.assign(static_cast<size_t>(s.d * n), DataType{0});
+    if (s.direct) {
+        for (int64_t j = 0; j < n; ++j) std::copy(A + j * lda, A + j * lda + m, Y.data() + j * s.d);
+        return;
+    }
+    sketch_sparse_random(A, m, n, lda, Y.data(), s.d, s.d, s.sk, seed);
+}
+
 /**
  * @brief Compute ID using sparse random sketching
- * 
+ *
  * For A (m × n) where m >> n:
  * 1. Sparse sketch: Y = S * A where S is (d × m) with k nonzeros per column
  * 2. Compute ID of Y to find skeleton columns
@@ -718,6 +797,7 @@ inline void sketch_sparse_random(
  * @param sketch_factor Sketch size = sketch_factor * n (default: 2.0)
  * @param k Sparsity parameter: nonzeros per column of S (default: 3)
  * @param seed Random seed (0 = auto-generate)
+ * @param abs_tolerance Absolute floor of the rank rule (compute_id_complex)
  * @return IDResult
  */
 template<typename DataType>
@@ -730,7 +810,8 @@ IDResult<DataType> compute_id_sparse_sketch(
     double rank_or_tol = 1e-6,
     double sketch_factor = 2.0,
     int k = 3,
-    uint64_t seed = 0) {
+    uint64_t seed = 0,
+    double abs_tolerance = 0.0) {
     
     static_assert(std::is_same_v<DataType, double> || std::is_same_v<DataType, std::complex<double>>,
                   "Only double precision supported currently");
@@ -784,7 +865,8 @@ IDResult<DataType> compute_id_sparse_sketch(
             n,
             sketch_size,
             rank_or_tol,
-            0  // max_rank = 0 means auto-detect from tolerance
+            0,  // max_rank = 0 means auto-detect from tolerance
+            abs_tolerance  // (the sketch S keeps column norms in expectation)
         );
         return result;
     }
@@ -795,7 +877,8 @@ IDResult<DataType> compute_id_sparse_sketch(
             n,
             sketch_size,
             rank_or_tol,
-            0  // max_rank = 0 means auto-detect from tolerance
+            0,  // max_rank = 0 means auto-detect from tolerance
+            abs_tolerance  // (the sketch S keeps column norms in expectation)
         );
         return result;
     }

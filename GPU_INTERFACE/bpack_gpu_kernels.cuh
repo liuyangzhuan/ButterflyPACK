@@ -115,7 +115,10 @@ constexpr int kSketchOwners = 16;
 // out(i, c) = sum over entries (row, i, sign), in list order, of
 // sign * scale * value(row, c), where value is K(point col_base + c, point
 // row_slots[row]) for kernel rows, else src[c + row_index[row] *
-// row_stride].  ptr / entries: the lists of the owner warps.
+// row_stride].  ptr / entries: the lists of the owner warps.  Kernel rows in
+// [swap_lo0, swap_hi0) or [swap_lo1, swap_hi1) take K(point row_slots[row],
+// point col_base + c) instead (a nonsymmetric matrix's K(F, B) rows; empty
+// ranges: none).
 template<typename T>
 struct OrderedSketchItemT {
     T* out;
@@ -131,6 +134,7 @@ struct OrderedSketchItemT {
     const T* src;
     int row_stride;
     const int* row_index;  // null: row i is stored row i
+    int swap_lo0, swap_hi0, swap_lo1, swap_hi1;
 };
 
 // ---- the entry kernel: thread blocks of kEvalTile x kEvalTile entries
@@ -208,8 +212,13 @@ __device__ __forceinline__ void chunk_values(const OrderedSketchItemT<T>& item, 
         v[q] = T(0.0);
         if (src_row[q] >= 0 && column) {
             if (kKernelRows) {
-                v[q] = entry(col_x, col_id, points.xyz + static_cast<int64_t>(points.dim) * src_row[q],
-                             points.ids[src_row[q]]);
+                const int row = r0 + warp + q * kSketchOwners;
+                const double* row_x = points.xyz + static_cast<int64_t>(points.dim) * src_row[q];
+                if ((row >= item.swap_lo0 && row < item.swap_hi0) || (row >= item.swap_lo1 && row < item.swap_hi1)) {
+                    v[q] = entry(row_x, points.ids[src_row[q]], col_x, col_id);
+                } else {
+                    v[q] = entry(col_x, col_id, row_x, points.ids[src_row[q]]);
+                }
             } else {
                 v[q] = item.src[c + static_cast<int64_t>(src_row[q]) * item.row_stride];
             }

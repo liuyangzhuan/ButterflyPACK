@@ -5,10 +5,12 @@
 #endif
 #include <algorithm>
 #include <cassert>
+#include <cctype>
 #include <cmath>
 #include <complex>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <vector>
 #include <memory>
 #include <cstring>
@@ -37,7 +39,9 @@ static inline int product(int arr[], int n) {
 #endif
 
 #ifdef HAVE_MPI
-static void require_symmetric_h2_option(
+// option%sym of a format-7 matrix: 1 (transpose-symmetric), or 0 (a general
+// matrix) with H2_unstructured=1.
+static void check_h2_symmetry_option(
     F2Cptr* option,
     MPI_Comm comm,
     const char* caller) {
@@ -45,10 +49,13 @@ static void require_symmetric_h2_option(
   c_bpack_getoption(option, "sym", &sym_d);
   const int sym = static_cast<int>(std::llround(sym_d));
   if (sym == 1) return;
+  double unstructured_d = 0.0;
+  c_bpack_getoption(option, "H2_unstructured", &unstructured_d);
+  if (sym == 0 && std::llround(unstructured_d) == 1) return;
 
   const std::string message = std::string(caller) +
-    ": ButterflyPACK H2 (format=7) currently requires option%sym=1 "
-    "for a transpose-symmetric matrix; received option%sym=" +
+    ": ButterflyPACK H2 (format=7) takes option%sym=1 (transpose-symmetric), "
+    "or option%sym=0 (nonsymmetric) with H2_unstructured=1; received option%sym=" +
     std::to_string(sym);
   int rank = 0;
   MPI_Comm_rank(comm, &rank);
@@ -65,6 +72,104 @@ int sync_h2_verbosity(
   c_bpack_getoption(option, "verbosity", &verbosity_d);
   solver->options.verbosity = static_cast<int>(std::llround(verbosity_d));
   return solver->options.verbosity;
+}
+
+// The operation a trans argument asks of format 7 ('N', 'T' or 'C', either
+// case).  A transpose-symmetric H2 (option%sym=1) takes 'T' as 'N', and 'C'
+// as 'N' on conjugated vectors: A^H x = conj(A conj(x)), and A^{-H} x =
+// conj(A^{-1} conj(x)) (for real data 'T' again).  A nonsymmetric one
+// (option%sym=0) applies A^T, or its inverse, with A's factors for 'T' (the
+// transposed sweeps, h2_transposed), and 'C' as 'T' on conjugated vectors.
+static char h2_trans_operation(char const* trans, const char* caller) {
+  const char given = (trans != nullptr && trans[0] != '\0') ? trans[0] : 'N';
+  const char op = static_cast<char>(std::toupper(static_cast<unsigned char>(given)));
+  if (op != 'N' && op != 'T' && op != 'C') {
+    throw std::invalid_argument(std::string(caller) +
+      ": trans must be 'N', 'T' or 'C'; got '" + std::string(1, given) + "'");
+  }
+  return op;
+}
+
+// Whether operation `op` (h2_trans_operation) runs the transposed sweeps: 'T'
+// and 'C' of a nonsymmetric H2.
+template<typename DataType>
+bool h2_transposed(const butterfly::H2<double, DataType>* solver, char op) {
+  return op != 'N' && !solver->options.symmetric;
+}
+
+template<typename DataType>
+void conjugate_h2_values(std::vector<DataType>& values) {
+  if constexpr (butterfly::is_complex_v<DataType>) {
+    for (DataType& value : values) value = std::conj(value);
+  }
+}
+
+// `ncol` columns of the caller's local rows in the solver's (tree) order: a
+// distributed64 handle converts from the caller's input ownership (`nloc`
+// must be its input-local size), a legacy handle already uses the tree's.
+// Returns the internal local row count.
+template<typename DataType>
+int h2_values_to_internal(
+    const butterfly::H2<double, DataType>* solver,
+    const DataType* values, int nloc, int ncol,
+    std::vector<DataType>& internal, const char* caller) {
+  const auto* layout = solver->distributed_layout.get();
+  int internal_nloc = nloc;
+  if (layout != nullptr) {
+    if (layout->input_local_size != nloc) {
+      throw std::invalid_argument(std::string(caller) +
+        " (distributed64): the local row count must equal the input-local size");
+    }
+    if (layout->internal_local_size > std::numeric_limits<int>::max()) {
+      throw std::overflow_error(std::string(caller) +
+        " (distributed64): internal local size exceeds INT_MAX");
+    }
+    internal_nloc = static_cast<int>(layout->internal_local_size);
+  }
+  internal.resize(static_cast<size_t>(internal_nloc) * static_cast<size_t>(ncol));
+  if (layout != nullptr) {
+    layout->input_to_internal(values, internal.data(), ncol);
+  } else {
+    std::copy_n(values, internal.size(), internal.data());
+  }
+  return internal_nloc;
+}
+
+// ... and back to the caller's order.
+template<typename DataType>
+void h2_values_from_internal(
+    const butterfly::H2<double, DataType>* solver,
+    const std::vector<DataType>& internal, DataType* values, int ncol) {
+  const auto* layout = solver->distributed_layout.get();
+  if (layout != nullptr) {
+    layout->internal_to_input(internal.data(), values, ncol);
+  } else {
+    std::copy(internal.begin(), internal.end(), values);
+  }
+}
+
+// solution = A^{-1} rhs with the factorization (c_bpack_factor, precon != 2),
+// both in the tree's order: the direct solve, and c_bpack_inv_mult.
+// `seconds`: the sweeps (with the solve data's set-up) and the gather.
+// transposed: A^{-T} rhs (a nonsymmetric H2).
+template<typename DataType>
+void h2_apply_factorized_inverse(
+    butterfly::H2<double, DataType>* solver,
+    const std::vector<DataType>& rhs, std::vector<DataType>& solution,
+    int internal_nloc, int ncol, int verbosity, double* seconds = nullptr,
+    bool transposed = false) {
+  const double t0 = MPI_Wtime();
+  std::vector<std::vector<fmm::SolveDataRequest<double, DataType>>> solve_data(
+    solver->options.num_levels);
+  butterfly::dispatch_h2_solve(solver, rhs, solve_data, ncol, verbosity, transposed);
+  const double t1 = MPI_Wtime();
+  solution.resize(static_cast<size_t>(internal_nloc) * static_cast<size_t>(ncol));
+  butterfly::gather_local_solution(
+    solver->tree.get(), solve_data, solution.data(), &internal_nloc, ncol);
+  if (seconds != nullptr) {
+    seconds[0] = t1 - t0;
+    seconds[1] = MPI_Wtime() - t1;
+  }
 }
 
 template<typename CoordType, typename DataType>
@@ -86,9 +191,13 @@ void compress_h2_and_update_stats(
   double rank_max = static_cast<double>(solver->last_factor_rankmax);
   c_bpack_setstats(stats, "Rank_max_Constr", &rank_max);
 
-  double compression_memory_mb =
-    solver->factorization_memory / (1024.0 * 1024.0);
+  // bytes / 1024e3, the unit the Fortran paths report memory in.  Mem_Fill
+  // is the name a caller reads for the size of a compressed matrix (they set
+  // it as Mem_Comp_for + Mem_Direct_for); without it a compression-only H2
+  // reported no memory at all.
+  double compression_memory_mb = solver->factorization_memory / 1024.0e3;
   c_bpack_setstats(stats, "Mem_Comp_for", &compression_memory_mb);
+  c_bpack_setstats(stats, "Mem_Fill", &compression_memory_mb);
 
   if (solver->options.verbosity >= 0) {
     (void)butterfly::dispatch_h2_compression_verification(solver);
@@ -119,6 +228,7 @@ static butterfly::ProgramOptions read_h2_program_options64(
   double H2_ID_proxy_d = 0.0;
   double H2_ID_proxy_points_d = 0.0;
   double BACA_Batch_d = 0.0;
+  double H2_s_op = 0.0;
   c_bpack_getoption(option, "tol_comp", &tolerance);
   c_bpack_getoption(option, "reduction_threshold", &reduction_threshold_d);
   c_bpack_getoption(option, "Nmin_leaf", &Nmin_leaf_d);
@@ -141,6 +251,7 @@ static butterfly::ProgramOptions read_h2_program_options64(
   c_bpack_getoption(option, "H2_ID_proxy", &H2_ID_proxy_d);
   c_bpack_getoption(option, "H2_ID_proxy_points", &H2_ID_proxy_points_d);
   c_bpack_getoption(option, "BACA_Batch", &BACA_Batch_d);
+  c_bpack_getoption(option, "H2_s_op", &H2_s_op);
 
   const int64_t reduction_threshold =
       static_cast<int64_t>(reduction_threshold_d);
@@ -195,11 +306,11 @@ static butterfly::ProgramOptions read_h2_program_options64(
     throw std::invalid_argument("H2_XRR_factor must be 0 or 1");
   }
   if (H2_use_gpu < 0 || H2_use_gpu > 2) {
-    throw std::invalid_argument("H2_use_gpu must be 0, 1 or 2");
+    throw std::invalid_argument("H2_use_gpu must be 0 (CPU) or 1 (GPU, FP64 tensor-core GEMMs); 2, the old tensor-core mode, is taken as 1");
   }
 #ifndef H2_HAVE_GPU
   if (H2_use_gpu != 0) {
-    throw std::invalid_argument("H2_use_gpu=1 or 2 requires a build with enable_h2_gpu=ON");
+    throw std::invalid_argument("H2_use_gpu=1 requires a build with enable_h2_gpu=ON");
   }
 #endif
   if (H2_CA_staged_halo != 0 && H2_CA_staged_halo != 2) {
@@ -250,7 +361,12 @@ static butterfly::ProgramOptions read_h2_program_options64(
   result.compress_factors = H2_compress_factors;
   result.gemm_split = H2_GEMM_split;
   result.xrr_factor = H2_XRR_factor;
-  result.use_gpu = H2_use_gpu;
+  result.use_gpu = H2_use_gpu != 0 ? 1 : 0;
+  {
+    double sym_d = 1.0;
+    c_bpack_getoption(option, "sym", &sym_d);
+    result.symmetric = std::llround(sym_d) != 0;
+  }
   result.ca_staged_halo = H2_CA_staged_halo;
   result.ca_owner_component = H2_CA_owner_component;
   result.ca_pack_shared = H2_CA_pack_shared;
@@ -263,6 +379,7 @@ static butterfly::ProgramOptions read_h2_program_options64(
   } else if (H2_ID_proxy == 2) {
     result.id_adaptive_batch = BACA_Batch;
   }
+  result.s_op = H2_s_op;
   if (result.precon == 2) result.CA_level = result.num_levels;
   butterfly::validate_h2_backend_selection(result);
   return result;
@@ -317,14 +434,14 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"precon",          "the use mode of butterflypack: 1: as a direct solver 2: as an iterative solver (compress the matrix and use it without a preconditioner), 3: as a preconditioned iterative solver (compress and invert the matrix, using the approximate inverse as a preconditioner)"},
 		{"xyzsort",         "the hierarchical partitioning algorithm: 0: no permutation 1: permutation based on KD-tree 2: permutation based on cobble-like partitioning"},
 		{"lrlevel",         "the level in the hierarchical partitioning (top-down numbered) above which butterfly is used and below which low-rank is used"},
-		{"sym",             "matrix symmetry flag; sym=1 is required by format-7 H2 and selects symmetric HODLR when format=1"},
+		{"sym",             "matrix symmetry flag; format-7 H2 takes sym=1 (transpose-symmetric) or sym=0 with h2_unstructured=1, and sym=1 selects symmetric HODLR when format=1"},
 		{"reduction_threshold", "format-7 H2 boxes-per-process threshold for reducing the active MPI process count"},
 		{"h2_unstructured", "format-7 H2 backend: 0 structured Color/CA, 1 color_unstructured (Color only)"},
 		{"h2_use_sketch",   "format-7 H2 ID mode: 0 full workspace, 1 materialized sparse sketch, 2 streamed sparse sketch on color levels"},
 		{"h2_lazy_schur",   "format-7 H2 color Schur mode: 0 eager, 1 lazy far, 2 lazy far plus generated near"},
 		{"h2_gemm_split",   "maximum task split for one format-7 H2 color work item; 0 disables splitting"},
 		{"h2_xrr_factor",   "format-7 H2 X_RR pivot factorization: 0 Bunch-Kaufman, 1 LU with partial pivoting"},
-		{"h2_use_gpu",      "format-7 H2 Color levels: 0 CPU, 1 GPU backend, 2 GPU backend with FP64 tensor-core GEMMs (build with enable_h2_gpu)"},
+		{"h2_use_gpu",      "format-7 H2 Color levels: 0 CPU, 1 GPU backend (FP64 tensor-core GEMMs for real data; 2 is taken as 1) (build with enable_h2_gpu)"},
 		{"h2_compress_factors", "format-7 H2 GPU: lossy compression (nvCOMP bitcomp) at tol_comp: 0 off, 1 on - the factors kept on the device for the solve (X_NR, T, X_SR) and the factorization's own data: the fill sources later waves and the level transition read, the near and parent blocks held under memory pressure, and the CA blocks on more than one rank (so the factorization is lossy too, within the tolerance)"},
 		{"hodlr_use_gpu",   "format-1 HODLR with lrlevel=0: 0 CPU, 1 GPU construction/multiply/factorization/solve, 2 the same with FP64 tensor-core GEMMs (build with enable_h2_gpu)"},
 		{"hodlr_gpu_pieces", "HODLR GPU construction: pieces per rank of a low-rank block shared by several ranks, spread over its ranks by estimated cost (rounded down to a power of 2; 1: the CPU's pieces; default 4)"},
@@ -337,6 +454,7 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"h2_id_radius",    "format-7 H2 mandatory ID neighborhood radius; 2 keeps the standard workspace"},
 		{"h2_id_proxy",     "format-7 H2 proxy mode: 0 none, 1 geometric surface, 2 adaptive row sampling"},
 		{"h2_id_proxy_points", "geometric surface samples when h2_id_proxy=1"},
+		{"h2_s_op",         "format-7 H2 IDs: an absolute floor tol_comp*h2_s_op on the rank rule, |R_kk| > max(tol_comp |R_11|, tol_comp h2_s_op); 0 off (default). At most ||A|| for compression-only H2 (precon 2), at most 1/||A^-1|| for the factorization (K + tau^2 I: tau^2)"},
 		{"errfillfull",     "errfillfull: a slow (n^2), thorough error checking is performed after the compression of each block"},
 		{"baca_batch",      "block size in batched ACA when reclr_leaf=4 or 5; adaptive H2 rows per spatial node when h2_id_proxy=2"},
 		{"reclr_leaf",      "low-rank compression algorithms 1:SVD 2:RRQR 3:ACA 4:BACA 5:BACA_improved 6:Pseudo-skeleton 7: ACA with naive parallelization"},
@@ -425,7 +543,7 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"use_qtt",         required_argument, 0, 37},
 		{"hextralevel",         required_argument, 0, 38},
 		{"iter_solver",         required_argument, 0, 39},
-		{"gmres_restart",       required_argument, 0, 1004},
+		{"gmres_restart",       required_argument, 0, 1005},
 		{"trans_invariant",         required_argument, 0, 40},
 			{"htensor_mvp_level_batch", required_argument, 0, 41},
 		{"use_fft_circulant",         required_argument, 0, 42},
@@ -451,9 +569,9 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"h2_ca_owner_component", required_argument, 0, 55},
 		{"H2_CA_owner_component", required_argument, 0, 55},
 		{"h2_ca_pack_shared", required_argument, 0, 1002},
-		{"H2_CA_pack_shared", required_argument, 0, 63},
+		{"H2_CA_pack_shared", required_argument, 0, 1002},
 		{"h2_ca_solve", required_argument, 0, 1003},
-		{"H2_CA_solve", required_argument, 0, 64},
+		{"H2_CA_solve", required_argument, 0, 1003},
 		{"h2_ca_owner_serial", required_argument, 0, 56},
 		{"H2_CA_owner_serial", required_argument, 0, 56},
 		{"h2_unstructured", required_argument, 0, 57},
@@ -466,6 +584,8 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		// through here too)
 		{"h2_compress_factors", required_argument, 0, 1001},
 		{"H2_compress_factors", required_argument, 0, 1001},
+		{"h2_s_op", required_argument, 0, 1004},
+		{"H2_s_op", required_argument, 0, 1004},
 		{"H2_use_gpu", required_argument, 0, 59},
 		{"hodlr_use_gpu", required_argument, 0, 60},
 		{"HODLR_use_gpu", required_argument, 0, 60},
@@ -791,6 +911,11 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		else { std::istringstream iss(v); iss >> opt_i; }
 		c_bpack_set_I_option(&option0, "H2_CA_solve", opt_i);
 		} break;
+		case 1004: {
+		std::istringstream iss(optarg);
+		iss >> opt_d;
+		c_bpack_set_D_option(&option0, "H2_s_op", opt_d);
+		} break;
 		case 61: {
 		std::istringstream iss(optarg);
 		iss >> opt_d;
@@ -816,7 +941,7 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		iss >> opt_i;
 		c_bpack_set_I_option(&option0, "iter_solver", opt_i);
 		} break;
-		case 1004: {
+		case 1005: {
 		std::istringstream iss(optarg);
 		iss >> opt_i;
 		c_bpack_set_I_option(&option0, "gmres_restart", opt_i);
@@ -1156,7 +1281,7 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
 	int fcomm;
 	c_bpack_get_comm(ptree, &fcomm);
 	MPI_Comm mpi_comm = MPI_Comm_f2c((MPI_Fint)fcomm);
-	require_symmetric_h2_option(option, mpi_comm, "c_bpack_construct_init");
+	check_h2_symmetry_option(option, mpi_comm, "c_bpack_construct_init");
 
 	// use datatype C_DT
     // construct H2 solver
@@ -1208,6 +1333,7 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       double H2_ID_proxy_d;
       double H2_ID_proxy_points_d;
       double BACA_Batch_d;
+      double H2_s_op = 0.0;
       c_bpack_getoption(option, "tol_comp", &tolerance);
       c_bpack_getoption(option, "reduction_threshold", &reduction_threshold_d);
       c_bpack_getoption(option, "Nmin_leaf", &Nmin_leaf_d);
@@ -1230,6 +1356,7 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       c_bpack_getoption(option, "H2_ID_proxy", &H2_ID_proxy_d);
       c_bpack_getoption(option, "H2_ID_proxy_points", &H2_ID_proxy_points_d);
       c_bpack_getoption(option, "BACA_Batch", &BACA_Batch_d);
+      c_bpack_getoption(option, "H2_s_op", &H2_s_op);
       int64_t reduction_threshold = (int64_t)reduction_threshold_d;
       int64_t Nmin_leaf = (int64_t)Nmin_leaf_d;
       const int CA_level = static_cast<int>(std::llround(CA_level_d));
@@ -1272,11 +1399,11 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
         throw std::invalid_argument("H2_XRR_factor must be 0 or 1");
       }
       if (H2_use_gpu < 0 || H2_use_gpu > 2) {
-        throw std::invalid_argument("H2_use_gpu must be 0, 1 or 2");
+        throw std::invalid_argument("H2_use_gpu must be 0 (CPU) or 1 (GPU, FP64 tensor-core GEMMs); 2, the old tensor-core mode, is taken as 1");
       }
 #ifndef H2_HAVE_GPU
       if (H2_use_gpu != 0) {
-        throw std::invalid_argument("H2_use_gpu=1 or 2 requires a build with enable_h2_gpu=ON");
+        throw std::invalid_argument("H2_use_gpu=1 requires a build with enable_h2_gpu=ON");
       }
 #endif
       if (H2_CA_staged_halo != 0 && H2_CA_staged_halo != 2) {
@@ -1321,12 +1448,17 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       H2_options.precon = static_cast<int>(std::llround(precon_d));
       H2_options.verbosity = static_cast<int>(std::llround(verbosity_d));
       H2_options.unstructured = H2_unstructured;
+      {
+        double sym_d = 1.0;
+        c_bpack_getoption(option, "sym", &sym_d);
+        H2_options.symmetric = std::llround(sym_d) != 0;
+      }
       H2_options.use_sketch = H2_use_sketch;
       H2_options.lazy_schur = H2_lazy_schur;
       H2_options.compress_factors = H2_compress_factors;
       H2_options.gemm_split = H2_GEMM_split;
       H2_options.xrr_factor = H2_XRR_factor;
-      H2_options.use_gpu = H2_use_gpu;
+      H2_options.use_gpu = H2_use_gpu != 0 ? 1 : 0;
       H2_options.ca_staged_halo = H2_CA_staged_halo;
       H2_options.ca_owner_component = H2_CA_owner_component;
       H2_options.ca_pack_shared = H2_CA_pack_shared;
@@ -1339,6 +1471,7 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       } else if (H2_ID_proxy == 2) {
         H2_options.id_adaptive_batch = BACA_Batch;
       }
+      H2_options.s_op = H2_s_op;
       if (H2_options.precon == 2) {
         H2_options.CA_level = H2_options.num_levels;
       }
@@ -1369,7 +1502,8 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
                   << ", h2_ca_solve=" << H2_options.ca_solve
                   << ", h2_ca_owner_serial=" << H2_options.ca_owner_serial
                   << ", h2_id_radius=" << H2_options.id_neighborhood_radius
-                  << ", h2_id_proxy=" << H2_options.id_proxy_mode;
+                  << ", h2_id_proxy=" << H2_options.id_proxy_mode
+                  << ", h2_s_op=" << H2_options.s_op;
         if (H2_options.id_proxy_mode == 1) {
           std::cout << ", h2_id_proxy_points=" << H2_options.id_proxy_points;
         } else if (H2_options.id_proxy_mode == 2) {
@@ -1384,8 +1518,17 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
 	  int idxe = -1;
 
       butterfly::h2_initiate<double, H2Data>(H2_solver, H2_options, Locations, rank, new2old, idxs, idxe);
-	  // convert to perms and Npo_loc
-	  c_bpack_set_mesh_h2(Npo, new2old.data(), &idxs, &idxe, msh);
+	  // convert to perms and Npo_loc.  The ranks' ranges go with it, so the
+	  // mesh carries a basis_group reproducing this distribution and a
+	  // butterfly block built on it (c_bf_construct_init, for an F12/F21 or a
+	  // Schur complement beside this matrix) is distributed the same way.
+	  int nproc_h2 = 1;
+	  MPI_Comm_size(H2_solver->comm, &nproc_h2);
+	  std::vector<int> rank_idxs(nproc_h2, 0), rank_idxe(nproc_h2, -1);
+	  MPI_Allgather(&idxs, 1, MPI_INT, rank_idxs.data(), 1, MPI_INT, H2_solver->comm);
+	  MPI_Allgather(&idxe, 1, MPI_INT, rank_idxe.data(), 1, MPI_INT, H2_solver->comm);
+	  c_bpack_set_mesh_h2(Npo, new2old.data(), &idxs, &idxe, &nproc_h2,
+	                      rank_idxs.data(), rank_idxe.data(), msh);
 	  *Npo_loc=idxe-idxs+1;
 	  if (perms != nullptr) {
 		std::copy(new2old.begin(), new2old.end(), perms);
@@ -1459,7 +1602,7 @@ void c_bpack_construct_init_distributed64(
           "c_bpack_construct_init_distributed64 currently supports only "
           "format=7; support for other ButterflyPACK formats is TODO");
     }
-    require_symmetric_h2_option(
+    check_h2_symmetry_option(
         option, comm, "c_bpack_construct_init_distributed64");
     if (*N_global <= 0 || *N_input_local < 0) {
       throw std::invalid_argument(
@@ -1554,7 +1697,7 @@ void c_bpack_construct_element_compute_distributed64(
   using H2Data = typename butterfly::fmm_data<C_DT>::type;
   auto* solver = get_h2_solver<H2Data>(
       bmat, "c_bpack_construct_element_compute_distributed64");
-  require_symmetric_h2_option(
+  check_h2_symmetry_option(
       option, solver->comm,
       "c_bpack_construct_element_compute_distributed64");
   if (!solver->distributed_layout) {
@@ -1573,6 +1716,7 @@ void c_bpack_construct_element_compute_distributed64(
       elem_extract == 2 ? C_FuncZmnBlock : nullptr;
   solver->kernel.quant = C_QuantApp;
   solver->kernel.dimension = solver->options.dimension;
+  solver->kernel.symmetric = solver->options.symmetric;
   MPI_Comm_rank(solver->comm, &solver->kernel.block_callback_pid);
   solver->kernel.register_level_coordinates(
       solver->tree->levels[solver->tree->num_levels - 1]);
@@ -1607,19 +1751,56 @@ void c_bpack_construct_element_compute(F2Cptr* bmat, F2Cptr* option,F2Cptr* stat
 	void* H2_raw = nullptr;
 	c_bpack_get_h2(*bmat, &H2_raw);
 	butterfly::H2<double, H2Data>* H2_solver = static_cast<butterfly::H2<double, H2Data>*>(H2_raw);
-	require_symmetric_h2_option(
+	check_h2_symmetry_option(
 	  option, H2_solver->comm, "c_bpack_construct_element_compute");
 	H2_solver->kernel.kernel = C_FuncZmn;
 	H2_solver->kernel.kernel64 = nullptr;
 	H2_solver->kernel.block_kernel64 = nullptr;
 	H2_solver->kernel.dimension = H2_solver->options.dimension;
+	H2_solver->kernel.symmetric = H2_solver->options.symmetric;
 	double elem_extract_d = 0.0;
 	c_bpack_getoption(option, "elem_extract", &elem_extract_d);
 	const int elem_extract = static_cast<int>(std::llround(elem_extract_d));
 	H2_solver->kernel.block_kernel =
 	  (elem_extract == 2) ? C_FuncZmnBlock : nullptr;
-	MPI_Comm_rank(MPI_COMM_WORLD, &H2_solver->kernel.block_callback_pid);
+	// the rank within this matrix's own communicator, not the world's: the
+	// block callback's pmaps name the owner of an intersection, and a caller
+	// that builds an H2 on a sub-communicator (a STRUMPACK front on
+	// MPI_COMM_SELF inside a larger job) resolves that id against the
+	// matrix's process tree, where a world rank is out of range
+	MPI_Comm_rank(H2_solver->comm, &H2_solver->kernel.block_callback_pid);
 	H2_solver->kernel.quant = C_QuantApp;
+	// elem_extract=1 with a block callback: the callback is collective (it
+	// may communicate, as c_bpack_extractelement_bridge does), so the blocks
+	// are fetched in rounds of all ranks (collective_entries.hpp); otherwise
+	// each rank calls its callbacks when it needs an entry
+	// (H2_use_gpu: the device reads the same blocks through the library's
+	// evaluator of them, gpu/collective_evaluator.hpp, in place of the
+	// application's)
+#if defined(H2_HAVE_GPU) && defined(DAT) && (DAT == 0 || DAT == 1)
+	if (const auto* e = fmm::gpu::evaluator_of(H2_solver->kernel.gpu_evaluator); e != nullptr && e->collective()) {
+	  H2_solver->kernel.gpu_evaluator.reset();
+	}
+#endif
+	H2_solver->kernel.collective.reset();
+	if (elem_extract == 1 && C_FuncZmnBlock != nullptr) {
+	  // (a nonsymmetric H2: each orientation of a pair of boxes fetched apart)
+	  H2_solver->kernel.collective =
+	    std::make_shared<fmm::CollectiveEntries<H2Data, typename butterfly::H2Kernel<double, H2Data>::kerData>>(
+	      H2_solver->comm, C_FuncZmnBlock, C_QuantApp, H2_solver->kernel.block_callback_pid,
+	      H2_solver->options.symmetric);
+	  // (c_bpack_set_sketch_callback: the ID sketches of kernel rows fetched
+	  // sketched; a nonsymmetric H2 needs c_bpack_set_sketch_transpose_callback
+	  // too, else it fetches their blocks, CollectiveEntries::set_sketch)
+	  H2_solver->kernel.collective->set_sketch(H2_solver->kernel.sketch_callback);
+	  H2_solver->kernel.collective->set_sketch_transposed(H2_solver->kernel.sketch_transpose_callback);
+#if defined(H2_HAVE_GPU) && defined(DAT) && (DAT == 0 || DAT == 1)
+	  if (H2_solver->options.use_gpu != 0) {
+	    H2_solver->kernel.gpu_evaluator =
+	      fmm::gpu::make_collective_evaluator<H2Data>(H2_solver->kernel.collective.get());
+	  }
+#endif
+	}
 #else
 	format7_requires_mpi("c_bpack_construct_element_compute");
 #endif
@@ -1896,6 +2077,27 @@ void c_bpack_input_to_internal(
 #endif
 }
 
+/*
+ * The batched-extraction profile of this process (unstructured/extraction.hpp,
+ * core/extraction_profile.hpp): seconds of the eight steps (resolve, tasks,
+ * vectors up, column side, compute, pack, route, unpack), then the route's
+ * MPI seconds, the entries computed, the bytes routed and the calls, summed
+ * over every compressed H2 this process served since the start (or since a
+ * CollectiveEntries::report, which resets it).  Local, not collective.
+ */
+void c_bpack_get_extraction_profile(double* vals) {
+#ifdef HAVE_MPI
+  const fmm::ExtractionProfile& p = fmm::extraction_profile();
+  for (int s = 0; s < fmm::ExtractionProfile::kSteps; ++s) vals[s] = p.seconds[s];
+  vals[8] = p.route_mpi;
+  vals[9] = p.entries_computed;
+  vals[10] = p.bytes_routed;
+  vals[11] = static_cast<double>(p.calls);
+#else
+  for (int s = 0; s < 12; ++s) vals[s] = 0.0;
+#endif
+}
+
 /* Inverse of c_bpack_input_to_internal, with the same batched layout. */
 void c_bpack_internal_to_input(
     F2Cptr* bmat, const int* nrhs,
@@ -1943,7 +2145,7 @@ void c_bpack_factor(F2Cptr*bmat, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree, F2Cp
     void* H2_raw = nullptr;
     c_bpack_get_h2(*bmat, &H2_raw);
     butterfly::H2<double, H2Data>* H2_solver = static_cast<butterfly::H2<double, H2Data>*>(H2_raw);
-	require_symmetric_h2_option(option, H2_solver->comm, "c_bpack_factor");
+	check_h2_symmetry_option(option, H2_solver->comm, "c_bpack_factor");
 
     int rank = 0;
     MPI_Comm_rank(H2_solver->comm, &rank);
@@ -1966,7 +2168,10 @@ void c_bpack_factor(F2Cptr*bmat, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree, F2Cp
 		double rank_max = static_cast<double>(H2_solver->last_factor_rankmax);
 		c_bpack_setstats(stats, "Rank_max", &rank_max);
 
-		double factorization_memory_MB = H2_solver->factorization_memory/(1024.0 * 1024.0);
+		// bytes / 1024e3, as the Fortran paths.  Mem_Fill stays unset: an H2
+		// compresses and factors in one pass and keeps no separate compressed
+		// form, so its whole size is the factor's.
+		double factorization_memory_MB = H2_solver->factorization_memory / 1024.0e3;
 		c_bpack_setstats(stats, "Mem_Factor", &factorization_memory_MB);
 	  }
 
@@ -2020,7 +2225,7 @@ void c_bpack_solve(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*bmat, F2Cptr*optio
     void* H2_raw = nullptr;
     c_bpack_get_h2(*bmat, &H2_raw);
     butterfly::H2<double, H2Data>* H2_solver = static_cast<butterfly::H2<double, H2Data>*>(H2_raw);
-	require_symmetric_h2_option(option, H2_solver->comm, "c_bpack_solve");
+	check_h2_symmetry_option(option, H2_solver->comm, "c_bpack_solve");
 
     int rank = 0;
     MPI_Comm_rank(H2_solver->comm, &rank);
@@ -2028,34 +2233,13 @@ void c_bpack_solve(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*bmat, F2Cptr*optio
     try {
       const int verbosity = sync_h2_verbosity(option, H2_solver);
       double t0 = MPI_Wtime();
-      const H2Data* b_h2 = reinterpret_cast<const H2Data*>(b);
 	  // A distributed64 handle exposes the caller's input ownership at this
-	  // public boundary.  Convert the entire RHS batch to tree ownership before
-	  // solving and convert the solution back below.  Legacy handles have no
-	  // layout object and already use the solver's internal ownership.
-	  const auto* distributed_layout = H2_solver->distributed_layout.get();
-	  int internal_nloc = *Nloc;
-	  if (distributed_layout != nullptr) {
-		if (distributed_layout->input_local_size != *Nloc) {
-		  throw std::invalid_argument(
-			"c_bpack_solve (distributed64): Nloc must equal the input-local size");
-		}
-		if (distributed_layout->internal_local_size >
-			std::numeric_limits<int>::max()) {
-		  throw std::overflow_error(
-			"c_bpack_solve (distributed64): internal local size exceeds INT_MAX");
-		}
-		internal_nloc = static_cast<int>(
-			distributed_layout->internal_local_size);
-	  }
-	  std::vector<H2Data> rhs(
-		static_cast<size_t>(internal_nloc) * static_cast<size_t>(*Nrhs));
-	  if (distributed_layout != nullptr) {
-		distributed_layout->input_to_internal(
-		  b_h2, rhs.data(), *Nrhs);
-	  } else {
-		std::copy_n(b_h2, rhs.size(), rhs.data());
-	  }
+	  // public boundary: the RHS batch goes to tree ownership and the solution
+	  // comes back below.
+	  std::vector<H2Data> rhs;
+	  const int internal_nloc = h2_values_to_internal(
+		H2_solver, reinterpret_cast<const H2Data*>(b), *Nloc, *Nrhs, rhs,
+		"c_bpack_solve");
 	  std::vector<H2Data> internal_solution;
 	  double precon_d = 1.0;
 	  c_bpack_getoption(option, "precon", &precon_d);
@@ -2086,15 +2270,8 @@ void c_bpack_solve(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*bmat, F2Cptr*optio
 		  throw std::runtime_error(
 			"c_bpack_solve (format 7): direct solve requires c_bpack_factor first");
 		}
-		std::vector<std::vector<fmm::SolveDataRequest<double, H2Data>>> solve_data(
-		  H2_solver->options.num_levels);
-		butterfly::dispatch_h2_solve(
-		  H2_solver, rhs, solve_data, *Nrhs, verbosity);
-		internal_solution.resize(
-		  static_cast<size_t>(internal_nloc) * static_cast<size_t>(*Nrhs));
-		butterfly::gather_local_solution(
-		  H2_solver->tree.get(), solve_data,
-		  internal_solution.data(), &internal_nloc, *Nrhs);
+		h2_apply_factorized_inverse(
+		  H2_solver, rhs, internal_solution, internal_nloc, *Nrhs, verbosity);
 	  }
 
 	  if (internal_solution.size() !=
@@ -2102,20 +2279,20 @@ void c_bpack_solve(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*bmat, F2Cptr*optio
 		throw std::runtime_error(
 		  "c_bpack_solve (format 7): internal solution length mismatch");
 	  }
-	  if (distributed_layout != nullptr) {
-		distributed_layout->internal_to_input(
-		  internal_solution.data(), reinterpret_cast<H2Data*>(x), *Nrhs);
-	  } else {
-		std::copy(internal_solution.begin(), internal_solution.end(),
-		          reinterpret_cast<H2Data*>(x));
-	  }
+	  h2_values_from_internal(
+		H2_solver, internal_solution, reinterpret_cast<H2Data*>(x), *Nrhs);
 
 	  double t_solve = MPI_Wtime() - t0;
 	  MPI_Allreduce(MPI_IN_PLACE, &t_solve, 1, MPI_DOUBLE, MPI_MAX, H2_solver->comm);
 	  c_bpack_setstats(stats, "Time_Solve", &t_solve);
     } catch (const std::exception& e) {
         std::cerr << "Error on rank " << rank << ": " << e.what() << std::endl;
-        MPI_Abort(MPI_COMM_WORLD, 1);
+        // Rethrown, not MPI_Abort(MPI_COMM_WORLD): these entries are called
+        // from C++ (no Fortran frame to unwind through), and a host solver
+        // compressing one front of many decides for itself what a failure
+        // means.  c_bpack_h2_inv_mult and c_bpack_h2_mult below catch again
+        // for the Fortran callers.
+        throw;
     }
 #else
 	format7_requires_mpi("c_bpack_solve");
@@ -2145,7 +2322,7 @@ void c_bpack_mult(char const * trans, C_DT const * xin,
     void* H2_raw = nullptr;
     c_bpack_get_h2(*bmat, &H2_raw);
     butterfly::H2<double, H2Data>* H2_solver = static_cast<butterfly::H2<double, H2Data>*>(H2_raw);
-	require_symmetric_h2_option(option, H2_solver->comm, "c_bpack_mult");
+	check_h2_symmetry_option(option, H2_solver->comm, "c_bpack_mult");
 
     int rank = 0;
     MPI_Comm_rank(H2_solver->comm, &rank);
@@ -2155,15 +2332,15 @@ void c_bpack_mult(char const * trans, C_DT const * xin,
         "c_bpack_mult (format 7): Ncol must be positive");
     }
 
-    // Only F·x is implemented for format 7 (transpose/conj-transpose not yet supported).
-    const char op = (trans && trans[0]) ? trans[0] : 'N';
-    if (op != 'N' && op != 'n') {
-      throw std::runtime_error(
-          "c_bpack_mult (format 7): only trans == 'N' is currently supported; got '" +
-          std::string(1, op) + "'");
-    }
-
     try {
+      // F x, F^T x (= F x for a transpose-symmetric H2), F^H x = conj(F^T
+      // conj(x)) (h2_trans_operation)
+      const char op = h2_trans_operation(trans, "c_bpack_mult (format 7)");
+      const bool transposed = h2_transposed(H2_solver, op);
+      if (*Ninloc != *Noutloc) {
+        throw std::invalid_argument(
+          "c_bpack_mult (format 7): Ninloc must equal Noutloc");
+      }
       const int verbosity = sync_h2_verbosity(option, H2_solver);
       double t0 = MPI_Wtime();
       double precon_d = 1.0;
@@ -2175,46 +2352,25 @@ void c_bpack_mult(char const * trans, C_DT const * xin,
 		  "c_bpack_mult (format 7): call c_bpack_factor before multiplication");
       }
 
-      const H2Data* xin_h2 = reinterpret_cast<const H2Data*>(xin);
 	  // Keep the public multiply contract in caller input order for a
 	  // distributed64 handle; the H2 multiply itself operates in tree order.
-	  // Legacy handles bypass both redistributions.
-	  const auto* distributed_layout = H2_solver->distributed_layout.get();
-	  int internal_nloc = *Ninloc;
-	  if (distributed_layout != nullptr) {
-		if (distributed_layout->input_local_size != *Ninloc ||
-			distributed_layout->input_local_size != *Noutloc) {
-		  throw std::invalid_argument(
-			"c_bpack_mult (distributed64): Ninloc and Noutloc must equal "
-			"the input-local size");
-		}
-		if (distributed_layout->internal_local_size >
-			std::numeric_limits<int>::max()) {
-		  throw std::overflow_error(
-			"c_bpack_mult (distributed64): internal local size exceeds INT_MAX");
-		}
-		internal_nloc = static_cast<int>(
-			distributed_layout->internal_local_size);
-	  }
-	  std::vector<H2Data> lhs(
-		static_cast<size_t>(internal_nloc) * static_cast<size_t>(*Ncol));
-	  if (distributed_layout != nullptr) {
-		distributed_layout->input_to_internal(xin_h2, lhs.data(), *Ncol);
-	  } else {
-		std::copy_n(xin_h2, lhs.size(), lhs.data());
-	  }
+	  std::vector<H2Data> lhs;
+	  int internal_nloc = h2_values_to_internal(
+		H2_solver, reinterpret_cast<const H2Data*>(xin), *Ninloc, *Ncol, lhs,
+		"c_bpack_mult");
+	  if (op == 'C') conjugate_h2_values(lhs);
 	  std::vector<H2Data> compressed_output;
 	  std::vector<std::vector<fmm::SolveDataRequest<double, H2Data>>> mul_data;
 
 	  if (H2_solver->build_state == butterfly::H2BuildState::H2_COMPRESSED) {
 		butterfly::dispatch_h2_compressed_multiply(
 		  H2_solver, lhs, compressed_output,
-		  *Ncol, verbosity >= 1);
+		  *Ncol, verbosity >= 1, transposed);
 	  } else {
 		mul_data.resize(H2_solver->options.num_levels);
 		butterfly::dispatch_h2_multiply(
 		  H2_solver, lhs, mul_data,
-		  *Ncol, verbosity >= 1);
+		  *Ncol, verbosity >= 1, transposed);
 	  }
 
 	  std::vector<H2Data> internal_output;
@@ -2232,13 +2388,9 @@ void c_bpack_mult(char const * trans, C_DT const * xin,
 		  H2_solver->tree.get(), mul_data,
 		  internal_output.data(), &internal_nloc, *Ncol);
 	  }
-	  if (distributed_layout != nullptr) {
-		distributed_layout->internal_to_input(
-		  internal_output.data(), reinterpret_cast<H2Data*>(xout), *Ncol);
-	  } else {
-		std::copy(internal_output.begin(), internal_output.end(),
-		          reinterpret_cast<H2Data*>(xout));
-	  }
+	  if (op == 'C') conjugate_h2_values(internal_output);
+	  h2_values_from_internal(
+		H2_solver, internal_output, reinterpret_cast<H2Data*>(xout), *Ncol);
 
 	  double t_mult = MPI_Wtime() - t0;
 	  MPI_Allreduce(MPI_IN_PLACE, &t_mult, 1, MPI_DOUBLE, MPI_MAX,
@@ -2251,7 +2403,12 @@ void c_bpack_mult(char const * trans, C_DT const * xin,
 
     } catch (const std::exception& e) {
         std::cerr << "Error on rank " << rank << ": " << e.what() << std::endl;
-        MPI_Abort(MPI_COMM_WORLD, 1);
+        // Rethrown, not MPI_Abort(MPI_COMM_WORLD): these entries are called
+        // from C++ (no Fortran frame to unwind through), and a host solver
+        // compressing one front of many decides for itself what a failure
+        // means.  c_bpack_h2_inv_mult and c_bpack_h2_mult below catch again
+        // for the Fortran callers.
+        throw;
     }
 #else
 	format7_requires_mpi("c_bpack_mult");
@@ -2259,6 +2416,396 @@ void c_bpack_mult(char const * trans, C_DT const * xin,
   }else{
 	c_bpack_mult_fortran(trans, xin, xout, Ninloc, Noutloc, Ncol, bmat, option, stats, ptree);
   }
+}
+
+void c_bpack_inv_mult(char const * trans, C_DT const * xin,
+	C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol,
+	F2Cptr* bmat,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree){
+
+  // xout = F^{-1} xin ('N'), F^{-T} xin ('T') or F^{-H} xin ('C'), F the
+  // factorized matrix; repeated on blocks of vectors (Schur sampling), so
+  // quiet below verbosity 1.  Format 7 applies the H2 factorization (the
+  // direct solve's sweeps, transposed for 'T' of a nonsymmetric H2; 'C'
+  // conjugates, h2_trans_operation).
+  double tmp;
+  c_bpack_getoption(option, "format", &tmp);
+  int format=(int)tmp;
+  if(format==7){
+#ifdef HAVE_MPI
+    using H2Data = typename butterfly::fmm_data<C_DT>::type;
+    void* H2_raw = nullptr;
+    c_bpack_get_h2(*bmat, &H2_raw);
+    butterfly::H2<double, H2Data>* H2_solver = static_cast<butterfly::H2<double, H2Data>*>(H2_raw);
+	check_h2_symmetry_option(option, H2_solver->comm, "c_bpack_inv_mult");
+
+    int rank = 0;
+    MPI_Comm_rank(H2_solver->comm, &rank);
+
+    try {
+      const char op = h2_trans_operation(trans, "c_bpack_inv_mult (format 7)");
+      const bool transposed = h2_transposed(H2_solver, op);
+      if (*Ncol <= 0) {
+        throw std::invalid_argument(
+          "c_bpack_inv_mult (format 7): Ncol must be positive");
+      }
+      if (*Ninloc != *Noutloc) {
+        throw std::invalid_argument(
+          "c_bpack_inv_mult (format 7): Ninloc must equal Noutloc");
+      }
+      if (H2_solver->build_state != butterfly::H2BuildState::RS_FACTORIZED) {
+        throw std::runtime_error(
+          "c_bpack_inv_mult (format 7): applies the factorization; call "
+          "c_bpack_factor with precon other than 2 first");
+      }
+      const int verbosity = sync_h2_verbosity(option, H2_solver);
+      double t0 = MPI_Wtime();
+
+      std::vector<H2Data> rhs;
+      const int internal_nloc = h2_values_to_internal(
+        H2_solver, reinterpret_cast<const H2Data*>(xin), *Ninloc, *Ncol, rhs,
+        "c_bpack_inv_mult");
+      if (op == 'C') conjugate_h2_values(rhs);
+      const double t_in = MPI_Wtime();
+      std::vector<H2Data> solution;
+      double t_apply[2] = {0.0, 0.0};
+      h2_apply_factorized_inverse(
+        H2_solver, rhs, solution, internal_nloc, *Ncol,
+        verbosity >= 1 ? verbosity : -1, t_apply, transposed);
+      const double t_out = MPI_Wtime();
+      if (op == 'C') conjugate_h2_values(solution);
+      h2_values_from_internal(
+        H2_solver, solution, reinterpret_cast<H2Data*>(xout), *Ncol);
+
+      // (as the Fortran inv_mult: this call's time)
+      double t_inv_mult = MPI_Wtime() - t0;
+      if (verbosity >= 1 && rank == 0) {
+        std::cout << "c_bpack_inv_mult (format 7, '" << op << "', " << *Ncol
+                  << " columns): " << t_inv_mult << " s on rank 0: to the tree's order "
+                  << t_in - t0 << ", sweeps " << t_apply[0] << ", gather "
+                  << t_apply[1] << ", back " << MPI_Wtime() - t_out << std::endl;
+      }
+      MPI_Allreduce(MPI_IN_PLACE, &t_inv_mult, 1, MPI_DOUBLE, MPI_MAX,
+                    H2_solver->comm);
+      c_bpack_setstats(stats, "Time_C_Mult", &t_inv_mult);
+      c_bpack_setstats(stats, "Time_C_Mult_Wrapper", &t_inv_mult);
+    } catch (const std::exception& e) {
+        std::cerr << "Error on rank " << rank << ": " << e.what() << std::endl;
+        // Rethrown, not MPI_Abort(MPI_COMM_WORLD): these entries are called
+        // from C++ (no Fortran frame to unwind through), and a host solver
+        // compressing one front of many decides for itself what a failure
+        // means.  c_bpack_h2_inv_mult and c_bpack_h2_mult below catch again
+        // for the Fortran callers.
+        throw;
+    }
+#else
+	format7_requires_mpi("c_bpack_inv_mult");
+#endif
+  }else{
+	c_bpack_inv_mult_fortran(trans, xin, xout, Ninloc, Noutloc, Ncol, bmat, option, stats, ptree);
+  }
+}
+
+// Fortran-facing wrappers of c_bpack_inv_mult and c_bpack_mult.  BPACK_Inv_Mult
+// and BPACK_Mult have no format-7 case, so C_BPACK_Inv_Mult and C_BPACK_Mult
+// (BPACK_wrapper.f90) send an H2 matrix here instead; c_bf_schur_deterministic
+// reaches its F11 inverse this way.  An exception must not unwind through the
+// Fortran frame that called this, so a failure is fatal here.
+static void h2_fortran_bridge_failed(const char* who, const std::exception& e) {
+  std::cerr << who << ": " << e.what() << std::endl;
+  std::cerr.flush();
+#ifdef HAVE_MPI
+  MPI_Abort(MPI_COMM_WORLD, 1);
+#endif
+  std::abort();
+}
+
+void c_bpack_h2_inv_mult(char const * trans, C_DT const * xin,
+	C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol,
+	F2Cptr* bmat,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree){
+  try {
+    c_bpack_inv_mult(trans, xin, xout, Ninloc, Noutloc, Ncol, bmat, option, stats, ptree);
+  } catch (const std::exception& e) {
+    h2_fortran_bridge_failed("c_bpack_h2_inv_mult", e);
+  }
+}
+
+void c_bpack_h2_mult(char const * trans, C_DT const * xin,
+	C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol,
+	F2Cptr* bmat,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree){
+  try {
+    c_bpack_mult(trans, xin, xout, Ninloc, Noutloc, Ncol, bmat, option, stats, ptree);
+  } catch (const std::exception& e) {
+    h2_fortran_bridge_failed("c_bpack_h2_mult", e);
+  }
+}
+
+#ifdef HAVE_MPI
+// The rank owning each intersection (pmaps of 1 x 1 grids only).
+static std::vector<int> single_rank_owners(int ninter, const int* pgidx, int npmap, const int* pmaps,
+                                           const char* caller) {
+  std::vector<int> owner(static_cast<size_t>(std::max(ninter, 0)));
+  for (int n = 0; n < ninter; ++n) {
+    const int pg = pgidx[n];
+    if (pg < 0 || pg >= npmap) {
+      throw std::invalid_argument(std::string(caller) + ": a process group out of range");
+    }
+    if (pmaps[pg] != 1 || pmaps[npmap + pg] != 1) {
+      throw std::invalid_argument(std::string(caller) +
+        ": an intersection owned by more than one rank (1 x 1 process grids only)");
+    }
+    owner[static_cast<size_t>(n)] = pmaps[2 * npmap + pg];
+  }
+  return owner;
+}
+
+template<typename H2Data>
+static butterfly::H2<double, H2Data>* h2_of(F2Cptr* bmat) {
+  if (bmat == nullptr || *bmat == nullptr) return nullptr;
+  void* raw = nullptr;
+  c_bpack_get_h2(*bmat, &raw);
+  return static_cast<butterfly::H2<double, H2Data>*>(raw);
+}
+
+// The blocks of a list of intersections from a compression-only
+// unstructured Color H2 (format 7; unstructured/extraction.hpp), each to one
+// rank of caller_comm (pmaps of 1 x 1 grids), collective over caller_comm;
+// the H2 on a subset of its ranks, bmat null on the others.
+static void h2_extract_elements(
+    F2Cptr* bmat, MPI_Comm caller_comm, int* Ninter, int* allrows, int* allcols,
+    C_DT* alldat_loc, int* rowidx, int* colidx, int* pgidx, int* Npmap,
+    int* pmaps, const char* caller) {
+  using H2Data = typename butterfly::fmm_data<C_DT>::type;
+  const std::vector<int> owner =
+    single_rank_owners(*Ninter, pgidx, *Npmap, pmaps, (std::string(caller) + " (format 7)").c_str());
+  butterfly::color_unstructured::extract_compressed_blocks(
+    h2_of<H2Data>(bmat), caller_comm, *Ninter, allrows, allcols, rowidx, colidx, owner,
+    reinterpret_cast<H2Data*>(alldat_loc));
+}
+
+// The sketched blocks of a list of requests from a compression-only
+// unstructured Color H2 (as h2_extract_elements; Omega's entries 1-based).
+static void h2_extract_sketches(
+    F2Cptr* bmat, MPI_Comm caller_comm, int* Nsketch, int* allrows, int* allcols, int* rowidx, int* colidx,
+    int* sketchdim, int* omegaidx, int* omega_row, int* omega_dest, double* omega_val, C_DT* alldat_loc,
+    int* pgidx, int* Npmap, int* pmaps, const char* caller, bool transposed) {
+  using H2Data = typename butterfly::fmm_data<C_DT>::type;
+  const std::vector<int> owner =
+    single_rank_owners(*Nsketch, pgidx, *Npmap, pmaps, (std::string(caller) + " (format 7)").c_str());
+  std::vector<int64_t> omega_off(static_cast<size_t>(std::max(*Nsketch, 0)) + 1, 0);
+  for (int n = 0; n < *Nsketch; ++n) {
+    if (omegaidx[n] < 0) throw std::invalid_argument(std::string(caller) + ": a negative sketch entry count");
+    omega_off[static_cast<size_t>(n) + 1] = omega_off[static_cast<size_t>(n)] + omegaidx[n];
+  }
+  const int64_t nomega = omega_off.back();
+  std::vector<int> orow(static_cast<size_t>(nomega)), odest(static_cast<size_t>(nomega));
+  for (int64_t e = 0; e < nomega; ++e) {
+    orow[static_cast<size_t>(e)] = omega_row[e] - 1;
+    odest[static_cast<size_t>(e)] = omega_dest[e] - 1;
+  }
+  butterfly::color_unstructured::extract_compressed_sketches(
+    h2_of<H2Data>(bmat), caller_comm, *Nsketch, allrows, allcols, rowidx, colidx, sketchdim, omega_off.data(),
+    orow.data(), odest.data(), omega_val, owner, reinterpret_cast<H2Data*>(alldat_loc), transposed);
+}
+#endif
+
+void c_bpack_extractelement(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree,
+	int* Ninter, int* Nallrows, int* Nallcols, int64_t* Nalldat_loc, int* allrows,int* allcols,
+	C_DT* alldat_loc, int* rowidx, int* colidx, int* pgidx, int* Npmap, int* pmaps){
+  // every rank holds the matrix: its own format
+  double tmp;
+  c_bpack_getoption(option, "format", &tmp);
+  int format=(int)tmp;
+  if(format==7){
+#ifdef HAVE_MPI
+    using H2Data = typename butterfly::fmm_data<C_DT>::type;
+    void* H2_raw = nullptr;
+    c_bpack_get_h2(*bmat, &H2_raw);
+    MPI_Comm comm = static_cast<butterfly::H2<double, H2Data>*>(H2_raw)->comm;
+    try {
+      h2_extract_elements(bmat, comm, Ninter, allrows, allcols, alldat_loc,
+                          rowidx, colidx, pgidx, Npmap, pmaps, "c_bpack_extractelement");
+    } catch (const std::exception& e) {
+      int rank = 0;
+      MPI_Comm_rank(comm, &rank);
+      std::cerr << "Error on rank " << rank << ": " << e.what() << std::endl;
+      MPI_Abort(comm, 1);
+    }
+#else
+	format7_requires_mpi("c_bpack_extractelement");
+#endif
+  }else{
+	c_bpack_extractelement_fortran(bmat, option, msh, stats, ptree, Ninter, Nallrows, Nallcols,
+	  Nalldat_loc, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps);
+  }
+}
+
+void c_bpack_extractelement_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree,
+	F2Cptr* ptree_caller, int* Ninter, int* Nallrows, int* Nallcols, int64_t* Nalldat_loc,
+	int* allrows,int* allcols, C_DT* alldat_loc, int* rowidx, int* colidx, int* pgidx,
+	int* Npmap, int* pmaps){
+#ifdef HAVE_MPI
+  // the source's format, from its ranks (the others hold no option)
+  int fcomm = 0;
+  c_bpack_get_comm(ptree_caller, &fcomm);
+  MPI_Comm caller_comm = MPI_Comm_f2c(static_cast<MPI_Fint>(fcomm));
+  int format = -1;
+  if (option != nullptr && *option != nullptr) {
+    double tmp = 0.0;
+    c_bpack_getoption(option, "format", &tmp);
+    format = static_cast<int>(tmp);
+  }
+  MPI_Allreduce(MPI_IN_PLACE, &format, 1, MPI_INT, MPI_MAX, caller_comm);
+  if (format == 7) {
+    try {
+      h2_extract_elements(bmat, caller_comm, Ninter, allrows, allcols, alldat_loc,
+                          rowidx, colidx, pgidx, Npmap, pmaps, "c_bpack_extractelement_bridge");
+    } catch (const std::exception& e) {
+      int rank = 0;
+      MPI_Comm_rank(caller_comm, &rank);
+      std::cerr << "Error on rank " << rank << ": " << e.what() << std::endl;
+      MPI_Abort(caller_comm, 1);
+    }
+    return;
+  }
+#endif
+  c_bpack_extractelement_bridge_fortran(bmat, option, msh, stats, ptree, ptree_caller, Ninter,
+    Nallrows, Nallcols, Nalldat_loc, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps);
+}
+
+
+void c_bpack_set_sketch_callback(F2Cptr* bmat, c_bpack_func_zmn_sketch C_FuncZmnSketch) {
+#ifdef HAVE_MPI
+  if (bmat == nullptr || *bmat == nullptr) {
+    throw std::invalid_argument("c_bpack_set_sketch_callback: null matrix handle");
+  }
+  using H2Data = typename butterfly::fmm_data<C_DT>::type;
+  butterfly::H2<double, H2Data>* solver = h2_of<H2Data>(bmat);
+  if (solver == nullptr) return;  // (not an H2: its entries are never sketched)
+  using Entries = fmm::CollectiveEntries<H2Data, typename butterfly::H2Kernel<double, H2Data>::kerData>;
+  solver->kernel.sketch_callback = reinterpret_cast<typename Entries::SketchCallback>(C_FuncZmnSketch);
+  if (solver->kernel.collective) solver->kernel.collective->set_sketch(solver->kernel.sketch_callback);
+#else
+  (void)bmat;
+  (void)C_FuncZmnSketch;
+#endif
+}
+
+void c_bpack_set_sketch_transpose_callback(F2Cptr* bmat, c_bpack_func_zmn_sketch C_FuncZmnSketchT) {
+#ifdef HAVE_MPI
+  if (bmat == nullptr || *bmat == nullptr) {
+    throw std::invalid_argument("c_bpack_set_sketch_transpose_callback: null matrix handle");
+  }
+  using H2Data = typename butterfly::fmm_data<C_DT>::type;
+  butterfly::H2<double, H2Data>* solver = h2_of<H2Data>(bmat);
+  if (solver == nullptr) return;  // (not an H2: its entries are never sketched)
+  using Entries = fmm::CollectiveEntries<H2Data, typename butterfly::H2Kernel<double, H2Data>::kerData>;
+  solver->kernel.sketch_transpose_callback = reinterpret_cast<typename Entries::SketchCallback>(C_FuncZmnSketchT);
+  if (solver->kernel.collective) {
+    solver->kernel.collective->set_sketch_transposed(solver->kernel.sketch_transpose_callback);
+  }
+#else
+  (void)bmat;
+  (void)C_FuncZmnSketchT;
+#endif
+}
+
+// c_bpack_extractsketch_bridge and its transposed form: Y_n = Omega_n
+// A(rows, columns), or with transposed Omega_n A(columns, rows)^T.
+static void extractsketch_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree,
+	F2Cptr* ptree_caller, int* Nsketch, int* Nallrows, int* Nallcols, int64_t* Nallomega, int64_t* Nalldat_loc,
+	int* allrows, int* allcols, int* rowidx, int* colidx, int* sketchdim, int* omegaidx, int* omega_row,
+	int* omega_dest, double* omega_val, C_DT* alldat_loc, int* pgidx, int* Npmap, int* pmaps, bool transposed,
+	const char* caller){
+#ifdef HAVE_MPI
+  (void)Nallomega;
+  (void)Nalldat_loc;
+  int fcomm = 0;
+  c_bpack_get_comm(ptree_caller, &fcomm);
+  MPI_Comm caller_comm = MPI_Comm_f2c(static_cast<MPI_Fint>(fcomm));
+  int crank = 0;
+  MPI_Comm_rank(caller_comm, &crank);
+  // the source's format, from its ranks (the others hold no option)
+  int format = -1;
+  if (option != nullptr && *option != nullptr) {
+    double tmp = 0.0;
+    c_bpack_getoption(option, "format", &tmp);
+    format = static_cast<int>(tmp);
+  }
+  MPI_Allreduce(MPI_IN_PLACE, &format, 1, MPI_INT, MPI_MAX, caller_comm);
+  try {
+    if (format == 7) {
+      h2_extract_sketches(bmat, caller_comm, Nsketch, allrows, allcols, rowidx, colidx, sketchdim, omegaidx,
+                          omega_row, omega_dest, omega_val, alldat_loc, pgidx, Npmap, pmaps, caller, transposed);
+      return;
+    }
+    // other formats: the requests' entries (transposed: A(columns, rows)),
+    // sketched on their owners
+    using H2Data = typename butterfly::fmm_data<C_DT>::type;
+    const std::vector<int> owner = single_rank_owners(*Nsketch, pgidx, *Npmap, pmaps, caller);
+    int64_t nentries = 0;
+    for (int n = 0; n < *Nsketch; ++n) {
+      if (owner[static_cast<size_t>(n)] == crank) nentries += static_cast<int64_t>(rowidx[n]) * colidx[n];
+    }
+    std::vector<H2Data> entries(static_cast<size_t>(std::max<int64_t>(nentries, 1)));
+    if (transposed) {
+      c_bpack_extractelement_bridge_fortran(bmat, option, msh, stats, ptree, ptree_caller, Nsketch, Nallcols,
+        Nallrows, &nentries, allcols, allrows, reinterpret_cast<C_DT*>(entries.data()), colidx, rowidx, pgidx,
+        Npmap, pmaps);
+    } else {
+      c_bpack_extractelement_bridge_fortran(bmat, option, msh, stats, ptree, ptree_caller, Nsketch, Nallrows,
+        Nallcols, &nentries, allrows, allcols, reinterpret_cast<C_DT*>(entries.data()), rowidx, colidx, pgidx,
+        Npmap, pmaps);
+    }
+    H2Data* out = reinterpret_cast<H2Data*>(alldat_loc);
+    int64_t at = 0, e0 = 0;
+    for (int n = 0; n < *Nsketch; ++n) {
+      const int64_t nr = rowidx[n], nc = colidx[n], d = sketchdim[n];
+      if (owner[static_cast<size_t>(n)] == crank) {
+        std::fill(out, out + d * nc, H2Data{0});
+        const H2Data* A = entries.data() + at;  // nr x nc, or transposed nc x nr
+        for (int64_t e = e0; e < e0 + omegaidx[n]; ++e) {
+          const int64_t r = omega_row[e] - 1, i = omega_dest[e] - 1;
+          const H2Data w = static_cast<H2Data>(omega_val[e]);
+          if (transposed) {
+            for (int64_t j = 0; j < nc; ++j) out[i + j * d] += w * A[j + r * nc];
+          } else {
+            for (int64_t j = 0; j < nc; ++j) out[i + j * d] += w * A[r + j * nr];
+          }
+        }
+        at += nr * nc;
+        out += d * nc;
+      }
+      e0 += omegaidx[n];
+    }
+  } catch (const std::exception& e) {
+    std::cerr << "Error on rank " << crank << ": " << e.what() << std::endl;
+    MPI_Abort(caller_comm, 1);
+  }
+#else
+  (void)bmat; (void)option; (void)msh; (void)stats; (void)ptree; (void)ptree_caller; (void)Nsketch;
+  (void)Nallrows; (void)Nallcols; (void)Nallomega; (void)Nalldat_loc; (void)allrows; (void)allcols;
+  (void)rowidx; (void)colidx; (void)sketchdim; (void)omegaidx; (void)omega_row; (void)omega_dest;
+  (void)omega_val; (void)alldat_loc; (void)pgidx; (void)Npmap; (void)pmaps; (void)transposed;
+  throw std::runtime_error(std::string(caller) + " requires MPI");
+#endif
+}
+
+void c_bpack_extractsketch_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree,
+	F2Cptr* ptree_caller, int* Nsketch, int* Nallrows, int* Nallcols, int64_t* Nallomega, int64_t* Nalldat_loc,
+	int* allrows, int* allcols, int* rowidx, int* colidx, int* sketchdim, int* omegaidx, int* omega_row,
+	int* omega_dest, double* omega_val, C_DT* alldat_loc, int* pgidx, int* Npmap, int* pmaps){
+  extractsketch_bridge(bmat, option, msh, stats, ptree, ptree_caller, Nsketch, Nallrows, Nallcols, Nallomega,
+    Nalldat_loc, allrows, allcols, rowidx, colidx, sketchdim, omegaidx, omega_row, omega_dest, omega_val,
+    alldat_loc, pgidx, Npmap, pmaps, false, "c_bpack_extractsketch_bridge");
+}
+
+void c_bpack_extractsketch_transpose_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree,
+	F2Cptr* ptree_caller, int* Nsketch, int* Nallrows, int* Nallcols, int64_t* Nallomega, int64_t* Nalldat_loc,
+	int* allrows, int* allcols, int* rowidx, int* colidx, int* sketchdim, int* omegaidx, int* omega_row,
+	int* omega_dest, double* omega_val, C_DT* alldat_loc, int* pgidx, int* Npmap, int* pmaps){
+  extractsketch_bridge(bmat, option, msh, stats, ptree, ptree_caller, Nsketch, Nallrows, Nallcols, Nallomega,
+    Nalldat_loc, allrows, allcols, rowidx, colidx, sketchdim, omegaidx, omega_row, omega_dest, omega_val,
+    alldat_loc, pgidx, Npmap, pmaps, true, "c_bpack_extractsketch_transpose_bridge");
 }
 
 
@@ -2272,7 +2819,7 @@ void c_bpack_logdet(C_DT* phase, C_RDT* logabsdet, F2Cptr* option, F2Cptr* bmat)
     void* H2_raw = nullptr;
     c_bpack_get_h2(*bmat, &H2_raw);
     butterfly::H2<double, H2Data>* H2_solver = static_cast<butterfly::H2<double, H2Data>*>(H2_raw);
-	require_symmetric_h2_option(option, H2_solver->comm, "c_bpack_logdet");
+	check_h2_symmetry_option(option, H2_solver->comm, "c_bpack_logdet");
 
 
 	if (H2_solver->build_state != butterfly::H2BuildState::RS_FACTORIZED) {

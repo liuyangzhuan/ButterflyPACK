@@ -168,6 +168,16 @@ __global__ void row_swap_kernel(const RowSwapItemT<T>* items) {
     const RowSwapItemT<T> item = items[blockIdx.x];
     for (int col = threadIdx.x; col < item.cols; col += blockDim.x) {
         T* c = item.a + static_cast<int64_t>(col) * item.lda;
+        if (item.forward) {
+            for (int i = 0; i < item.r; ++i) {
+                const int p = item.piv[i] - 1;
+                if (p == i) continue;
+                const T t = c[i];
+                c[i] = c[p];
+                c[p] = t;
+            }
+            continue;
+        }
         for (int i = item.r - 1; i >= 0; --i) {
             const int p = item.piv[i] - 1;
             if (p == i) continue;

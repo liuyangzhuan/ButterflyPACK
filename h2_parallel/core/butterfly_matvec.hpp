@@ -108,10 +108,11 @@ void h2_skeletonize_box(
     // against the materialized target, which is then sketched or not.
     const bool adaptive_on_sketch = use_sketch == 2 && tree->id_proxy_mode == 2;
     FactorizationThreadScratch<CoordType, DataType> scratch;
+    // (a nonsymmetric kernel: the stacked target, rows and columns of B)
     gather_id_workspace(
         tree,
         box, level, kernel, tolerance,
-        static_cast<const CoordType*>(nullptr), 0, CoordType{0}, true,
+        static_cast<const CoordType*>(nullptr), 0, CoordType{0}, kernel_symmetric(kernel, 0),
         scratch.workspace, scratch.workspace_rows, scratch.workspace_cols,
         0, box->on_boundary, false, &scratch.id_adaptive, !adaptive_on_sketch);
 
@@ -135,21 +136,19 @@ void h2_skeletonize_box(
         return;
     }
 
-    constexpr double sketch_factor = 1.0;
-    constexpr int sketch_nonzeros = 4;
+    const uint64_t sketch_seed = static_cast<uint64_t>(box->morton_index + 1);
+    const double abs_tolerance = id_absolute_tolerance(tree, tolerance);  // H2_s_op
     std::string trace_tail;
     if (h2_id_trace_enabled()) {
-        // the norm of the ID input (the sketch, as compute_id_sparse_sketch
-        // forms it), for box-by-box comparisons with the device path
+        // the norm of the ID input (the sketch, as id_sketch forms it), for
+        // box-by-box comparisons with the device path
         const int64_t m = scratch.workspace_rows, n = scratch.workspace_cols;
         int64_t d = m;
         double ssq = 0.0;
         if (use_sketch) {
-            d = std::max<int64_t>(std::min<int64_t>(static_cast<int64_t>(std::ceil(sketch_factor * n)), m), n);
-            std::vector<DataType> sketch(static_cast<size_t>(d * n));
-            sketch_sparse_random(scratch.workspace.data(), m, n, m, sketch.data(), d, d,
-                                 std::min<int>(sketch_nonzeros, static_cast<int>(d)),
-                                 static_cast<uint64_t>(box->morton_index + 1));
+            std::vector<DataType> sketch;
+            id_sketch(scratch.workspace.data(), m, n, m, sketch, sketch_seed);
+            d = id_sketch_shape(m, n).d;
             for (const DataType& v : sketch) ssq += std::norm(v);
         } else {
             for (const DataType& v : scratch.workspace) ssq += std::norm(v);
@@ -161,26 +160,21 @@ void h2_skeletonize_box(
     IDResult<DataType> id;
     if (adaptive_on_sketch) {
         const int64_t m = scratch.workspace_rows, n = scratch.workspace_cols;
-        const int64_t d = std::max<int64_t>(std::min<int64_t>(static_cast<int64_t>(std::ceil(sketch_factor * n)), m), n);
-        scratch.sketch_storage.assign(static_cast<size_t>(d * n), DataType{});
-        sketch_sparse_random(scratch.workspace.data(), m, n, m, scratch.sketch_storage.data(), d, d,
-                             std::min<int>(sketch_nonzeros, static_cast<int>(d)),
-                             static_cast<uint64_t>(box->morton_index + 1));
-        int64_t rows = d;
-        append_adaptive_id_training_rows(tree, box, kernel, tolerance, true, scratch.sketch_storage, rows, n,
-                                         &scratch.id_adaptive);
-        id = compute_id_complex(scratch.sketch_storage.data(), rows, n, rows, tolerance, 0);
+        id_sketch(scratch.workspace.data(), m, n, m, scratch.sketch_storage, sketch_seed);
+        int64_t rows = id_sketch_shape(m, n).d;
+        append_adaptive_id_training_rows(tree, box, kernel, tolerance, kernel_symmetric(kernel, 0),
+                                         scratch.sketch_storage, rows, n, &scratch.id_adaptive);
+        id = compute_id_complex(scratch.sketch_storage.data(), rows, n, rows, tolerance, 0, abs_tolerance);
     } else if (use_sketch) {
-        id = compute_id_sparse_sketch(
-            scratch.workspace.data(), scratch.sketch_storage,
-            scratch.workspace_rows, scratch.workspace_cols, scratch.workspace_rows,
-            tolerance, sketch_factor, sketch_nonzeros,
-            static_cast<uint64_t>(box->morton_index + 1));
+        const int64_t m = scratch.workspace_rows, n = scratch.workspace_cols;
+        id_sketch(scratch.workspace.data(), m, n, m, scratch.sketch_storage, sketch_seed);
+        const int64_t d = id_sketch_shape(m, n).d;
+        id = compute_id_complex(scratch.sketch_storage.data(), d, n, d, tolerance, 0, abs_tolerance);
     } else {
         id = compute_id_complex(
             scratch.workspace.data(),
             scratch.workspace_rows, scratch.workspace_cols, scratch.workspace_rows,
-            tolerance, 0);
+            tolerance, 0, abs_tolerance);
     }
     ensure_nonempty_box_id_rank(id, scratch.workspace_cols);
     if (h2_id_trace_enabled()) {
@@ -328,13 +322,9 @@ std::unordered_map<int64_t, std::vector<DataType>> exchange_h2_vectors_onehop(
     const std::unordered_set<int> neighbor_set(
         neighbor_ranks.begin(), neighbor_ranks.end());
 
-    const uint32_t grid_size = 1u << level_number;
-    auto owner_of_morton = [&](int64_t morton_index) {
-        std::vector<uint64_t> one{static_cast<uint64_t>(morton_index)};
-        const auto regions = morton::assign_to_processes_nd(
-            tree->dimension, one, level.num_active_processes, grid_size);
-        return level.morton_to_rank.at(static_cast<int>(regions.front()));
-    };
+    // (the level's region ranges: equal cubes, or unequal ranges for any
+    // rank count - region_partition.hpp)
+    auto owner_of_morton = [&](int64_t morton_index) { return level.owner_rank_of(morton_index); };
 
     std::sort(needed_remote_mortons.begin(), needed_remote_mortons.end());
     needed_remote_mortons.erase(
@@ -770,11 +760,22 @@ SparseMvpVerificationData<DataType> make_sparse_mvp_verification_data(
     const int64_t Nloc = static_cast<int64_t>(local_rows.size());
     std::vector<DataType> block(
         static_cast<size_t>(Nloc) * static_cast<size_t>(Npt_src));
-    if (Nloc > 0 && Npt_src > 0) {
-        kernel->evaluate_block_by_index(local_rows.data(), Nloc,
-                                        stv.idx.data(), Npt_src,
-                                        block.data(), Nloc);
-    }
+    // (entries through a collective callback: one phase of every rank)
+    run_entry_phase(kernel_entries(kernel, 0), std::vector<int64_t>{0}, [&](const std::vector<int64_t>& items) {
+        std::vector<int64_t> abandoned;
+        if (!items.empty() && Nloc > 0 && Npt_src > 0) {
+            try {
+                entry_item_begin();
+                kernel->evaluate_block_by_index(local_rows.data(), Nloc,
+                                                stv.idx.data(), Npt_src,
+                                                block.data(), Nloc);
+                entry_item_end();
+            } catch (const H2EntryMiss&) {
+                abandoned.push_back(0);
+            }
+        }
+        return abandoned;
+    });
 
     verification.exact_output.assign(static_cast<size_t>(Nloc), DataType{0.0});
     for (int64_t row = 0; row < Nloc; ++row) {

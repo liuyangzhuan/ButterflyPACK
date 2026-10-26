@@ -46,6 +46,25 @@ interface
       use iso_c_binding
       type(c_ptr), value :: h2_ptr
    end subroutine c_bpack_h2_delete
+
+   !>**** The C++ wrapper applies an H2 matrix (format 7), which BPACK_Inv_Mult
+   !> and BPACK_Mult have no case for.  These two catch, so a failure does not
+   !> unwind through the Fortran frame that called them.
+   subroutine c_bpack_h2_inv_mult(trans, xin, xout, Ninloc, Noutloc, Ncol, bmat, option, stats, ptree) bind(c, name="c_bpack_h2_inv_mult")
+      use iso_c_binding
+      character(kind=c_char) :: trans(*)
+      DT :: xin(*), xout(*)
+      integer(c_int) :: Ninloc, Noutloc, Ncol
+      type(c_ptr) :: bmat, option, stats, ptree
+   end subroutine c_bpack_h2_inv_mult
+
+   subroutine c_bpack_h2_mult(trans, xin, xout, Ninloc, Noutloc, Ncol, bmat, option, stats, ptree) bind(c, name="c_bpack_h2_mult")
+      use iso_c_binding
+      character(kind=c_char) :: trans(*)
+      DT :: xin(*), xout(*)
+      integer(c_int) :: Ninloc, Noutloc, Ncol
+      type(c_ptr) :: bmat, option, stats, ptree
+   end subroutine c_bpack_h2_mult
 end interface
 
 contains
@@ -1099,6 +1118,10 @@ contains
          val_d = option%H2_ID_proxy_points
          valid_opt = 1
       endif
+      if (trim(str) == 'H2_s_op' .or. trim(str) == 'h2_s_op') then
+         val_d = option%H2_s_op
+         valid_opt = 1
+      endif
 
       if (valid_opt == 0) write (*, *) 'invalid BPACK option: '//trim(str)
       deallocate (str)
@@ -1479,6 +1502,11 @@ contains
       if (trim(str) == 'tol_comp') then
          call c_f_pointer(val_Cptr, val_d)
          option%tol_comp = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'H2_s_op' .or. trim(str) == 'h2_s_op') then
+         call c_f_pointer(val_Cptr, val_d)
+         option%H2_s_op = val_d
          valid_opt = 1
       endif
       if (trim(str) == 'tol_rdetect' .or. trim(str) == 'tol_Rdetect') then
@@ -2005,14 +2033,17 @@ contains
    end subroutine C_BPACK_Set_Gpu
 
 
-   subroutine C_BPACK_Set_Mesh_H2(N, new2old, idxs, idxe,msh_Cptr) bind(c, name="c_bpack_set_mesh_h2")
+   subroutine C_BPACK_Set_Mesh_H2(N, new2old, idxs, idxe, nproc, rank_idxs, rank_idxe, msh_Cptr) bind(c, name="c_bpack_set_mesh_h2")
       implicit none
-      integer N
+      integer N, nproc
       integer new2old(N)
       integer idxs, idxe
+      integer rank_idxs(nproc), rank_idxe(nproc)
       type(c_ptr) :: msh_Cptr
       type(mesh), pointer::msh
-      integer ii
+      integer ii, level, Lrank, Maxlevel, extra, minsize, group, head, tail, mid
+      integer rh, rt, rmid, minleaf, ngrp
+      integer, allocatable :: rhd(:), rtl(:), th(:), tt(:)
 
       allocate(msh)
       msh%Nunk = N
@@ -2024,6 +2055,87 @@ contains
       enddo
       msh%idxs = idxs
       msh%idxe = idxe
+
+      !>**** The index tree a butterfly block built on this mesh needs:
+      !> C_BF_Construct_Init reads Maxgroup and basis_group, and
+      !> ComputeParallelIndices derives the block's M_p/N_p from the groups at
+      !> the level of the process tree, so those levels have to carry the
+      !> ranks' own ranges for the block to come out distributed exactly as
+      !> this H2 is.  Without this the mesh reached C_BF_Construct_Init with
+      !> Maxgroup undefined.  The process tree splits a group's ranks the way
+      !> NumberingPtree does: ranks [rh,rt] bisect at (rh+rt)/2, and a group
+      !> left with a single rank hands that rank to both children.  Mirroring
+      !> that here makes basis_group agree with pgrp at every level for any
+      !> rank count, not only a power of two; a one-rank group still splits its
+      !> index range, or the index tree would not partition 1..N.  The levels
+      !> below the process tree split evenly and only give the depth other
+      !> code asserts on.
+      Lrank = 0
+      do while (2**Lrank < nproc)
+         Lrank = Lrank + 1
+      enddo
+      minsize = N
+      do ii = 1, nproc
+         minsize = min(minsize, rank_idxe(ii) - rank_idxs(ii) + 1)
+      enddo
+      call BPACK_require(minsize >= 1, &
+         'c_bpack_set_mesh_h2: a rank holds no points; it cannot carry a share of a butterfly block')
+      call BPACK_require(rank_idxs(1) == 1 .and. rank_idxe(nproc) == N, &
+         'c_bpack_set_mesh_h2: the ranks index ranges do not tile 1..N')
+
+      ngrp = 2**(Lrank + 1) - 1
+      allocate (rhd(ngrp), rtl(ngrp), th(ngrp), tt(ngrp))
+      rhd(1) = 0; rtl(1) = nproc - 1
+      th(1) = 1; tt(1) = N
+      do level = 0, Lrank - 1
+         do group = 2**level, 2**(level + 1) - 1
+            rh = rhd(group); rt = rtl(group)
+            head = th(group); tail = tt(group)
+            if (rh == rt) then
+               rhd(2*group) = rh; rtl(2*group) = rt
+               rhd(2*group + 1) = rh; rtl(2*group + 1) = rt
+               mid = head + (tail - head + 1)/2 - 1
+            else
+               rmid = (rh + rt)/2
+               rhd(2*group) = rh; rtl(2*group) = rmid
+               rhd(2*group + 1) = rmid + 1; rtl(2*group + 1) = rt
+               mid = rank_idxe(rmid + 1)
+            endif
+            th(2*group) = head; tt(2*group) = mid
+            th(2*group + 1) = mid + 1; tt(2*group + 1) = tail
+         enddo
+      enddo
+
+      minleaf = N
+      do group = 2**Lrank, 2**(Lrank + 1) - 1
+         minleaf = min(minleaf, tt(group) - th(group) + 1)
+      enddo
+      call BPACK_require(minleaf >= 1, &
+         'c_bpack_set_mesh_h2: a leaf of the rank-level index tree is empty')
+      extra = 0
+      do while (extra < 2 .and. minleaf/(2**(extra + 1)) >= 1)
+         extra = extra + 1
+      enddo
+      Maxlevel = Lrank + extra
+      msh%Maxgroup = 2**(Maxlevel + 1) - 1
+      allocate (msh%basis_group(msh%Maxgroup))
+      do group = 1, ngrp
+         msh%basis_group(group)%head = th(group)
+         msh%basis_group(group)%tail = tt(group)
+      enddo
+      deallocate (rhd, rtl, th, tt)
+      do level = Lrank, Maxlevel - 1
+         do group = 2**level, 2**(level + 1) - 1
+            head = msh%basis_group(group)%head
+            tail = msh%basis_group(group)%tail
+            mid = head + (tail - head + 1)/2 - 1
+            msh%basis_group(2*group)%head = head
+            msh%basis_group(2*group)%tail = mid
+            msh%basis_group(2*group + 1)%head = mid + 1
+            msh%basis_group(2*group + 1)%tail = tail
+         enddo
+      enddo
+
       msh_Cptr = c_loc(msh)
    end subroutine C_BPACK_Set_Mesh_H2
 
@@ -4647,7 +4759,7 @@ contains
    !> @param Nallrows: total number of rows
    !> @param Nallcols: total number of columns
    !> @param Nalldat_loc: total number of local entries
-   subroutine C_BPACK_ExtractElement(bmat_Cptr, option_Cptr, msh_Cptr, stats_Cptr, ptree_Cptr, Ninter, Nallrows, Nallcols, Nalldat_loc, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps) bind(c, name="c_bpack_extractelement")
+   subroutine C_BPACK_ExtractElement(bmat_Cptr, option_Cptr, msh_Cptr, stats_Cptr, ptree_Cptr, Ninter, Nallrows, Nallcols, Nalldat_loc, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps) bind(c, name="c_bpack_extractelement_fortran")
       implicit none
       type(c_ptr), intent(in) :: bmat_Cptr
       type(c_ptr), intent(in) :: ptree_Cptr
@@ -4708,7 +4820,7 @@ contains
    !> intersection owned by one rank), collective over the caller's process tree ptree_caller_Cptr; bmat_Cptr,
    !> option_Cptr, msh_Cptr, stats_Cptr and ptree_Cptr are the source matrix's, null on the caller's ranks outside it
    !> (BPACK_ExtractElement_Bridge)
-   subroutine C_BPACK_ExtractElement_Bridge(bmat_Cptr, option_Cptr, msh_Cptr, stats_Cptr, ptree_Cptr, ptree_caller_Cptr, Ninter, Nallrows, Nallcols, Nalldat_loc, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps) bind(c, name="c_bpack_extractelement_bridge")
+   subroutine C_BPACK_ExtractElement_Bridge(bmat_Cptr, option_Cptr, msh_Cptr, stats_Cptr, ptree_Cptr, ptree_caller_Cptr, Ninter, Nallrows, Nallcols, Nalldat_loc, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps) bind(c, name="c_bpack_extractelement_bridge_fortran")
       implicit none
       type(c_ptr), intent(in) :: bmat_Cptr
       type(c_ptr), intent(in) :: ptree_Cptr
@@ -4810,6 +4922,13 @@ contains
       call c_f_pointer(option_Cptr, option)
       call c_f_pointer(stats_Cptr, stats)
       call c_f_pointer(ptree_Cptr, ptree)
+
+      !>**** format 7 (H2): applied by the C++ wrapper, as when a C++ caller
+      !> reaches it directly, so the stats below are left to that path too
+      if (option%format == H2) then
+         call c_bpack_h2_mult(trans, xin, xout, Ninloc, Noutloc, Ncol, bmat_Cptr, option_Cptr, stats_Cptr, ptree_Cptr)
+         return
+      endif
 
       stats%Flop_C_Mult = 0
       stats%Time_C_Mult = 0
@@ -5032,7 +5151,7 @@ contains
    !> @param stats_Cptr: the structure containing statistics
    !> @param ptree_Cptr: the structure containing process tree
    !> @param trans: 'C', 'T' or 'N'
-   subroutine C_BPACK_Inv_Mult(trans, xin, xout, Ninloc, Noutloc, Ncol, bmat_Cptr, option_Cptr, stats_Cptr, ptree_Cptr) bind(c, name="c_bpack_inv_mult")
+   subroutine C_BPACK_Inv_Mult(trans, xin, xout, Ninloc, Noutloc, Ncol, bmat_Cptr, option_Cptr, stats_Cptr, ptree_Cptr) bind(c, name="c_bpack_inv_mult_fortran")
       implicit none
       real(kind=8) t1, t2
       integer Ninloc, Noutloc, Ncol
@@ -5067,6 +5186,13 @@ contains
       call c_f_pointer(option_Cptr, option)
       call c_f_pointer(stats_Cptr, stats)
       call c_f_pointer(ptree_Cptr, ptree)
+
+      !>**** format 7 (H2): applied by the C++ wrapper, as when a C++ caller
+      !> reaches it directly, so the stats below are left to that path too
+      if (option%format == H2) then
+         call c_bpack_h2_inv_mult(trans, xin, xout, Ninloc, Noutloc, Ncol, bmat_Cptr, option_Cptr, stats_Cptr, ptree_Cptr)
+         return
+      endif
 
       stats%Flop_C_Mult = 0
       stats%Time_C_Mult = 0

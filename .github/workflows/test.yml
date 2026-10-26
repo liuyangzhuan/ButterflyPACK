@@ -5,7 +5,10 @@ on: [push, pull_request]
 jobs:
   test:
     name: Build and test
-    runs-on: ubuntu-latest
+    # ubuntu-latest moved to Ubuntu 26.04 in October 2026, whose archive no
+    # longer carries gcc-9/gfortran-9 (removed from Ubuntu after 24.04), so
+    # the toolchain install below fails there; 24.04 still has them.
+    runs-on: ubuntu-24.04
 
     strategy:
       matrix:

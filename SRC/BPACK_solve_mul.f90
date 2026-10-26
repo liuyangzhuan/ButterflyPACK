@@ -3351,6 +3351,11 @@ contains
          call HSS_Inv_Mult(trans, Ns, num_vectors, Vin, Vout, bmat%hss_bf, ptree, option, stats)
       case (HMAT,BLR)
          call Hmat_Inv_Mult(trans, Ns, num_vectors, Vin, Vout, bmat%h_mat, ptree, option, stats)
+      case default
+         !>**** without this an unhandled format returned with Vout untouched, so
+         !> the caller worked on whatever the array held (format 7 reaches its
+         !> inverse through C_BPACK_Inv_Mult, which sends it to the C++ wrapper)
+         call BPACK_require(.false., 'BPACK_Inv_Mult: option%format has no Fortran inverse')
       end select
 
    end subroutine BPACK_Inv_Mult
@@ -3405,6 +3410,9 @@ contains
          endif
       case (HSS)
          call HSS_Mult(trans, Ns, num_vectors, Vin, Vout, bmat%hss_bf, ptree, option, stats)
+      case default
+         !>**** as BPACK_Inv_Mult above: no silent fall-through
+         call BPACK_require(.false., 'BPACK_Mult: option%format has no Fortran multiply')
       end select
 
    end subroutine BPACK_Mult

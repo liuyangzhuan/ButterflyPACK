@@ -416,7 +416,6 @@ void hierarchical_factorization_parallel(
     // the GPU, 8 GB of 40; a colour's arrivals stay in it until its end)
     if (color_gpu_enabled()) gpu::begin_operator_build(tree, tree->comm, ca_owner_component == 3 ? 0.2 : 0.0);
     gpu::invalidate_device_solve();  // the device copies of the previous factors
-    if (color_gpu_enabled()) gpu::register_solve_keeper(tree);  // (an eviction brings its kept factors to the host)
 #endif
     DynamicThreadingContext dynamic_threading =
         make_dynamic_threading_context(tree->comm);
@@ -1117,7 +1116,7 @@ void hierarchical_factorization_parallel(
                             compute_and_modify(dimension,
                                 &box, level, kernel,
                                 scratch,
-                                tolerance, use_sketch, is_symmetric, is_hermitian,
+                                make_id_tolerance(tree, tolerance), use_sketch, is_symmetric, is_hermitian,
                                 &thread_pending[tid],
                                 factorization_method, use_owner_deferred_xnn
                             );
@@ -2312,7 +2311,7 @@ void butterfly_factorization_parallel(H2<CoordType,DataType>* solver, double* fa
   configure_color_gpu(solver->options.use_gpu != 0);
   fmm::env::report_environment(solver->comm);
 #ifdef H2_HAVE_GPU
-  fmm::gpu::tensor_core_gemm() = solver->options.use_gpu == 2;
+  fmm::gpu::tensor_core_gemm() = solver->options.use_gpu != 0;  // (real double: FP64 tensor cores)
 #endif
   fmm::HierarchicalFactorization<CoordType, DataType, butterfly::H2Kernel<CoordType, DataType>> factorizer(
     solver->options.N,

@@ -387,7 +387,7 @@ void factorize_CA_level(
                         }
                         compute_and_modify(
                             dimension, box, level, kernel, scratch,
-                            tolerance, use_sketch, is_symmetric, is_hermitian,
+                            make_id_tolerance(tree, tolerance), use_sketch, is_symmetric, is_hermitian,
                             static_cast<PendingFactorUpdates<DataType>*>(nullptr),
                             factorization_method, use_owner_deferred_xnn);
                     } catch (...) {

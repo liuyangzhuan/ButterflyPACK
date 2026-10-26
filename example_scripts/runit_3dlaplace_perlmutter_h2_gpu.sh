@@ -16,9 +16,9 @@
 # (in ../build_gpu).  One MPI rank per A100, four ranks per node sharing its 64
 # cores.  The rank count must be a power of 8 (1, 8, 64, 512).
 #
-# Overrides: NODES, RANKS_PER_NODE, GRID_SIZE, NMIN_LEAF, USE_GPU (1: FP64
-# GEMMs, 2: FP64 tensor-core GEMMs), METHOD (color, ca0), CA_LEVEL, JOB_ID (run
-# inside an existing allocation), REPO.
+# Overrides: NODES, RANKS_PER_NODE, GRID_SIZE, NMIN_LEAF, USE_GPU (0: CPU,
+# 1: GPU with FP64 tensor-core GEMMs), METHOD (color, ca0), CA_LEVEL, JOB_ID
+# (run inside an existing allocation), REPO.
 #
 # CA levels.  CA_LEVEL is the first (coarsest) level that uses CA: levels
 # >= CA_LEVEL use CA0, levels above it Color (10000: Color everywhere).  The
@@ -55,7 +55,7 @@ ranks_per_node=${RANKS_PER_NODE:-4}
 ranks=$((nodes * ranks_per_node))
 grid_size=${GRID_SIZE:-192}
 nmin_leaf=${NMIN_LEAF:-216}
-use_gpu=${USE_GPU:-2}
+use_gpu=${USE_GPU:-1}
 method=${METHOD:-color}
 job_id=${JOB_ID:-}
 

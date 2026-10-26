@@ -12,6 +12,7 @@
 #include <future>
 #include <sys/mman.h>
 #include <cuda_runtime.h>
+#include <nvtx3/nvToolsExt.h>
 #include "magma_v2.h"
 #include "device_kernels.hpp"
 #include <mpi.h>
@@ -202,7 +203,12 @@ public:
     // the levels waited less but pinned 0.7 s more in all, and Factor time did
     // not move at 192^3 and rose 0.2-0.3 s at 96^3 (GPU_CA_PLAN.md, (c3)).
     static constexpr size_t kChunk = size_t{256} << 20;
-    static constexpr int kAheadMax = 4;   // 1 GB pinning ahead at most
+    static constexpr int kAheadMax = 4;   // chunks pinning ahead at most
+    // The size pinned ahead follows the requests, up to the near store's
+    // largest extent: its 512 MB extents went past the 256 MB chunks pinned
+    // ahead and were pinned on the spot, inside the owner pass's packing -
+    // 3.8 s of the 384^3 leaf (8x boxes a rank) with the device idle.
+    static constexpr size_t kAheadSizeMax = size_t{512} << 20;
     static constexpr size_t kIdleKeep = size_t{1} << 30;   // idle bytes trim() keeps at least
     struct Chunk { char* ptr = nullptr; size_t bytes = 0, used = 0; double seconds = 0.0; };
     PinnedChunkPool() = default;
@@ -226,14 +232,15 @@ public:
         }
         const auto t0 = std::chrono::steady_clock::now();
         Chunk c;
-        if (bytes <= kChunk && !ahead_.empty()) {
-            const bool ready = ahead_.front().wait_for(std::chrono::seconds(0)) == std::future_status::ready;
-            c = ahead_.front().get();
+        if (!ahead_.empty() && bytes <= ahead_.front().first) {
+            const bool ready = ahead_.front().second.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+            c = ahead_.front().second.get();
             ahead_.pop_front();
             if (!ready) ahead_count_ = std::min(ahead_count_ * 2, kAheadMax);
         } else {
             if (device_ < 0) check_cuda(cudaGetDevice(&device_), "pinned pool: device");
             c = pin_chunk(std::max(kChunk, bytes), device_);
+            ahead_size_ = std::max(ahead_size_, std::min(bytes, kAheadSizeMax));
         }
         pin_wait_ += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
         pin_seconds_ += c.seconds;
@@ -253,7 +260,7 @@ public:
         if (!idle_.empty()) return;
         if (device_ < 0) check_cuda(cudaGetDevice(&device_), "pinned pool: device");
         while (static_cast<int>(ahead_.size()) < ahead_count_) {
-            ahead_.push_back(std::async(std::launch::async, &PinnedChunkPool::pin_chunk, kChunk, device_));
+            ahead_.emplace_back(ahead_size_, std::async(std::launch::async, &PinnedChunkPool::pin_chunk, ahead_size_, device_));
         }
     }
     // Idle chunks beyond `keep` bytes unpinned, largest first; returns the
@@ -317,7 +324,8 @@ private:
         munmap(c.ptr, c.bytes);
     }
     std::vector<Chunk> idle_;
-    std::deque<std::future<Chunk>> ahead_;
+    std::deque<std::pair<size_t, std::future<Chunk>>> ahead_;   // (its size, the chunk)
+    size_t ahead_size_ = kChunk;
     int ahead_count_ = 1;
     int device_ = -1;
     size_t pinned_ = 0, idle_bytes_ = 0, unpinned_ = 0;
@@ -463,8 +471,12 @@ typename MagmaScalar<DataType>::type to_magma(DataType value) {
     }
 }
 
-// H2_use_gpu=2: the backend's double GEMM batches (VBatch::gemm) run on the
-// FP64 tensor cores (launch_dgemm_vbatched_tc) instead of MAGMA.
+// The backend's double GEMM batches (VBatch::gemm) on the FP64 tensor cores
+// (launch_dgemm_vbatched_tc) instead of MAGMA: every H2 GPU run (H2_use_gpu=1)
+// and HODLR_use_gpu=2; complex batches stay on MAGMA.  The products are
+// bitwise MAGMA's - the DMMA rounds each product-add as MAGMA's kernel does,
+// in the same order - and faster at every shape measured (GPU_CA_PLAN.md,
+// "H2_use_gpu=1 is the tensor-core mode").
 inline bool& tensor_core_gemm() {
     static bool enabled = false;
     return enabled;
@@ -626,6 +638,31 @@ private:
     std::vector<cudaEvent_t> events_;
 };
 
+// A named range of host time on a profiler's timeline (Nsight Systems with
+// --trace=nvtx); without a profiler attached the calls do nothing.  The
+// wave's host phases carry these, so a timeline shows what the host was doing
+// while the device waited.  next() closes the range and opens the following
+// one; a range still open closes with the object.
+class HostRange {
+public:
+    explicit HostRange(const char* name) { nvtxRangePushA(name); }
+    ~HostRange() { end(); }
+    HostRange(const HostRange&) = delete;
+    HostRange& operator=(const HostRange&) = delete;
+    void next(const char* name) {
+        end();
+        nvtxRangePushA(name);
+        open_ = true;
+    }
+    void end() {
+        if (open_) nvtxRangePop();
+        open_ = false;
+    }
+
+private:
+    bool open_ = true;
+};
+
 // Host image of one wave's device metadata (index lists, launch items, MAGMA
 // size and pointer arrays), built directly in pinned memory and uploaded with
 // a single copy.  Entries are addressed by byte offsets, so the image can
@@ -783,7 +820,7 @@ struct VBatch {
     size_t sizes_offset = 0;     // m, n, k, lda, ldb, ldc: (count + 1) each
     size_t pointers_offset = 0;  // a, b, c: count each
     magma_int_t max_m = 0, max_n = 0, max_k = 0;
-    // tensor-core schedule (H2_use_gpu=2, set by stage): the tile blocks of
+    // tensor-core schedule (tensor_core_gemm(), set by stage): the tile blocks of
     // every entry, the 48 x 48 ones first, as {entry, row << 16 | column}
     bool tc = false;
     size_t tc_blocks_offset = 0;

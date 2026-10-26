@@ -32,7 +32,7 @@ endif()
 # (BPACK_EXAMPLE_GPU) when ButterflyPACK has its GPU backends.  The
 # drivers use the shared CUDA runtime, as the library does.
 if (enable_h2_gpu)
-  add_library(bpack_example_gpu OBJECT gpu/laplace3d_gpu.cu gpu/vie3d_gpu.cu gpu/emsurf_gpu.cu)
+  add_library(bpack_example_gpu OBJECT gpu/laplace3d_gpu.cu gpu/rbf3d_gpu.cu gpu/vie3d_gpu.cu gpu/emsurf_gpu.cu)
   set_target_properties(bpack_example_gpu PROPERTIES CUDA_STANDARD 17 CUDA_STANDARD_REQUIRED ON)
 endif()
 function(bpack_example_gpu_evaluators target)
@@ -72,6 +72,10 @@ add_executable(ie3d ${FZEXM3})
 target_link_libraries(ie3d ${all_link_libs_z})
 add_dependencies(ie3d ie2deigen)
 
+# The C++ EMSURF driver drives MPI itself (mpi.h, MPI_Init_thread,
+# MPI_Allreduce, MPI_Comm_c2f) and bpack_inv_mult_check.hpp includes mpi.h,
+# so it only exists in an MPI build; MPI_DUMMY stubs the Fortran side only.
+if(enable_mpi)
 set(CZEXM3 EMSURF_Driver.cpp EMSURF_Module.f90 EMSURF_C_Bindings.f90)
 add_executable(cie3d ${CZEXM3})
 target_link_libraries(cie3d ${all_link_libs_z})
@@ -79,6 +83,7 @@ bpack_example_gpu_evaluators(cie3d)
 set_target_properties(cie3d PROPERTIES
   Fortran_MODULE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/cie3d_modules")
 install(TARGETS cie3d RUNTIME DESTINATION "${CMAKE_INSTALL_LIBDIR}/EXAMPLE")
+endif()
 
 set(FZEXM4 EMSURF_Eigen_Driver.f90 EMSURF_Module.f90)
 add_executable(ie3deigen ${FZEXM4})
@@ -297,6 +302,13 @@ set(CLAPLACE3DH2 Laplace3D_H2Test_Driver.cpp)
 add_executable(claplace3d_h2 ${CLAPLACE3DH2})
 target_link_libraries(claplace3d_h2 ${all_link_libs_d})
 bpack_example_gpu_evaluators(claplace3d_h2)
+endif()
+
+if ((CMAKE_CXX_COMPILER_ID STREQUAL "GNU") OR (CMAKE_CXX_COMPILER_ID STREQUAL "PGI") OR (CMAKE_CXX_COMPILER_ID STREQUAL "Intel"))
+set(CRBF3DH2 RBF3D_H2Test_Driver.cpp)
+add_executable(crbf3d_h2 ${CRBF3DH2})
+target_link_libraries(crbf3d_h2 ${all_link_libs_d})
+bpack_example_gpu_evaluators(crbf3d_h2)
 endif()
 
 if ((CMAKE_CXX_COMPILER_ID STREQUAL "GNU") OR (CMAKE_CXX_COMPILER_ID STREQUAL "PGI") OR (CMAKE_CXX_COMPILER_ID STREQUAL "Intel"))

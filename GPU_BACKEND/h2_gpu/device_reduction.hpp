@@ -36,6 +36,18 @@
 namespace fmm {
 namespace gpu {
 
+// Whether every region of a level is whole boxes of the level above (a
+// parent's children on one rank): the condition of the device reduction.
+template<typename CoordType, typename DataType>
+bool regions_hold_whole_parents(const TreeLevel<CoordType, DataType>& level, int dimension) {
+    const int64_t nc = morton::children_per_box(dimension);
+    if (level.region_start.size() < 2) return false;
+    for (const int64_t s : level.region_start) {
+        if (s % nc != 0) return false;
+    }
+    return true;
+}
+
 struct ReductionStats {
     double total = 0.0, plan = 0.0, pack = 0.0, mpi = 0.0, unpack = 0.0;
     double bytes_sent = 0.0, bytes_received = 0.0;
@@ -76,12 +88,14 @@ ReductionStats reduce_parent_blocks(ParallelTree<CoordType, DataType>* tree,
         throw std::runtime_error("reduce_parent_blocks: an active rank neither sends nor receives");
     }
     // the rank holding a parent's children (all in one region of the child
-    // level), and a parent's owner at the parent level
-    const RegionLayout Lc = RegionLayout::of(dim, level.level, level.num_active_processes);
-    const RegionLayout Lp = RegionLayout::of(dim, level.level - 1, parent_level.num_active_processes);
-    if (!Lc.uniform || !Lp.uniform) throw std::runtime_error("reduce_parent_blocks: the levels' regions are not uniform cubes");
-    auto child_rank_of = [&](int64_t pm) { return level.morton_to_rank.at(static_cast<int>(Lc.region_of(pm * nc))); };
-    auto owner_of = [&](int64_t pm) { return parent_level.morton_to_rank.at(static_cast<int>(Lp.region_of(pm))); };
+    // level: its regions are whole parent boxes), and a parent's owner at the
+    // parent level, by the levels' ranges (equal cubes or not)
+    if (!regions_hold_whole_parents(level, dim)) {
+        throw std::runtime_error("reduce_parent_blocks: a region of level " + std::to_string(level.level) +
+                                 " splits a parent box");
+    }
+    auto child_rank_of = [&](int64_t pm) { return level.owner_rank_of(pm * nc); };
+    auto owner_of = [&](int64_t pm) { return parent_level.owner_rank_of(pm); };
     // whether this rank contributes its copy of pair (lo, hi): a local pair
     // always; a pair with another child rank's parent when that rank has
     // another owner, or when this rank holds the lower parent
@@ -94,6 +108,12 @@ ReductionStats reduce_parent_blocks(ParallelTree<CoordType, DataType>* tree,
         return mine_lo;
     };
     auto edge_key = [](int64_t lo, int64_t hi) { return (static_cast<uint64_t>(lo) << 32) | static_cast<uint64_t>(hi); };
+    // a nonsymmetric matrix: directed blocks, both of a pair under the
+    // contribution rule of the pair (lo, hi); a key goes as its two halves
+    const bool directed = !tree->factor_symmetric;
+    if (blocks && blocks->directed != directed) {
+        throw std::runtime_error("reduce_parent_blocks: blocks of the other symmetry");
+    }
 
     // ---- the sender's list (its blocks, kept in order), the owner's drops
     struct Head { int64_t kind, lo, hi, rows, cols; };  // kind 0: Schur block (lo == hi), 1: pair
@@ -120,7 +140,7 @@ ReductionStats reduce_parent_blocks(ParallelTree<CoordType, DataType>* tree,
             const int64_t lo = static_cast<int64_t>(key >> 32), hi = static_cast<int64_t>(key & 0xffffffffu);
             const DeviceMatrixT<S>& m = blocks->edges.at(key);
             if (m.ptr == nullptr) continue;
-            if (!contributes(lo, hi)) {
+            if (!(directed ? contributes(std::min(lo, hi), std::max(lo, hi)) : contributes(lo, hi))) {
                 if (receiver) {  // (the owner's own copy: the lower parent's rank sends it)
                     heap.free(m.ptr);
                     blocks->edges.erase(key);
@@ -195,7 +215,10 @@ ReductionStats reduce_parent_blocks(ParallelTree<CoordType, DataType>* tree,
     recvs.assign(peers.size(), {});
     recv_dst.assign(peers.size(), {});
     if (receiver) {
-        if (!blocks) blocks = std::make_unique<DeviceLevelBlocks<DataType>>();
+        if (!blocks) {
+            blocks = std::make_unique<DeviceLevelBlocks<DataType>>();
+            blocks->directed = directed;
+        }
         for (size_t i = 0; i < peers.size(); ++i) {
             const std::vector<int64_t>& h = recv_heads[i];
             for (size_t j = 0; j + 5 <= h.size(); j += 5) {

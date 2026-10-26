@@ -848,7 +848,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer:: H2_compress_factors !< H2 GPU lossy compression (nvCOMP bitcomp) at tol_comp: 0 off, 1 on: the factors kept on the device for the solve (X_NR, T, X_SR) and the factorization's own data (the fill sources later waves and the level transition read, the near and parent blocks held under memory pressure, the CA blocks on more than one rank), so the factorization is lossy too, within the tolerance; no other value
         integer:: H2_GEMM_split !< maximum OpenMP task split for one H2 color work item; 0 disables splitting
         integer:: H2_XRR_factor !< H2 X_RR pivot factorization: 0 Bunch-Kaufman, 1 LU with partial pivoting
-        integer:: H2_use_gpu !< H2 Color levels: 0 CPU, 1 GPU backend, 2 GPU backend with FP64 tensor-core GEMMs (requires a build with enable_h2_gpu)
+        integer:: H2_use_gpu !< H2 Color levels: 0 CPU, 1 GPU backend, its real double GEMMs on the FP64 tensor cores (2, the old tensor-core mode, is taken as 1; requires a build with enable_h2_gpu)
         integer:: HODLR_use_gpu !< HODLR (format 1, LRlevel 0): 0 CPU, 1 GPU backend, 2 GPU backend with FP64 tensor-core GEMMs (requires a build with enable_h2_gpu)
         integer:: HODLR_gpu_pieces !< HODLR GPU construction (HODLR_use_gpu > 0): pieces per rank of a low-rank block shared by several ranks, spread over its ranks by estimated cost (rounded down to a power of 2; 1: the CPU's pieces, each on its rank)
         integer:: H2_CA_staged_halo !< H2 CA halo mode: 0 legacy gather, 2 staged/overlapped gather
@@ -859,6 +859,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer:: H2_ID_radius !< diagnostic H2 ID neighborhood radius; 2 keeps the standard workspace
         integer:: H2_ID_proxy !< H2 ID proxy mode: 0 none, 1 geometric surface, 2 adaptive row sampling
         integer:: H2_ID_proxy_points !< geometric surface samples for H2 ID proxy mode 1
+        real(kind=8):: H2_s_op !< H2 IDs: absolute floor tol_comp*H2_s_op on the rank rule, |R_kk| > max(tol_comp |R_11|, tol_comp H2_s_op); 0 off (default). At most ||A|| for compression-only H2 (precon 2), at most 1/||A^-1|| for the factorization (K + tau^2 I: tau^2)
         integer:: use_fft_circulant !< 1: use reduced-kernel FFT circulant MVP, 2: build FFT circulant from fullmat then free fullmat
         integer:: fftw_plan_mode !< FFTW apply-plan mode: 0 estimate, 1 measure, 2 patient, 3 exhaustive
 

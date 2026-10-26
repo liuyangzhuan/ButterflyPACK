@@ -6,6 +6,7 @@
 #include <cmath>
 #include <algorithm>
 #include <cstring>
+#include <limits>
 #include <unordered_map>
 #include <ostream>
 #include <iostream>
@@ -115,6 +116,7 @@ void clear_modified_interaction_matrices(
         // Using the swap idiom is a guaranteed way to release the vector's capacity.
         std::vector<ModifiedBlock<DataType>>().swap(box.near_field_modified_interactions);
         box.near_field_interaction_map.clear();
+        box.near_field_interaction_map_nonsymmetry.clear();
 
         // Also reset the associated counter to maintain a consistent state.
         box.num_near_field_interactions = 0;
@@ -122,6 +124,7 @@ void clear_modified_interaction_matrices(
         // --- Clear Far-Field Interactions ---
         std::vector<ModifiedBlock<DataType>>().swap(box.far_field_modified_interactions);
         box.far_field_interaction_map.clear();
+        box.far_field_interaction_map_nonsymmetry.clear();
 
         // Reset the counter.
         box.num_far_field_interactions = 0;
@@ -129,6 +132,8 @@ void clear_modified_interaction_matrices(
         box.X_RS_entry = MatrixStorage<DataType>{};
         std::vector<int64_t>().swap(box.deferred_xnn_neighbor_point_counts);
         std::vector<DataType>().swap(box.lazy_original_x_nr);
+        std::vector<DataType>().swap(box.lazy_original_x_rn);
+        std::vector<DataType>().swap(box.deferred_xnn_temp4);
     };
 
     // Iterate through all local boxes and clear their interaction data.
@@ -168,6 +173,7 @@ void clear_ghosts(TreeLevel<CoordType, DataType>& level) {
         // Using the swap idiom is a guaranteed way to release the vector's capacity.
         std::vector<ModifiedBlock<DataType>>().swap(box.near_field_modified_interactions);
         box.near_field_interaction_map.clear();
+        box.near_field_interaction_map_nonsymmetry.clear();
 
         // Also reset the associated counter to maintain a consistent state.
         box.num_near_field_interactions = 0;
@@ -175,6 +181,7 @@ void clear_ghosts(TreeLevel<CoordType, DataType>& level) {
         // --- Clear Far-Field Interactions ---
         std::vector<ModifiedBlock<DataType>>().swap(box.far_field_modified_interactions);
         box.far_field_interaction_map.clear();
+        box.far_field_interaction_map_nonsymmetry.clear();
 
         // Reset the counter.
         box.num_far_field_interactions = 0;
@@ -338,7 +345,159 @@ int64_t point_to_morton(
         dimension, coordinates[0], coordinates[1], coordinates[2]);
 }
 
+/**
+ * @brief The points in each box of the region weight level (region_partition.hpp),
+ * for splitting the levels' ranges by points: every point binned at the leaf, as
+ * the trees bin them, and counted in its box of that level.  `distributed`: each
+ * rank holds its own points (the counts are summed over `comm`); else every rank
+ * holds all of them and rank 0's count is broadcast.  Size: at most
+ * kRegionWeightBoxes boxes a rank.
+ */
+template<typename CoordType>
+RegionWeights region_weights_of_points(
+    const CoordType* coords,
+    int64_t num_points,
+    int32_t dimension,
+    int32_t num_levels,
+    const CoordType global_bounds[6],
+    MPI_Comm comm,
+    bool distributed) {
+    int rank = 0, size = 1;
+    MPI_Comm_rank(comm, &rank);
+    MPI_Comm_size(comm, &size);
+    const int level = region_weight_level(dimension, num_levels, size);
+    const int leaf = num_levels - 1;
+    const int shift = dimension * (leaf - level);
+    std::vector<int64_t> count(size_t{1} << (dimension * level), 0);
+    if (distributed || rank == 0) {
+        if (num_points > 0 && coords == nullptr) {
+            throw std::invalid_argument("region_weights_of_points: null coordinates");
+        }
+        for (int64_t i = 0; i < num_points; ++i) {
+            CoordType point[3] = {CoordType(0), CoordType(0), CoordType(0)};
+            for (int d = 0; d < dimension; ++d) point[d] = coords[i * dimension + d];
+            int32_t grid[3];
+            const int64_t morton = point_to_morton(point, dimension, global_bounds, leaf, grid);
+            ++count[static_cast<size_t>(morton >> shift)];
+        }
+    }
+    if (count.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
+        throw std::overflow_error("region_weights_of_points: too many boxes");
+    }
+    const int n = static_cast<int>(count.size());
+    if (distributed) {
+        MPI_Allreduce(MPI_IN_PLACE, count.data(), n, MPI_INT64_T, MPI_SUM, comm);
+    } else {
+        MPI_Bcast(count.data(), n, MPI_INT64_T, 0, comm);
+    }
+    return RegionWeights::of_counts(level, count);
+}
 
+
+
+/**
+ * @brief The tree depth from the occupied boxes (H2_unstructured): the rule
+ * from N alone (`num_levels`, as if the points filled the bounding box) made
+ * deeper while the occupied leaf boxes still hold at least `nmin_leaf` points
+ * on average, so that points on a surface or in clusters get leaves of about
+ * nmin_leaf points too.  Never shallower than `num_levels` (volume-filling
+ * points keep their depth), and with at most kOccupancyBoxesPerPoint * N leaf
+ * boxes in all (the unstructured slabs hold the empty boxes too).  Each level's
+ * occupied boxes are counted by sending each rank's distinct boxes to an owner
+ * rank by a hash of the box: no table over all boxes.  `distributed`: each rank
+ * holds its own points; else every rank holds all of them and counts a slice.
+ * Collective over comm; the occupied leaf boxes at the chosen depth in
+ * *occupied (0 when it is `num_levels` itself).
+ */
+constexpr int64_t kOccupancyBoxesPerPoint = 4;
+
+template<typename CoordType>
+int occupancy_num_levels(
+    const CoordType* coords,
+    int64_t num_points,
+    int32_t dimension,
+    int32_t num_levels,
+    int64_t n_global,
+    int64_t nmin_leaf,
+    const CoordType global_bounds[6],
+    MPI_Comm comm,
+    bool distributed,
+    int64_t* occupied = nullptr,
+    bool* capped = nullptr) {
+    if (occupied != nullptr) *occupied = 0;
+    if (capped != nullptr) *capped = false;
+    if (nmin_leaf <= 0 || n_global <= 0) return num_levels;
+    int rank = 0, size = 1;
+    MPI_Comm_rank(comm, &rank);
+    MPI_Comm_size(comm, &size);
+    int64_t first = 0, count = num_points;
+    if (!distributed) {
+        const int64_t base = num_points / size, extra = num_points % size;
+        first = rank * base + std::min<int64_t>(rank, extra);
+        count = base + (rank < extra ? 1 : 0);
+    }
+    if (count > 0 && coords == nullptr) throw std::invalid_argument("occupancy_num_levels: null coordinates");
+    const int max_leaf = dimension == 3 ? 20 : 30;  // (the Morton codes' bits)
+    auto mix = [](uint64_t x) {  // (splitmix64)
+        x += 0x9e3779b97f4a7c15ULL;
+        x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
+        x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
+        return x ^ (x >> 31);
+    };
+    int best = num_levels;
+    for (int levels = num_levels + 1;; ++levels) {
+        const int leaf = levels - 1;
+        if (leaf > max_leaf) break;
+        const bool over_cap = std::ldexp(1.0, dimension * leaf) >
+                              static_cast<double>(kOccupancyBoxesPerPoint) * static_cast<double>(n_global);
+        // this rank's distinct leaf boxes, to their owners by hash
+        std::vector<int64_t> mine(static_cast<size_t>(count));
+        for (int64_t i = 0; i < count; ++i) {
+            CoordType point[3] = {CoordType(0), CoordType(0), CoordType(0)};
+            for (int d = 0; d < dimension; ++d) point[d] = coords[(first + i) * dimension + d];
+            int32_t grid[3];
+            mine[static_cast<size_t>(i)] = point_to_morton(point, dimension, global_bounds, leaf, grid);
+        }
+        std::sort(mine.begin(), mine.end());
+        mine.erase(std::unique(mine.begin(), mine.end()), mine.end());
+        std::vector<int> sc(static_cast<size_t>(size), 0), rc(static_cast<size_t>(size)), sd(static_cast<size_t>(size)),
+            rd(static_cast<size_t>(size));
+        std::vector<int> to(mine.size());
+        for (size_t j = 0; j < mine.size(); ++j) {
+            to[j] = static_cast<int>(mix(static_cast<uint64_t>(mine[j])) % static_cast<uint64_t>(size));
+            ++sc[static_cast<size_t>(to[j])];
+        }
+        MPI_Alltoall(sc.data(), 1, MPI_INT, rc.data(), 1, MPI_INT, comm);
+        int64_t stotal = 0, rtotal = 0;
+        for (int p = 0; p < size; ++p) {
+            sd[static_cast<size_t>(p)] = static_cast<int>(stotal);
+            rd[static_cast<size_t>(p)] = static_cast<int>(rtotal);
+            stotal += sc[static_cast<size_t>(p)];
+            rtotal += rc[static_cast<size_t>(p)];
+        }
+        if (stotal > std::numeric_limits<int>::max() || rtotal > std::numeric_limits<int>::max()) {
+            throw std::overflow_error("occupancy_num_levels: too many boxes on a rank");
+        }
+        std::vector<int64_t> sbuf(static_cast<size_t>(stotal)), rbuf(static_cast<size_t>(rtotal));
+        {
+            std::vector<int> at(sd);
+            for (size_t j = 0; j < mine.size(); ++j) sbuf[static_cast<size_t>(at[static_cast<size_t>(to[j])]++)] = mine[j];
+        }
+        MPI_Alltoallv(sbuf.data(), sc.data(), sd.data(), MPI_INT64_T, rbuf.data(), rc.data(), rd.data(), MPI_INT64_T,
+                      comm);
+        std::sort(rbuf.begin(), rbuf.end());
+        int64_t distinct = static_cast<int64_t>(std::unique(rbuf.begin(), rbuf.end()) - rbuf.begin());
+        MPI_Allreduce(MPI_IN_PLACE, &distinct, 1, MPI_INT64_T, MPI_SUM, comm);
+        if (distinct <= 0 || n_global < nmin_leaf * distinct) break;
+        if (over_cap) {  // (deeper by the points, too many boxes in all)
+            if (capped != nullptr) *capped = true;
+            break;
+        }
+        best = levels;
+        if (occupied != nullptr) *occupied = distinct;
+    }
+    return best;
+}
 
 /**
  * @brief Compute which processes are active at each level (FMM3D.pdf Section 5.3)
@@ -346,7 +505,8 @@ int64_t point_to_morton(
  * Also builds Morton ID mapping and communication patterns for process reduction.
  */
 template<typename CoordType, typename DataType>
-void compute_active_processes(ParallelTree<CoordType, DataType>* tree) {
+void compute_active_processes(ParallelTree<CoordType, DataType>* tree,
+                              const RegionWeights& region_weights = RegionWeights{}) {
      /**
      * Process Reduction Logic (FMM3D.pdf Section 6.4):
      * 
@@ -363,12 +523,41 @@ void compute_active_processes(ParallelTree<CoordType, DataType>* tree) {
      * to a child rank from the wrong Morton group.
      */
     
-    if (!morton::is_valid_process_count(tree->dimension, tree->mpi_size)) {
+    // Any rank count for the unstructured Color path (any_process_count):
+    // the regions are then contiguous Morton ranges of unequal length
+    // (region_partition.hpp); the structured and CA levels keep equal cubes.
+    if (!tree->any_process_count && !morton::is_valid_process_count(tree->dimension, tree->mpi_size)) {
         throw std::invalid_argument(
             std::to_string(tree->dimension) +
             "D tree requires process count to be " +
-            std::to_string(1 << tree->dimension) + "^k");
+            std::to_string(1 << tree->dimension) + "^k (any count with H2_unstructured=1)");
     }
+    // the counts and ranges of every level (region_partition.hpp), the
+    // ranges split by the points in the boxes where the caller gave them, and
+    // more ranks kept on the coarse levels (the unstructured path, any rank
+    // count); possibly with the first reduction a level finer than
+    // reduction_threshold asks, so that the leaf regions are even
+    const RegionPlan region_plan = plan_regions(tree->dimension, tree->num_levels, tree->mpi_size,
+                                                tree->reduction_threshold, region_weights, tree->any_process_count);
+    const std::vector<int32_t>& region_count = region_plan.count;
+    const std::vector<std::vector<int64_t>>& region_start_of = region_plan.start;
+    if (tree->mpi_rank == 0 && (!region_weights.empty() || !region_plan.bricks)) {
+        std::cout << "H2 tree: " << tree->mpi_size << " ranks, "
+                  << (region_plan.bricks ? "equal cubes" : "Morton ranges") << ": the largest leaf region holds "
+                  << region_plan.leaf_imbalance << " of the mean " << (region_weights.empty() ? "boxes" : "points");
+        if (region_plan.threshold != tree->reduction_threshold) {
+            std::cout << "; reduction_threshold " << tree->reduction_threshold << " -> " << region_plan.threshold
+                      << " (the first reduction a level finer, for whole parent boxes)";
+        }
+        std::cout << "; active ranks by level:";
+        for (int32_t c : region_count) std::cout << " " << c;
+        std::cout << std::endl;
+        if (region_plan.empty_region) {
+            std::cout << "H2 tree: warning: a leaf region has no points (no layout of these "
+                      << tree->mpi_size << " ranks avoids it)" << std::endl;
+        }
+    }
+    tree->reduction_threshold = region_plan.threshold;
 
     std::vector<int> gathered_node_roots(tree->mpi_size, -1);
     std::vector<int> gathered_local_ranks(tree->mpi_size, -1);
@@ -458,6 +647,9 @@ void compute_active_processes(ParallelTree<CoordType, DataType>* tree) {
     }
     tree->levels[leaf_level].my_morton_id = tree->mpi_rank;
     tree->levels[leaf_level].parent_level_owner = -1;
+    tree->levels[leaf_level].region_start = region_start_of[static_cast<size_t>(leaf_level)];
+    tree->levels[leaf_level].regions_cubic =
+        region_starts_are_bricks(tree->dimension, leaf_level, region_start_of[static_cast<size_t>(leaf_level)]);
     
     for (int32_t level = leaf_level - 1; level >= 0; --level) {
         auto& lvl = tree->levels[level];
@@ -467,20 +659,16 @@ void compute_active_processes(ParallelTree<CoordType, DataType>* tree) {
         lvl.rank_to_morton.clear();
         lvl.children_senders.clear();
         
-        int64_t boxes_at_level = 1LL << (tree->dimension * level);
         int32_t prev_active = child_lvl.num_active_processes;
-        int64_t boxes_per_process = boxes_at_level / prev_active;
-        const int reduction_factor = morton::children_per_box(tree->dimension);
 
         switch (tree->reduction_pattern) {
             case ReductionPattern::UNIFORM:
-                if (boxes_per_process < tree->reduction_threshold) {
-                    lvl.num_active_processes = std::max(1, prev_active / reduction_factor);
-                } else {
-                    lvl.num_active_processes = prev_active;
-                }
-                // printf("mpi rank: %d, Level %d: boxes at level: %lld, boxes per process: %lld, active processes: %d\n", tree->mpi_rank,
-                //     level, boxes_at_level, boxes_at_level / lvl.num_active_processes, lvl.num_active_processes);
+                // fewer than reduction_threshold boxes per process of the level
+                // below: prev_active / 2^d, rounded up (region_counts; the same
+                // as before for (2^d)^k), or on the unstructured path the
+                // largest prev_active / k, k <= 2^d, that keeps the leaf
+                // regions even (region_counts_keeping_ranks)
+                lvl.num_active_processes = region_count[static_cast<size_t>(level)];
                 break;
             case ReductionPattern::ADAPTIVE:
             case ReductionPattern::WORK_PRESERVING:
@@ -494,7 +682,6 @@ void compute_active_processes(ParallelTree<CoordType, DataType>* tree) {
             if (lvl.num_active_processes > tree->mpi_size) {
                 throw std::runtime_error("compute_active_processes: active process count exceeds MPI size");
             }
-            int stride = prev_active / lvl.num_active_processes;
 
             std::vector<int> inactive_ranks;
             inactive_ranks.reserve(static_cast<size_t>(tree->mpi_size - prev_active));
@@ -513,10 +700,12 @@ void compute_active_processes(ParallelTree<CoordType, DataType>* tree) {
                         (inactive_rank_cycle_offset + static_cast<size_t>(i)) % inactive_ranks.size();
                     parent_rank = inactive_ranks[cycle_idx];
                 } else {
+                    // the child regions under region i (region_first_child:
+                    // groups of 2^d for (2^d)^k, else as even as can be)
                     std::vector<int> group_ranks;
-                    group_ranks.reserve(static_cast<size_t>(stride));
-                    const int child_morton_start = i * stride;
-                    const int child_morton_end = child_morton_start + stride;
+                    const int child_morton_start = region_first_child(i, lvl.num_active_processes, prev_active);
+                    const int child_morton_end = region_first_child(i + 1, lvl.num_active_processes, prev_active);
+                    group_ranks.reserve(static_cast<size_t>(child_morton_end - child_morton_start));
                     for (int child_morton = child_morton_start;
                          child_morton < child_morton_end;
                          ++child_morton) {
@@ -557,6 +746,9 @@ void compute_active_processes(ParallelTree<CoordType, DataType>* tree) {
             }
         }
         
+        lvl.region_start = region_start_of[static_cast<size_t>(level)];
+        lvl.regions_cubic = region_starts_are_bricks(tree->dimension, level, region_start_of[static_cast<size_t>(level)]);
+
         auto rank_it = lvl.rank_to_morton.find(tree->mpi_rank);
         if (rank_it != lvl.rank_to_morton.end()) {
             lvl.is_process_active = true;
@@ -569,7 +761,8 @@ void compute_active_processes(ParallelTree<CoordType, DataType>* tree) {
         if (child_lvl.is_process_active) {
             if (lvl.num_active_processes < child_lvl.num_active_processes) {
                 int my_child_morton = child_lvl.my_morton_id;
-                int parent_morton = my_child_morton / reduction_factor;
+                int parent_morton =
+                    region_parent(my_child_morton, lvl.num_active_processes, child_lvl.num_active_processes);
                 
                 auto parent_it = lvl.morton_to_rank.find(parent_morton);
                 if (parent_it != lvl.morton_to_rank.end()) {
@@ -592,9 +785,10 @@ void compute_active_processes(ParallelTree<CoordType, DataType>* tree) {
                 //     level, lvl.num_active_processes,
                 //     lvl.is_process_active ? "Yes" : "No");
                 int parent_morton = lvl.my_morton_id;
-                int child_morton_start = parent_morton * reduction_factor;
-                int child_morton_end = std::min(child_morton_start + reduction_factor - 1,
-                                            child_lvl.num_active_processes - 1);
+                int child_morton_start =
+                    region_first_child(parent_morton, lvl.num_active_processes, child_lvl.num_active_processes);
+                int child_morton_end =
+                    region_first_child(parent_morton + 1, lvl.num_active_processes, child_lvl.num_active_processes) - 1;
                 // printf("child morton start: %d, child morton end: %d\n", child_morton_start, child_morton_end);
                 
                 for (int child_morton = child_morton_start; child_morton <= child_morton_end; ++child_morton) {
@@ -681,26 +875,16 @@ void distribute_boxes(
     // Get this process's Morton region ID (O(1) lookup)
     int32_t active_index = rank_it->second;  // This is my_morton_id
     
-    // Compute Morton range (Equations 17-21 from Section 5.1.3)
-    int64_t boxes_per_process = total_boxes / lvl.num_active_processes;
-    int64_t remainder = total_boxes % lvl.num_active_processes;
-    
-    if (active_index < remainder) {
-        //std::cout << "remainder: " << remainder << ", active_index: " << active_index << ", boxes_per_process: " << boxes_per_process << ", total_boxes: " << total_boxes << ", num_active_processes: " << lvl.num_active_processes << std::endl;
-        //throw std::runtime_error("Error in box distribution logic, this shouldn't happen");
-        std::cerr << "Warning: potentially having fewer boxes than active processes." << std::endl;
-        // First 'remainder' processes get one extra box
-        lvl.local_morton_start = active_index * (boxes_per_process + 1);
-        lvl.local_morton_end = lvl.local_morton_start + boxes_per_process;  // +1 already included
-        lvl.num_boxes_local = boxes_per_process + 1;
-    } else {
-        // Remaining processes get standard allocation
-        lvl.local_morton_start = remainder * (boxes_per_process + 1) + 
-                                 (active_index - remainder) * boxes_per_process;
-        lvl.local_morton_end = lvl.local_morton_start + boxes_per_process - 1;
-        lvl.num_boxes_local = boxes_per_process;
+    // The region's Morton range (region_partition.hpp: the equal ranges of
+    // Section 5.1.3 for (2^d)^k regions, else unequal ones)
+    if (lvl.region_start.size() != static_cast<size_t>(lvl.num_active_processes) + 1 ||
+        lvl.region_start.back() != total_boxes) {
+        throw std::runtime_error("distribute_boxes: level " + std::to_string(level) + " has no region starts");
     }
-    
+    lvl.local_morton_start = lvl.region_start[static_cast<size_t>(active_index)];
+    lvl.local_morton_end = lvl.region_start[static_cast<size_t>(active_index) + 1] - 1;
+    lvl.num_boxes_local = lvl.local_morton_end - lvl.local_morton_start + 1;
+
     // Create local boxes and initialize them
     lvl.local_boxes.resize(lvl.num_boxes_local);
     initialize_local_boxes(lvl.local_boxes, lvl.local_morton_start, 
@@ -1104,14 +1288,6 @@ void compute_assisting_boxes(
     }
     
     const bool use_CA = tree->level_uses_CA(level);
-    const RegionLayout L = RegionLayout::of(tree->dimension, level, lvl.num_active_processes);
-    const uint32_t my_process_id = static_cast<uint32_t>(lvl.my_morton_id);
-    if (!L.uniform || lvl.local_morton_start != L.first(my_process_id) ||
-        lvl.num_boxes_local != L.boxes_per_region) {
-        throw std::runtime_error("compute_assisting_boxes: level " + std::to_string(level) +
-                                 " has no uniform region layout (" + std::to_string(lvl.num_active_processes) +
-                                 " active processes, " + std::to_string(lvl.num_boxes_local) + " local boxes)");
-    }
     // the seeds: the ghosts of a CA level, else the boundary boxes
     std::vector<int64_t> seeds;
     if (use_CA) {
@@ -1120,46 +1296,114 @@ void compute_assisting_boxes(
         for (int64_t local_idx : lvl.boundary_id) seeds.push_back(lvl.local_boxes[local_idx].morton_index);
         std::sort(seeds.begin(), seeds.end());
     }
-    const std::vector<int64_t> no_ghosts;
-    const RegionAssisting ra =
-        assisting_of_region_reference(L, my_process_id, seeds, use_CA ? lvl.ghost_id : no_ghosts);
-    if (use_CA) {
-        // the set by region of the boxes, as the level-entry halo gather's
-        // senders compute it for this region (halo_geometry.hpp), must agree
-        std::vector<int64_t> by_region;
-        for_each_region_within(L, my_process_id, halo_region_radius(L), [&](uint32_t r) {
-            const std::vector<int64_t> part = assisting_of_region_in(L, my_process_id, r);
-            by_region.insert(by_region.end(), part.begin(), part.end());
-        });
-        std::sort(by_region.begin(), by_region.end());
-        if (by_region != ra.all) {
-            throw std::runtime_error("compute_assisting_boxes: the assisting sets by region and by enumeration "
-                                     "differ (level " + std::to_string(level) + ")");
+    RegionAssisting ra;
+    if (!lvl.regions_cubic) {
+        // Regions of unequal length (any rank count; the unstructured Color
+        // path, never CA): the boxes of other ranks within one and two hops
+        // of the boundary boxes, by the level's ranges - all the boxes of
+        // other ranks within two hops of any box here, since a path out of
+        // this rank's range leaves it at a boundary box.
+        if (use_CA) {
+            throw std::runtime_error("compute_assisting_boxes: level " + std::to_string(level) + " is a CA level but its " +
+                                     std::to_string(lvl.num_active_processes) + " regions are not equal cubes");
         }
-        // what the regions around this one need from it (the level-entry
-        // halo gather's sends): here, not in the gather, where a rank with
-        // 26 neighboring regions would keep those with 7 waiting
-        std::vector<uint32_t> regions;
-        for_each_region_within(L, my_process_id, halo_region_radius(L), [&](uint32_t q) { regions.push_back(q); });
-        using Send = typename TreeLevel<CoordType, DataType>::CAHaloSend;
-        std::vector<Send> sends(regions.size());
-        #pragma omp parallel for schedule(dynamic)
-        for (int64_t i = 0; i < static_cast<int64_t>(regions.size()); ++i) {
-            const uint32_t q = regions[static_cast<size_t>(i)];
-            const RegionExtra e = region_extra(L, q);
-            Send& send = sends[static_cast<size_t>(i)];
-            send.region = q;
-            send.ghosts = ghosts_of_region_in(L, q, my_process_id, e);
-            send.assisting = assisting_of_region_in(L, q, my_process_id, e);
+        const uint32_t grid = 1u << level;
+        std::set<int64_t> all, one;
+        auto other = [&](int64_t n) { return n < lvl.local_morton_start || n > lvl.local_morton_end; };
+        for (int64_t seed : seeds) {
+            for (uint64_t nu : morton::neighbors_nd(tree->dimension, static_cast<uint64_t>(seed), grid)) {
+                const int64_t n = static_cast<int64_t>(nu);
+                if (other(n)) {
+                    all.insert(n);
+                    one.insert(n);
+                }
+            }
+            for (uint64_t nu : morton::neighbors_2hop_nd(tree->dimension, static_cast<uint64_t>(seed), grid)) {
+                const int64_t n = static_cast<int64_t>(nu);
+                if (other(n)) all.insert(n);
+            }
         }
-        lvl.ca_halo_sends.clear();
-        for (Send& send : sends) {
-            if (!send.ghosts.empty() || !send.assisting.empty()) lvl.ca_halo_sends.push_back(std::move(send));
+        ra.all.assign(all.begin(), all.end());
+        ra.one_hop.assign(one.begin(), one.end());
+        // The ranks this one exchanges with (compute_one_hop_neighbor_ranks):
+        // the owners of the boxes of other ranks within three hops of the
+        // boundary boxes, i.e. of any box here (the same argument) - two hops
+        // for the factorization's assisting boxes, three for the interaction
+        // lists of the H2 construction and the matvec (the children of the
+        // parent's neighbors).  Symmetric, as the pairwise exchanges need.
+        constexpr int kPeerHops = 3;
+        std::set<int> peers;
+        const int dim = tree->dimension;
+        for (int64_t seed : seeds) {
+            uint32_t x = 0, y = 0, z = 0;
+            morton::decode_nd(dim, static_cast<uint64_t>(seed), x, y, z);
+            const int zr = dim >= 3 ? kPeerHops : 0, yr = dim >= 2 ? kPeerHops : 0;
+            for (int dz = -zr; dz <= zr; ++dz) {
+                for (int dy = -yr; dy <= yr; ++dy) {
+                    for (int dx = -kPeerHops; dx <= kPeerHops; ++dx) {
+                        const int64_t nx = static_cast<int64_t>(x) + dx, ny = static_cast<int64_t>(y) + dy,
+                                      nz = static_cast<int64_t>(z) + dz;
+                        if (nx < 0 || ny < 0 || nz < 0 || nx >= grid || ny >= grid || nz >= grid) continue;
+                        const int64_t n = static_cast<int64_t>(morton::encode_nd(
+                            dim, static_cast<uint32_t>(nx), static_cast<uint32_t>(ny), static_cast<uint32_t>(nz)));
+                        if (other(n)) peers.insert(lvl.owner_rank_of(n));
+                    }
+                }
+            }
         }
-        lvl.ca_halo_sends_valid = true;
-    } else {
+        peers.erase(tree->mpi_rank);
+        lvl.region_peers.assign(peers.begin(), peers.end());
         lvl.ca_halo_sends.clear();
         lvl.ca_halo_sends_valid = false;
+    } else {
+        const RegionLayout L = RegionLayout::of(tree->dimension, level, lvl.num_active_processes);
+        const uint32_t my_process_id = static_cast<uint32_t>(lvl.my_morton_id);
+        if (!L.uniform || lvl.local_morton_start != L.first(my_process_id) ||
+            lvl.num_boxes_local != L.boxes_per_region) {
+            throw std::runtime_error("compute_assisting_boxes: level " + std::to_string(level) +
+                                     " has no uniform region layout (" + std::to_string(lvl.num_active_processes) +
+                                     " active processes, " + std::to_string(lvl.num_boxes_local) + " local boxes)");
+        }
+        const std::vector<int64_t> no_ghosts;
+        ra = assisting_of_region_reference(L, my_process_id, seeds, use_CA ? lvl.ghost_id : no_ghosts);
+        if (use_CA) {
+            // the set by region of the boxes, as the level-entry halo gather's
+            // senders compute it for this region (halo_geometry.hpp), must agree
+            std::vector<int64_t> by_region;
+            for_each_region_within(L, my_process_id, halo_region_radius(L), [&](uint32_t r) {
+                const std::vector<int64_t> part = assisting_of_region_in(L, my_process_id, r);
+                by_region.insert(by_region.end(), part.begin(), part.end());
+            });
+            std::sort(by_region.begin(), by_region.end());
+            if (by_region != ra.all) {
+                throw std::runtime_error("compute_assisting_boxes: the assisting sets by region and by enumeration "
+                                         "differ (level " + std::to_string(level) + ")");
+            }
+            // what the regions around this one need from it (the level-entry
+            // halo gather's sends): here, not in the gather, where a rank with
+            // 26 neighboring regions would keep those with 7 waiting
+            std::vector<uint32_t> regions;
+            for_each_region_within(L, my_process_id, halo_region_radius(L), [&](uint32_t q) { regions.push_back(q); });
+            using Send = typename TreeLevel<CoordType, DataType>::CAHaloSend;
+            std::vector<Send> sends(regions.size());
+            #pragma omp parallel for schedule(dynamic)
+            for (int64_t i = 0; i < static_cast<int64_t>(regions.size()); ++i) {
+                const uint32_t q = regions[static_cast<size_t>(i)];
+                const RegionExtra e = region_extra(L, q);
+                Send& send = sends[static_cast<size_t>(i)];
+                send.region = q;
+                send.ghosts = ghosts_of_region_in(L, q, my_process_id, e);
+                send.assisting = assisting_of_region_in(L, q, my_process_id, e);
+            }
+            lvl.ca_halo_sends.clear();
+            for (Send& send : sends) {
+                if (!send.ghosts.empty() || !send.assisting.empty()) lvl.ca_halo_sends.push_back(std::move(send));
+            }
+            lvl.ca_halo_sends_valid = true;
+        } else {
+            lvl.ca_halo_sends.clear();
+            lvl.ca_halo_sends_valid = false;
+        }
     }
     
     lvl.assisting_box_points_for_kernel_evaluation.clear();
@@ -1203,7 +1447,9 @@ ParallelTree<CoordType, DataType>* create_uniform_tree(
     int64_t reduction_threshold = 0,
     int CA_level = 10000,
     std::vector<int>& idx_map = std::vector<int>(), 
-    ReductionPattern pattern = ReductionPattern::UNIFORM) {  // NEW parameter
+    ReductionPattern pattern = ReductionPattern::UNIFORM,  // NEW parameter
+    bool any_process_count = false,  // any rank count (unstructured Color); else (2^dimension)^k
+    const RegionWeights& region_weights = RegionWeights{}) {  // the boxes' points (region_weights_of_points), or none
     
     // Validate inputs
     if (dimension < 1 || dimension > 3) {
@@ -1229,6 +1475,7 @@ ParallelTree<CoordType, DataType>* create_uniform_tree(
     tree->CA_level = (dimension == 1 || CA_level < 0) ? num_levels : CA_level;
     tree->reduction_pattern = pattern;  // NEW
     tree->comm = comm;                  // NEW
+    tree->any_process_count = any_process_count;
     
     // Copy global bounds
     std::memcpy(tree->global_bounds, global_bounds, 6 * sizeof(CoordType));
@@ -1241,7 +1488,7 @@ ParallelTree<CoordType, DataType>* create_uniform_tree(
     tree->levels.resize(num_levels);
     
     // Step 1: Determine active processes at each level (Section 5.1.3)
-    compute_active_processes(tree);
+    compute_active_processes(tree, region_weights);
 
     // Root assembly requires all level-1 sibling boxes on one process. Process
     // reduction from level 2 to level 1 is supported, but level 1 to level 0 is not.

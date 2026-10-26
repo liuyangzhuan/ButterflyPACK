@@ -5,9 +5,9 @@
 //           ring box, as gather_id_workspace forms it when no box is
 //           eliminated) and its static training rows (H2_ID_radius > 2,
 //           H2_ID_proxy 1), sketched on the device with the host's sparse sign
-//           draws (compute_id_sparse_sketch: std::mt19937_64 seeded with
-//           morton + 1, 4 per row, sketch size n) and factored by the device
-//           pivoted QR.  Skeleton, redundant and T go to the box as
+//           draws (id_sketch: std::mt19937_64 seeded with morton + 1, 4 per
+//           row, sketch size n + 4, or the rows themselves when there are no
+//           more) and factored by the device pivoted QR.  Skeleton, redundant and T go to the box as
 //           h2_skeletonize_box leaves them.  A box the device cannot sketch
 //           (sketch too large for the packed lists) is left to the caller.
 //           Adaptive rows (H2_ID_proxy 2 with H2_use_sketch 2) are selected
@@ -82,7 +82,9 @@ bool compression_supported(const ParallelTree<CoordType, DataType>* tree, const 
         return fail("single precision is not run on the GPU");
     } else {
         const char* why = nullptr;
-        if (registered_evaluator<DataType>(kernel->gpu_evaluator, &why) == nullptr) return fail(why);
+        if (registered_evaluator<DataType>(kernel->gpu_evaluator, &why, kernel_symmetric(kernel, 0)) == nullptr) {
+            return fail(why);
+        }
         return true;
     }
 }
@@ -303,6 +305,10 @@ std::vector<int64_t> compress_level_ids(ParallelTree<CoordType, DataType>* tree,
     DeviceHeap& heap = DeviceHeap::instance();
     const Evaluator& evaluator = *evaluator_of(kernel->gpu_evaluator);
     const bool trace = h2_id_trace_enabled();
+    // a nonsymmetric kernel: the stacked [K(F, B); K(B, F)^T; K(T, B); K(B,
+    // T)^T] of gather_id_workspace, its K(F, B) and K(T, B) rows evaluated as
+    // K(row, col) (the sketch items' swap ranges)
+    const bool nonsym = !kernel_symmetric(kernel, 0);
 
     // ---- static training rows (H2_ID_radius > 2, H2_ID_proxy 1), as the
     // host selects them: their points after the level's, each once, and a
@@ -352,13 +358,15 @@ std::vector<int64_t> compress_level_ids(ParallelTree<CoordType, DataType>* tree,
 
     // ---- per box: its ring blocks (all points of each two-hop box, in
     // two_hop order), then its training rows, and the sketch shape
-    // (compute_id_sparse_sketch's)
+    // (id_sketch_shape); nonsym: each of the two again
     struct Plan {
         int64_t box = -1;
         int n = 0, d = 0, sk = 0, slot = 0;
+        bool direct = false;  // the rows themselves (id_sketch_shape)
         int64_t rows = 0;
         double scale = 0.0;
         std::vector<RowBlockDesc> blocks;
+        int swap_lo0 = 0, swap_hi0 = 0, swap_lo1 = 0, swap_hi1 = 0;
     };
     std::vector<Plan> plans;
     for (size_t b = 0; b < nb; ++b) {
@@ -385,10 +393,28 @@ std::vector<int64_t> compress_level_ids(ParallelTree<CoordType, DataType>* tree,
             p.blocks.push_back(RowBlockDesc{row_base, e->n, e->slot, nullptr});
             row_base += e->n;
         }
+        if (nonsym && row_base > 0) {  // the ring again: its K(B, F)^T rows
+            const int ring_rows = row_base;
+            const size_t ring_blocks = p.blocks.size();
+            for (size_t j = 0; j < ring_blocks; ++j) {
+                RowBlockDesc rb = p.blocks[j];
+                rb.row_base += ring_rows;
+                p.blocks.push_back(rb);
+            }
+            row_base += ring_rows;
+            p.swap_lo0 = 0;
+            p.swap_hi0 = ring_rows;
+        }
         // static training rows after the ring (their draws continue the box's stream, as on the host)
         if (!training[b].empty()) {
             const int nt = static_cast<int>(training[b].size());
             p.blocks.push_back(RowBlockDesc{row_base, nt, points.training_slot0(), d_training + training_at[b]});
+            if (nonsym) {
+                p.swap_lo1 = row_base;
+                p.swap_hi1 = row_base + nt;
+                p.blocks.push_back(RowBlockDesc{row_base + nt, nt, points.training_slot0(), d_training + training_at[b]});
+                row_base += nt;
+            }
             row_base += nt;
         }
         p.rows = row_base;
@@ -405,8 +431,10 @@ std::vector<int64_t> compress_level_ids(ParallelTree<CoordType, DataType>* tree,
             }
             continue;
         }
-        p.d = static_cast<int>(std::max<int64_t>(std::min<int64_t>(p.n, p.rows), p.n));
-        p.sk = std::min(4, p.d);
+        const IdSketchShape shape = id_sketch_shape(p.rows, p.n);
+        p.d = static_cast<int>(shape.d);
+        p.sk = shape.sk;
+        p.direct = shape.direct;
         p.scale = 1.0 / std::sqrt(static_cast<double>(p.sk));
         if (p.rows > kEntryRowMask || p.d > kEntryDestMask) {
             host_boxes.push_back(p.box);  // too large for the packed list entries
@@ -428,7 +456,7 @@ std::vector<int64_t> compress_level_ids(ParallelTree<CoordType, DataType>* tree,
     // the selected far rows join, and the ID runs in a copy of it
     using Selector = AdaptiveRowSelector<CoordType, DataType>;
     const bool adaptive = tree->id_proxy_mode == 2;
-    auto y_ld = [&](const Plan& p) { return adaptive ? Selector::first_capacity(tree, p.n) : p.d; };
+    auto y_ld = [&](const Plan& p) { return adaptive ? Selector::first_capacity(tree, p.d, nonsym) : p.d; };
     auto y_bytes = [&](const Plan& p) {
         return (adaptive ? 2 : 1) * align_up(static_cast<size_t>(y_ld(p)) * p.n * D);
     };
@@ -488,6 +516,7 @@ std::vector<int64_t> compress_level_ids(ParallelTree<CoordType, DataType>* tree,
             li.seed = static_cast<uint64_t>(box.morton_index + 1);
             li.d = p.d;
             li.sk = p.sk;
+            li.direct = p.direct ? 1 : 0;
             li.rows = static_cast<int>(p.rows);
             li.num_blocks = static_cast<int>(p.blocks.size());
             li.blocks_offset = static_cast<int64_t>(meta.append(p.blocks));
@@ -507,6 +536,10 @@ std::vector<int64_t> compress_level_ids(ParallelTree<CoordType, DataType>* tree,
             item.scale = p.scale;
             item.row_slots = d_rows;
             item.col_base = p.slot;
+            item.swap_lo0 = p.swap_lo0;
+            item.swap_hi0 = p.swap_hi0;
+            item.swap_lo1 = p.swap_lo1;
+            item.swap_hi1 = p.swap_hi1;
             row_items[static_cast<size_t>(i)] = item;
             id_items[static_cast<size_t>(i)] =
                 QrcpItemT<S>{Y, p.d, p.n, p.d, reinterpret_cast<int*>(d_id + id_jpvt[static_cast<size_t>(i)]),
@@ -526,13 +559,14 @@ std::vector<int64_t> compress_level_ids(ParallelTree<CoordType, DataType>* tree,
                 evaluator.eval<S>(items, reinterpret_cast<const EvalItemT<S>*>(image + offset), max_m, max_n_items,
                                   image, points.table(), s);
             };
-            selector = std::make_unique<Selector>(tree, tolerance, heap, std::move(hooks));
+            selector = std::make_unique<Selector>(tree, tolerance, heap, std::move(hooks), nonsym);
             std::vector<typename Selector::Target> targets(static_cast<size_t>(count));
             for (int i = 0; i < count; ++i) {
                 const Plan& p = plans[c0 + static_cast<size_t>(i)];
                 typename Selector::Target& target = targets[static_cast<size_t>(i)];
                 target.box = &level.local_boxes[static_cast<size_t>(p.box)];
                 target.n = p.n;
+                target.d = p.d;
                 target.cols.base = p.slot;
                 target.w = reinterpret_cast<S*>(block + off_y[static_cast<size_t>(i)]);
                 target.cap = y_ld(p);
@@ -579,7 +613,8 @@ std::vector<int64_t> compress_level_ids(ParallelTree<CoordType, DataType>* tree,
         } else {
             char* d_qrcp_work = nullptr;
             if (const size_t w = qrcp_work_bytes<S>(count, max_n)) d_qrcp_work = heap.alloc(w);
-            launch_qrcp(reinterpret_cast<const QrcpItemT<S>*>(md + off_id), count, max_n, tolerance, d_qrcp_work, stream);
+            launch_qrcp(reinterpret_cast<const QrcpItemT<S>*>(md + off_id), count, max_n, tolerance,
+                        id_absolute_tolerance(tree, tolerance), d_qrcp_work, stream);
             heap.free(d_qrcp_work);
             check_cuda(cudaMemcpyAsync(h_id.data(), d_id, id_bytes, cudaMemcpyDeviceToHost, stream), "compression ids");
             check_cuda(cudaStreamSynchronize(stream), "compression ids");
@@ -954,13 +989,14 @@ void build_level_blocks(ParallelTree<CoordType, DataType>* tree, int level_numbe
         }
     };
     const double keep_limit = kMatvecKeepFraction * static_cast<double>(heap.capacity());
-    // With an entry evaluator (symmetric for H2), the near block of local
+    // With an entry evaluator of a symmetric kernel, the near block of local
     // boxes t < s is not kept (the block of s, t serves both): such blocks
     // go in chunks of their own after the others, and those chunks only go
     // to the host.  A block or list evaluator keeps every block: its blocks
     // may be symmetric only approximately (the EMSURF example's near field,
     // to about 1e-6), and the host matvec applies each block as evaluated.
-    const bool symmetric = keep && near && evaluator.inline_entries();
+    // A nonsymmetric kernel keeps every block too.
+    const bool symmetric = keep && near && evaluator.inline_entries() && kernel_symmetric(kernel, 0);
     std::vector<size_t> order(blocks.size());
     std::iota(order.begin(), order.end(), size_t{0});
     size_t split = blocks.size();  // order[0, split): blocks the matvec keeps

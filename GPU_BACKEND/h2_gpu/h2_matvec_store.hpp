@@ -27,12 +27,16 @@ inline bool device_matvec_check() { return env::check("matvec"); }
 // Messages of one step with the neighbor ranks, fixed by the compression:
 // per peer, a send and a receive segment (points; a message is
 // size * nrhs values at base * nrhs), and the spans that pack the sends.
+// The transposed products (A^T x) run it backwards: what a rank receives
+// in it, it sends (the sums of its contributions to those boxes), and what
+// it sends, it receives and adds, a peer's spans at a time (span_begin).
 struct H2Exchange {
     std::vector<int> peers;
     std::vector<int64_t> send_base, send_size, recv_base, recv_size;
     int64_t send_points = 0, recv_points = 0;
     const H2Span* d_spans = nullptr;
     int nspans = 0, max_len = 0;
+    std::vector<int> span_begin;  // peer p's spans: span_begin[p] .. span_begin[p + 1]
 };
 
 struct H2MatvecLevel {
@@ -62,6 +66,15 @@ struct H2MatvecLevel {
     std::vector<char*> allocations;       // blocks, factors, tables (heap)
     const H2Box* d_boxes = nullptr;
     const H2BlockRef* d_blocks = nullptr;
+    // the transposed products (a nonsymmetric kernel's A^T x): the coupling's
+    // targets (local boxes' compact skeleton vectors, remote boxes' send
+    // entries) and the near blocks' (local boxes' vectors, remote boxes')
+    const H2TTarget* d_tq_targets = nullptr;
+    const H2TBlock* d_tq_blocks = nullptr;
+    int ntq = 0;
+    const H2TTarget* d_tx_targets = nullptr;
+    const H2TBlock* d_tx_blocks = nullptr;
+    int ntx = 0;
     double bytes = 0.0;
 };
 
@@ -70,6 +83,7 @@ struct DeviceMatvecStore {
     bool building = false;   // the compression keeps blocks
     bool failed = false;     // this rank could not keep everything
     bool usable = false;     // all ranks kept everything
+    bool transposable = false;  // the transposed products are planned (a nonsymmetric kernel)
     std::vector<H2MatvecLevel> levels;
     double bytes = 0.0;
 
@@ -84,6 +98,7 @@ struct DeviceMatvecStore {
         building = false;
         failed = false;
         usable = false;
+        transposable = false;
         bytes = 0.0;
     }
 };

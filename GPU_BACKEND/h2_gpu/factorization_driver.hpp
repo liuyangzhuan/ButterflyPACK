@@ -20,6 +20,7 @@
 #ifdef H2_HAVE_GPU
 
 #include "ca_halo.hpp"
+#include "collective_evaluator.hpp"
 #include "device_reduction.hpp"
 #include "level_eliminator.hpp"
 #include "owner_plan.hpp"
@@ -31,6 +32,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <set>
@@ -172,11 +174,11 @@ public:
         if constexpr (!gpu_data_type<DataType>) {
             return 0.0;
         } else {
-            if (!color_gpu_enabled() || opt_.use_sketch != 2 || !opt_.is_symmetric || opt_.is_hermitian ||
+            if (!color_gpu_enabled() || opt_.use_sketch != 2 || opt_.is_hermitian ||
                 opt_.method != FactorizationMethod::LU) {
                 return 0.0;
             }
-            return warm_up_registered_evaluator<DataType>(tree_, kernel_->gpu_evaluator);
+            return warm_up_registered_evaluator<DataType>(tree_, kernel_->gpu_evaluator, opt_.is_symmetric);
         }
     }
 
@@ -267,7 +269,8 @@ public:
     bool box_path_runs(int lvl) const {
         if (!color_gpu_enabled() || lvl <= 1 || tree_->level_uses_CA(lvl)) return false;
         if (!tree_->levels[static_cast<size_t>(lvl)].is_process_active) return false;
-        const bool streamed = opt_.use_sketch == 2 && opt_.is_symmetric && !opt_.is_hermitian;
+        // (a nonsymmetric matrix too: level_eliminator_would_run tests what it needs)
+        const bool streamed = opt_.use_sketch == 2 && !opt_.is_hermitian;
         if (!streamed || opt_.lazy_schur == 0) return false;
         // (with the level's own lazy mode: after a CA level the runtime still
         // has that level's, capped at 1)
@@ -290,25 +293,24 @@ public:
     // Whether the parents' blocks can stay on the device across the process
     // reduction from level `lvl` into level `parent_lvl`: the parent level
     // would run on the device on its owners (the tests of keeps_blocks_of
-    // without this rank's own activity there, which a sender lacks), the
-    // levels' regions are uniform cubes (device_reduction.hpp), and on a CA
-    // parent level this rank's parents fit the device sketch.
+    // without this rank's own activity there, which a sender lacks), every
+    // region of the child level is whole parent boxes (device_reduction.hpp:
+    // the equal cubes, or the Morton ranges of the unstructured path), and on
+    // a CA parent level this rank's parents fit the device sketch.
     // Rank-independent but for the last test; the caller all-reduces it over
     // the transition's ranks.
     bool device_reduction_possible(int lvl, int parent_lvl, const std::vector<Box>& parents) const {
         if (!color_gpu_enabled() || parent_lvl < 1 || lvl < 2) return false;
         const Level& child = tree_->levels[static_cast<size_t>(lvl)];
         const Level& parent = tree_->levels[static_cast<size_t>(parent_lvl)];
-        const RegionLayout lc = RegionLayout::of(tree_->dimension, lvl, child.num_active_processes);
-        const RegionLayout lp = RegionLayout::of(tree_->dimension, parent_lvl, parent.num_active_processes);
-        if (!lc.uniform || !lp.uniform) return false;
+        if (!regions_hold_whole_parents(child, tree_->dimension) || parent.region_start.size() < 2) return false;
         if (parent_lvl == 1) {
             // level 1 adopts the blocks on its rank; its transition builds the root there
             const Level& l0 = tree_->levels[0];
             return parent.num_active_processes == 1 && l0.num_active_processes == 1 &&
                    opt_.method == FactorizationMethod::LU && level_eliminator_would_run(tree_, 1, kernel_, opt_.method);
         }
-        const bool streamed = opt_.use_sketch == 2 && opt_.is_symmetric && !opt_.is_hermitian;
+        const bool streamed = opt_.use_sketch == 2 && !opt_.is_hermitian;
         if (!streamed) return false;
         if (tree_->level_uses_CA(parent_lvl)) {
             if (!ca_level_runs(parent_lvl) || !ca_level_supported(parent_lvl, nullptr)) return false;
@@ -461,7 +463,7 @@ public:
             }
         }
         if (!(color_gpu_enabled() && use_streamed_level && lazy_far_field_mode() == LazyFarFieldMode::LAZY &&
-              opt_.is_symmetric && !opt_.is_hermitian)) {
+              !opt_.is_hermitian)) {
             return;
         }
         if (wave_trace_enabled()) trace_.start_begin();
@@ -479,7 +481,7 @@ public:
         if (wave_trace_enabled()) trace_.start_end();
         if (announce) {
             std::cout << "  GPU box path: "
-                      << (level_ ? std::string(tensor_core_gemm() ? "on (FP64 tensor-core GEMMs)" : "on")
+                      << (level_ ? std::string(tensor_core_gemm() && std::is_same_v<DataType, double> ? "on (FP64 tensor-core GEMMs)" : "on")
                                  : "off (" + reason + ")")
                       << (level_ && !fits ? ", host sketches (boxes over " + std::to_string(kEntryDestMask) +
                                                 " points)"
@@ -537,7 +539,7 @@ public:
         if (wave_trace_enabled()) trace_.start_end();
         if (announce) {
             std::cout << "  GPU owner level: "
-                      << (level_ ? std::string(tensor_core_gemm() ? "on (FP64 tensor-core GEMMs)" : "on")
+                      << (level_ ? std::string(tensor_core_gemm() && std::is_same_v<DataType, double> ? "on (FP64 tensor-core GEMMs)" : "on")
                                  : "off (" + reason + ")")
                       << std::endl;
         }
@@ -638,7 +640,7 @@ public:
         if (wave_trace_enabled()) trace_.start_end();
         if (announce) {
             std::cout << "  GPU CA level: "
-                      << (level_ ? std::string(tensor_core_gemm() ? "on (FP64 tensor-core GEMMs)" : "on")
+                      << (level_ ? std::string(tensor_core_gemm() && std::is_same_v<DataType, double> ? "on (FP64 tensor-core GEMMs)" : "on")
                                  : "off (" + reason + ")")
                       << std::endl;
         }
@@ -672,11 +674,17 @@ public:
         if (level_) {
             const DeviceHeap& heap = DeviceHeap::instance();
             keep_bound_ = solve_keep_bound(tree_->levels[static_cast<size_t>(lvl)], ca,
-                                           opt_.compress_factors >= 1 ? kXnrBoundDivisor : 1.0);
+                                           opt_.compress_factors >= 1 ? kXnrBoundDivisor : 1.0,
+                                           !opt_.is_symmetric);
             budget = kSolveKeepFraction * static_cast<double>(heap.capacity()) - static_cast<double>(heap.used());
             if (compression_ <= 0.0) compression_ = opt_.compress_factors >= 1 ? kFirstCompression : 1.0;
             kept_expected_ = keep_ratio_ * keep_bound_ / compression_;   // what the store will hold
-            ok = kept_expected_ <= budget ? 1 : 0;
+            // A nonsymmetric matrix's level also holds its fill sources raw
+            // (temp2^T and temp4, nothing compressed yet), about the bound
+            // itself (7.1 GB against a 9.2 GB bound at level 4 of 96^3 on 8
+            // ranks): they must fit beside the kept factors.
+            const double working = opt_.is_symmetric ? 0.0 : keep_bound_;
+            ok = kept_expected_ + working <= budget ? 1 : 0;
         }
         MPI_Allreduce(MPI_IN_PLACE, &ok, 1, MPI_INT, MPI_MIN, level_comm);
         if (level_) level_->set_solve_keep(ok != 0, budget, kept_expected_);
@@ -794,9 +802,16 @@ public:
     // or the generators of the last wave, the host transport
     // (host_transport(&installed) installs the remote generators and returns
     // its MPI time), and the device updates from the installed generators.
+    // (Entries through a collective callback: the level's ranks quiesce their
+    // rounds before the exchange and after the device updates, which fetch.)
     template<typename HostTransport>
     Duration transport(PendingFactorUpdates<DataType>& pending, HostTransport&& host_transport) {
-        if (level_->device_exchange()) return level_->exchange();
+        quiesce_entries();
+        if (level_->device_exchange()) {
+            const Duration duration = level_->exchange();
+            quiesce_entries();
+            return duration;
+        }
         const auto t_emit = std::chrono::steady_clock::now();
         level_->emit_generators(pending);
         const auto t_exchange = std::chrono::steady_clock::now();
@@ -807,6 +822,7 @@ public:
         eliminator_stats().exchange +=
             std::chrono::duration<double>(std::chrono::steady_clock::now() - t_exchange).count();
         level_->receive_remote(installed);
+        quiesce_entries();
         return duration;
     }
 
@@ -837,6 +853,7 @@ public:
     // the solve's factors stay on the device (only if every rank of the
     // level still holds all of its own).
     void finish_level(int lvl, const PendingFactorUpdates<DataType>& pending, MPI_Comm level_comm, bool announce) {
+        if (level_) quiesce_entries();  // (before the collectives below)
         const auto t_finish = std::chrono::steady_clock::now();
         double finish_seconds = 0.0;  // this rank's level_->finish()
         if (level_) {
@@ -985,6 +1002,13 @@ public:
 
     // ---- the level transition
 
+    // This rank builds the parents of its boxes on the device (transition).
+    bool builds_parents(const Level& level, const Level& parent_level) const {
+        const bool reduction_ahead = parent_level.num_active_processes != level.num_active_processes;
+        return level_ && level.is_process_active && level_->can_build_parent() &&
+               (reduction_ahead || parent_level.is_process_active) && !opt_.is_hermitian;
+    }
+
     // Device transition: this level's blocks never leave the device, and the
     // parent's go to the next level's eliminator (or to the host when that
     // level runs there).  Each rank builds the parents of its own boxes, with
@@ -1002,15 +1026,18 @@ public:
     // ranks and the parent level's, whose owners at a reduction may be ranks
     // idle at this level): the device reduction runs over it, the idle
     // owners receiving only.
+    // `section_end` (every rank of the call, after the parents are built and
+    // before any communication of the transition): entries through a
+    // collective callback end the level's section of rounds there, so the
+    // parent-only ranks serving them come to the transition (a rank that
+    // builds its parents on the host does so before the call: builds_parents).
     template<typename StructureBuilder>
     bool transition(const Level& level, const Level& parent_level, std::vector<Box>& parents,
                     StructureBuilder&& build_structure, bool announce, MPI_Comm level_comm = MPI_COMM_NULL,
-                    MPI_Comm transition_comm = MPI_COMM_NULL) {
+                    MPI_Comm transition_comm = MPI_COMM_NULL, const std::function<void()>& section_end = {}) {
         bool on_device = false;
         const bool reduction_ahead = parent_level.num_active_processes != level.num_active_processes;
-        const bool builds = level_ && level.is_process_active && level_->can_build_parent() &&
-                            (reduction_ahead || parent_level.is_process_active) && opt_.is_symmetric &&
-                            !opt_.is_hermitian;
+        const bool builds = builds_parents(level, parent_level);
         if (builds) {
             parents = build_structure();
             {   // (8x diagnostics) a parent wider than the device sketch takes, with its children's sizes
@@ -1060,6 +1087,7 @@ public:
                 }
             }
         }
+        if (section_end) section_end();
         const int parent_lvl = level.level - 1;
         bool keep = false;
         bool reduced = false;
@@ -1228,6 +1256,32 @@ public:
             if (e.og_mat + e.og_win + e.og_stage + e.og_launch + e.og_pack > 0.0) {
                 std::printf("  [gpu] level %d owner pass host: materialize %.2f, window %.2f, stage %.2f, launch+sync %.2f, "
                             "pack %.2f s\n", level.level, e.og_mat, e.og_win, e.og_stage, e.og_launch, e.og_pack);
+                double gemm_s = 0.0, gemm_flops = 0.0;
+                for (int j = 0; j < EliminatorStats::kOwnerDepthBins; ++j) {
+                    gemm_s += e.og_dev_gemm[j];
+                    gemm_flops += e.og_gemm_flops[j];
+                }
+                std::printf("  [gpu] level %d owner pass device: kernel values %.2f s, GEMMs %.2f s (%.0f GF/s); by "
+                            "source position j [launches, GEMMs, GFLOP, s, GF/s, (mean m n)^1/2, mean k]:", level.level, e.og_dev_eval,
+                            gemm_s, gemm_s > 0.0 ? gemm_flops / gemm_s / 1e9 : 0.0);
+                for (int j = 0; j < EliminatorStats::kOwnerDepthBins; ++j) {
+                    if (e.og_gemm_launches[j] == 0) continue;
+                    std::printf(" %d%s [%lld, %lld, %.0f, %.2f, %.0f, %.0f, %.0f]", j + 1,
+                                j + 1 == EliminatorStats::kOwnerDepthBins ? "+" : "",
+                                static_cast<long long>(e.og_gemm_launches[j]), static_cast<long long>(e.og_gemm_count[j]),
+                                e.og_gemm_flops[j] / 1e9, e.og_dev_gemm[j],
+                                e.og_dev_gemm[j] > 0.0 ? e.og_gemm_flops[j] / e.og_dev_gemm[j] / 1e9 : 0.0,
+                                std::sqrt(e.og_gemm_mn[j] / static_cast<double>(std::max<int64_t>(e.og_gemm_count[j], 1))),
+                                e.og_gemm_mn[j] > 0.0 ? e.og_gemm_flops[j] / (2.0 * e.og_gemm_mn[j]) : 0.0);
+                }
+                std::printf("; targets by sources:");
+                for (int d = 1; d < EliminatorStats::kOwnerDepthBins; ++d) {
+                    if (e.og_targets_by_depth[d] > 0) {
+                        std::printf(" %d%s %lld", d, d + 1 == EliminatorStats::kOwnerDepthBins ? "+" : "",
+                                    static_cast<long long>(e.og_targets_by_depth[d]));
+                    }
+                }
+                std::printf("\n");
             }
             if (e.np_gen_blocks > 0 || e.np_gen_fresh_blocks > 0) {
                 std::printf("  [gpu] level %d packed after the generator passes: %lld adopted blocks (%.2f GB raw), "
@@ -1479,6 +1533,8 @@ public:
                     kb.T = DeviceHeap::relocated(kb.T, moves);
                     kb.xsr = DeviceHeap::relocated(kb.xsr, moves);
                     kb.xnr = DeviceHeap::relocated(kb.xnr, moves);
+                    kb.xrs_t = DeviceHeap::relocated(kb.xrs_t, moves);
+                    kb.xrn_t = DeviceHeap::relocated(kb.xrn_t, moves);
                     kb.lu = DeviceHeap::relocated(kb.lu, moves);
                     kb.ipiv = DeviceHeap::relocated(kb.ipiv, moves);
                 }
@@ -1669,6 +1725,12 @@ public:
                     "ID %.2f, ranks down %.2f), background copies: busy %.2f s, level-end wait %.2f s\n",
                     lvl, e.sketch_plan, e.sketch_gpu, e.sk_meta, e.sk_upload, e.sk_rows,
                     e.sk_stored, e.sk_p, e.sk_fill, e.sk_id, e.sk_download, e.finish_store, e.finish_sources);
+        if (e.sk_stored_items > 0) {
+            std::printf("  [gpu] level %d sketch of stored rows: %lld items, %.1f GB read (rows x ncols, every row), "
+                        "%.2f s of kernel, %.0f GB/s\n", lvl, static_cast<long long>(e.sk_stored_items),
+                        e.sk_stored_bytes / 1e9, e.sk_stored_kernel,
+                        e.sk_stored_kernel > 0.0 ? e.sk_stored_bytes / e.sk_stored_kernel / 1e9 : 0.0);
+        }
         if (e.adaptive_rounds > 0) {
             std::printf("  [gpu] level %d adaptive ID rows: %lld rounds over the waves, later rounds %.2f s, "
                         "%lld boxes sampled more than one node\n",
@@ -1722,6 +1784,13 @@ public:
     }
 
 private:
+    // Entries through a collective callback: rounds until no rank of the
+    // level is fetching (collective_entries.hpp), before communication
+    // between them.  Nothing otherwise.
+    void quiesce_entries() {
+        if (auto* entries = kernel_entries(kernel_, 0)) entries->quiesce();
+    }
+
     Tree* tree_;
     KernelType* kernel_;
     Options opt_;

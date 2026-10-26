@@ -85,12 +85,15 @@ cd "${result_dir}" || exit 2
 # the factorization time at 8 and 64 ranks.  --H2_XRR_factor 1 (LU of X_RR)
 # is required by the GPU box path; --CFIE_alpha 1 (EFIE) selects the device
 # kernel of the EMSURF entries.
+# --nmin_leaf: the leaves' points; with --H2_unstructured 1 the tree is as deep as
+# keeps the occupied leaf boxes at that many points on average (64: the trees the
+# 128K and 512K spheres had with 8 when the depth came from N alone).
 srun "${srun_args[@]}" bash -c 'export CUDA_VISIBLE_DEVICES=$((SLURM_LOCALID % ${SLURM_GPUS_ON_NODE:-4})); exec "$@"' h2 \
   "${exe}" \
   --data_dir "${mesh_dir}" --wavelength 2 --model 1 --CFIE_alpha 1 --scaling 1 \
   --rcs_static 2 --rcs_nsample 1 --format 7 --sym 1 --elem_extract 2 \
   --tol_comp 1e-4 --tol_rand 1e-4 --tol_Rdetect 1e-4 --tol_itersol 1e-8 \
-  --precon 1 --nmin_leaf 8 --baca_batch 64 --LR_BLAS 2 \
+  --precon 1 --nmin_leaf 64 --baca_batch 64 --LR_BLAS 2 \
   --H2_unstructured 1 --H2_ID_proxy 1 --H2_ID_radius 2 --h2_lazy_schur 2 \
   --H2_CA_level 10000 --H2_GEMM_split 16 --h2_use_sketch 2 \
   --H2_XRR_factor 1 --H2_use_gpu 1 --verbosity 1 \

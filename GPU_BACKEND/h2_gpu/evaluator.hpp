@@ -27,6 +27,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -88,6 +89,42 @@ public:
         e->origin_ = "block evaluator";
         return e;
     }
+    // A sketch of kernel rows asked of the entries' source (the collective
+    // evaluator with a sketch callback): out (d x cols, leading dimension
+    // ldo, on the device) = Omega K(cols, rows)^T (the rows' values K(col,
+    // row), as sketch_rows takes them: Omega K(rows, cols) for a symmetric
+    // matrix), Omega by its entries (orow: the position in rows, odest: the
+    // row of out, oval), plus Omega_k K(krows, cols) for the rows of an
+    // item's swap ranges (a nonsymmetric matrix's K(F, B) rows; korow,
+    // kodest, koval: Omega_k's entries).
+    struct SketchRequest {
+        std::vector<int64_t> rows, cols;
+        int d = 0;
+        std::vector<int> orow, odest;
+        std::vector<double> oval;
+        std::vector<int64_t> krows;
+        std::vector<int> korow, kodest;
+        std::vector<double> koval;
+        void* out = nullptr;
+        int ldo = 0;
+    };
+    using SketchReady = std::function<bool()>;
+    using SketchFetch = std::function<void(std::vector<SketchRequest>&, cudaStream_t)>;
+
+    // The library's own block evaluator of entries through a collective
+    // callback (collective_evaluator.hpp): reads the host ids, never warmed
+    // up (its first use costs nothing; a warm-up would fetch).  With a sketch
+    // callback (ready()), sketch_rows asks the source for the sketches.
+    static std::shared_ptr<Evaluator> from_collective(bpack_gpu_block_evaluator f, void* user, int scalar_bytes,
+                                                      SketchReady ready, SketchFetch fetch) {
+        std::shared_ptr<Evaluator> e = from_block(f, user, BPACK_GPU_SYMMETRIC | BPACK_GPU_HOST_IDS, scalar_bytes);
+        e->warmed_ = true;
+        e->collective_ = true;
+        e->sketch_ready_ = std::move(ready);
+        e->sketch_fetch_ = std::move(fetch);
+        e->origin_ = "entries through the collective callback";
+        return e;
+    }
     static std::shared_ptr<Evaluator> from_list(bpack_gpu_list_evaluator f, void* user, int flags,
                                                 int scalar_bytes) {
         if (f == nullptr) throw std::invalid_argument("GPU entry-list evaluator: null function");
@@ -104,6 +141,8 @@ public:
     bool needs_coordinates() const { return (flags_ & BPACK_GPU_COORDINATES) != 0; }
     // The sketch's kernel rows can be evaluated inside the sketch.
     bool inline_entries() const { return form_ == Form::entry; }
+    // The entries come from a collective callback (from_collective).
+    bool collective() const { return collective_; }
     const std::string& origin() const { return origin_; }
     // Seconds of the NVRTC compile of an entry evaluator given as source (0
     // before its first use, and for the other forms)
@@ -150,41 +189,96 @@ public:
             check_launch("the entry evaluator's sketch");
             return;
         }
+        if (collective_ && sketch_ready_ && sketch_ready_()) {
+            collective_sketch_rows<T>(host_items, points, stream);
+            return;
+        }
         // the rows into scratch (ncols x rows per item, row by row), then
-        // their sketch, in groups within a budget
+        // their sketch, in groups within a budget.  The rows of an item's
+        // swap ranges (a nonsymmetric matrix's K(F, B) rows) are evaluated as
+        // the block K(rows, B) into scratch of their own and transposed into
+        // their places.
+        struct Segment { int r0, r1; bool swapped; };
+        auto segments_of = [](const OrderedSketchItemT<T>& it) {
+            std::vector<Segment> out;
+            std::pair<int, int> sw[2] = {{std::max(it.swap_lo0, 0), std::min(it.swap_hi0, it.rows)},
+                                         {std::max(it.swap_lo1, 0), std::min(it.swap_hi1, it.rows)}};
+            if (sw[0].first > sw[1].first) std::swap(sw[0], sw[1]);
+            int at = 0;
+            for (const auto& [lo, hi] : sw) {
+                if (hi <= lo) continue;
+                if (lo < at) throw std::logic_error("Evaluator::sketch_rows: overlapping swap ranges");
+                if (lo > at) out.push_back(Segment{at, lo, false});
+                out.push_back(Segment{lo, hi, true});
+                at = hi;
+            }
+            if (at < it.rows) out.push_back(Segment{at, it.rows, false});
+            return out;
+        };
+        // an item's scratch: its block, then a block for each swapped segment
+        // (as the layout below takes them)
+        auto scratch_of = [&](const OrderedSketchItemT<T>& it) {
+            const size_t cols = static_cast<size_t>(std::max(it.ncols, 0));
+            size_t b = align_up(cols * std::max(it.rows, 0) * sizeof(T));
+            if (it.ncols <= 0 || it.rows <= 0) return b;
+            for (const Segment& g : segments_of(it)) {
+                if (g.swapped) b += align_up(cols * static_cast<size_t>(g.r1 - g.r0) * sizeof(T));
+            }
+            return b;
+        };
         DeviceHeap& heap = DeviceHeap::instance();
         const size_t budget = scratch_budget(heap);
         size_t i = 0;
         while (i < host_items.size()) {
             size_t j = i, bytes = 0;
             while (j < host_items.size()) {
-                const OrderedSketchItemT<T>& it = host_items[j];
-                const size_t b = align_up(static_cast<size_t>(std::max(it.ncols, 0)) * std::max(it.rows, 0) * sizeof(T));
+                const size_t b = scratch_of(host_items[j]);
                 if (j > i && bytes + b > budget) break;
                 bytes += b;
                 ++j;
             }
             char* scratch = bytes > 0 ? heap.alloc(bytes) : nullptr;
             std::vector<EvalItemT<T>> evals;
+            std::vector<TransposeItemT<T>> transposes;
             std::vector<OrderedSketchItemT<T>> stored;
-            int max_m = 0, max_n = 0, md = 0, mc = 0;
+            int max_m = 0, max_n = 0, md = 0, mc = 0, max_tm = 0, max_tn = 0;
             size_t at = 0;
             for (size_t k = i; k < j; ++k) {
                 OrderedSketchItemT<T> s = host_items[k];
                 T* block = reinterpret_cast<T*>(scratch + at);
                 at += align_up(static_cast<size_t>(std::max(s.ncols, 0)) * std::max(s.rows, 0) * sizeof(T));
                 if (s.ncols > 0 && s.rows > 0) {
-                    // block(c, row) = K(point col_base + c, point row_slots[row])
-                    EvalItemT<T> e;
-                    e.out = block;
-                    e.ld = s.ncols;
-                    e.m = s.ncols;
-                    e.n = s.rows;
-                    e.rows = IndexList{-1, s.col_base, nullptr};
-                    e.cols = IndexList{-1, 0, s.row_slots};
-                    evals.push_back(e);
-                    max_m = std::max(max_m, e.m);
-                    max_n = std::max(max_n, e.n);
+                    for (const Segment& g : segments_of(s)) {
+                        const int len = g.r1 - g.r0;
+                        EvalItemT<T> e;
+                        if (!g.swapped) {
+                            // block(c, row) = K(point col_base + c, point row_slots[row])
+                            e.out = block + static_cast<size_t>(g.r0) * s.ncols;
+                            e.ld = s.ncols;
+                            e.m = s.ncols;
+                            e.n = len;
+                            e.rows = IndexList{-1, s.col_base, nullptr};
+                            e.cols = IndexList{-1, 0, s.row_slots + g.r0};
+                        } else {
+                            // tmp(r, c) = K(point row_slots[r0 + r], point col_base + c), then
+                            // block(c, r0 + r) = tmp(r, c)
+                            T* tmp = reinterpret_cast<T*>(scratch + at);
+                            at += align_up(static_cast<size_t>(len) * s.ncols * sizeof(T));
+                            e.out = tmp;
+                            e.ld = len;
+                            e.m = len;
+                            e.n = s.ncols;
+                            e.rows = IndexList{-1, 0, s.row_slots + g.r0};
+                            e.cols = IndexList{-1, s.col_base, nullptr};
+                            transposes.push_back(TransposeItemT<T>{tmp, len, block + static_cast<size_t>(g.r0) * s.ncols,
+                                                                   s.ncols, len, s.ncols});
+                            max_tm = std::max(max_tm, len);
+                            max_tn = std::max(max_tn, s.ncols);
+                        }
+                        evals.push_back(e);
+                        max_m = std::max(max_m, e.m);
+                        max_n = std::max(max_n, e.n);
+                    }
                 }
                 s.src = block;
                 s.row_stride = s.ncols;
@@ -193,10 +287,20 @@ public:
                 md = std::max(md, s.d);
                 mc = std::max(mc, s.ncols);
             }
+            if (at != bytes) {
+                if (scratch != nullptr) heap.free(scratch);
+                throw std::logic_error("Evaluator::sketch_rows: scratch layout and size disagree");
+            }
             if (!evals.empty()) {
                 EvalItemT<T>* d_evals = upload(heap, evals, stream);
                 eval_blocks(evals, d_evals, nullptr, points, stream);
                 heap.free(d_evals);
+            }
+            if (!transposes.empty()) {
+                TransposeItemT<T>* d_tr = upload(heap, transposes, stream);
+                launch_transpose(d_tr, static_cast<int>(transposes.size()), max_tm, max_tn, stream);
+                check_launch("the sketch's K(F, B) rows into their places");
+                heap.free(d_tr);
             }
             OrderedSketchItemT<T>* d_stored = upload(heap, stored, stream);
             launch_ordered_sketch_stored(d_stored, static_cast<int>(stored.size()), md, mc, stream);
@@ -293,6 +397,92 @@ private:
     }
     static void release_scratch(void*, void* ptr) {
         if (ptr != nullptr) DeviceHeap::instance().free(ptr);
+    }
+
+    // Entries through a collective callback with a sketch callback: each
+    // item's sketch asked of the source (sketch_fetch_), its points' ids and
+    // its draws (the packed entries of the warp lists) read back first.
+    template<typename T>
+    void collective_sketch_rows(const std::vector<OrderedSketchItemT<T>>& host_items, const PointTable& points,
+                                cudaStream_t stream) const {
+        DeviceHeap& heap = DeviceHeap::instance();
+        std::vector<size_t> asked;
+        std::vector<BlockGatherItem> gather;
+        int64_t total = 0;
+        int max_mn = 0;
+        for (size_t k = 0; k < host_items.size(); ++k) {
+            const OrderedSketchItemT<T>& s = host_items[k];
+            if (s.d <= 0 || s.ncols <= 0) continue;
+            if (s.rows <= 0) {  // (no rows: zeros, as the sketch kernel writes)
+                check_cuda(cudaMemset2DAsync(s.out, static_cast<size_t>(s.ldo) * sizeof(T), 0,
+                                             static_cast<size_t>(s.d) * sizeof(T), static_cast<size_t>(s.ncols), stream),
+                           "collective sketch zeros");
+                continue;
+            }
+            // the columns' points (col_base + c), then the rows' (row_slots)
+            gather.push_back(BlockGatherItem{IndexList{-1, s.col_base, nullptr}, IndexList{-1, 0, s.row_slots}, s.ncols,
+                                             s.rows, total, total + s.ncols});
+            total += s.ncols + s.rows;
+            max_mn = std::max(max_mn, std::max(s.ncols, s.rows));
+            asked.push_back(k);
+        }
+        if (asked.empty()) return;
+        int64_t* ids = heap.alloc<int64_t>(static_cast<size_t>(total) * sizeof(int64_t));
+        BlockGatherItem* d_gather = upload(heap, gather, stream);
+        launch_gather_block_points(d_gather, static_cast<int>(gather.size()), max_mn, nullptr, points, ids, nullptr,
+                                   stream);
+        check_launch("the gather of the sketches' points");
+        std::vector<int64_t> h_ids(static_cast<size_t>(total));
+        check_cuda(cudaMemcpyAsync(h_ids.data(), ids, h_ids.size() * sizeof(int64_t), cudaMemcpyDeviceToHost, stream),
+                   "collective sketch ids");
+        std::vector<std::vector<int>> ptr(asked.size(), std::vector<int>(kSketchOwners + 1));
+        for (size_t q = 0; q < asked.size(); ++q) {
+            check_cuda(cudaMemcpyAsync(ptr[q].data(), host_items[asked[q]].ptr, ptr[q].size() * sizeof(int),
+                                       cudaMemcpyDeviceToHost, stream),
+                       "collective sketch lists");
+        }
+        check_cuda(cudaStreamSynchronize(stream), "collective sketch lists");
+        std::vector<std::vector<int>> entries(asked.size());
+        for (size_t q = 0; q < asked.size(); ++q) {
+            entries[q].resize(static_cast<size_t>(ptr[q][kSketchOwners] - ptr[q][0]));
+            if (entries[q].empty()) continue;
+            check_cuda(cudaMemcpyAsync(entries[q].data(), host_items[asked[q]].entries + ptr[q][0],
+                                       entries[q].size() * sizeof(int), cudaMemcpyDeviceToHost, stream),
+                       "collective sketch draws");
+        }
+        check_cuda(cudaStreamSynchronize(stream), "collective sketch draws");
+        heap.free(d_gather);
+        heap.free(ids);
+        std::vector<SketchRequest> requests(asked.size());
+        for (size_t q = 0; q < asked.size(); ++q) {
+            const OrderedSketchItemT<T>& s = host_items[asked[q]];
+            const BlockGatherItem& g = gather[q];
+            SketchRequest& r = requests[q];
+            r.cols.assign(h_ids.begin() + g.row_at, h_ids.begin() + g.row_at + s.ncols);
+            r.d = s.d;
+            r.out = s.out;
+            r.ldo = s.ldo;
+            // each row into its part, at its position there (the swap ranges'
+            // rows into krows)
+            auto swapped = [&](int row) {
+                return (row >= s.swap_lo0 && row < s.swap_hi0) || (row >= s.swap_lo1 && row < s.swap_hi1);
+            };
+            std::vector<int> at(static_cast<size_t>(s.rows));
+            for (int row = 0; row < s.rows; ++row) {
+                const int64_t id = h_ids[static_cast<size_t>(g.col_at + row)];
+                auto& part = swapped(row) ? r.krows : r.rows;
+                at[static_cast<size_t>(row)] = static_cast<int>(part.size());
+                part.push_back(id);
+            }
+            for (int e : entries[q]) {
+                const int row = e & kEntryRowMask;
+                const bool k = swapped(row);
+                (k ? r.korow : r.orow).push_back(at[static_cast<size_t>(row)]);
+                (k ? r.kodest : r.odest).push_back((e >> kEntryRowBits) & kEntryDestMask);
+                (k ? r.koval : r.oval).push_back((static_cast<unsigned>(e) & 0x80000000u) != 0 ? -s.scale : s.scale);
+            }
+        }
+        sketch_fetch_(requests, stream);
     }
 
     // The block and list forms: the items' points gathered, then the
@@ -444,6 +634,9 @@ private:
     mutable std::shared_ptr<NvrtcEntryKernels> nvrtc_;
     mutable double* params_ = nullptr;
     mutable bool warmed_ = false;  // (warm_up ran)
+    bool collective_ = false;
+    SketchReady sketch_ready_;
+    SketchFetch sketch_fetch_;
     mutable double compile_seconds_ = 0.0;
     // block, list
     bpack_gpu_block_evaluator block_ = nullptr;
@@ -459,9 +652,11 @@ inline const Evaluator* evaluator_of(const std::shared_ptr<void>& registered) {
 
 // The registered evaluator if the H2 backend can use it for DataType (double
 // or complex<double>), else null and why: none, of the other value type, or
-// not symmetric (H2 factors symmetric matrices).
+// not symmetric for a symmetric matrix (a nonsymmetric one, option%sym=0,
+// takes any evaluator).
 template<typename DataType>
-const Evaluator* registered_evaluator(const std::shared_ptr<void>& registered, const char** why) {
+const Evaluator* registered_evaluator(const std::shared_ptr<void>& registered, const char** why,
+                                      bool symmetric_matrix = true) {
     const Evaluator* e = evaluator_of(registered);
     if (e == nullptr) {
         *why = "no GPU evaluator registered (doc/gpu_kernels.md)";
@@ -471,8 +666,8 @@ const Evaluator* registered_evaluator(const std::shared_ptr<void>& registered, c
         *why = "the GPU evaluator's value type does not match the matrix";
         return nullptr;
     }
-    if (!e->symmetric()) {
-        *why = "the GPU evaluator is not marked symmetric (BPACK_GPU_SYMMETRIC), which the H2 format requires";
+    if (symmetric_matrix && !e->symmetric()) {
+        *why = "the GPU evaluator is not marked symmetric (BPACK_GPU_SYMMETRIC), which a symmetric H2 requires";
         return nullptr;
     }
     return e;
@@ -496,9 +691,10 @@ bool device_sketch_supported(const Tree* tree, const Evaluator& evaluator) {
 // rank's first non-empty leaf box.  Its seconds (0: no usable evaluator, it
 // is warm already, or the rank has no points).
 template<typename DataType, typename Tree>
-double warm_up_registered_evaluator(const Tree* tree, const std::shared_ptr<void>& registered) {
+double warm_up_registered_evaluator(const Tree* tree, const std::shared_ptr<void>& registered,
+                                    bool symmetric_matrix = true) {
     const char* why = nullptr;
-    const Evaluator* evaluator = registered_evaluator<DataType>(registered, &why);
+    const Evaluator* evaluator = registered_evaluator<DataType>(registered, &why, symmetric_matrix);
     if (evaluator == nullptr || tree->num_levels < 1) return 0.0;
     const size_t dim = static_cast<size_t>(tree->dimension);
     std::vector<int64_t> ids;

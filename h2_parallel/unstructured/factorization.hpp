@@ -25,6 +25,11 @@ void factorize(H2<CoordType, DataType>* solver,
             "color_unstructured: solver already contains a compression-only H2 representation");
     }
 
+    if (solver->kernel.symmetric != solver->options.symmetric) {
+        // (the transport's apply of the updates follows the kernel's flag)
+        throw std::logic_error("color_unstructured: kernel and options disagree on the symmetry");
+    }
+
     const auto occupied = prepare_occupied_topology(
         solver->tree.get(), solver->options.verbosity);
 
@@ -32,15 +37,18 @@ void factorize(H2<CoordType, DataType>* solver,
                   std::is_same_v<DataType, std::complex<double>>) {
     const auto factorization_method =
         butterfly::h2_xrr_factorization_method(solver->options);
+    // (entries through a collective callback: the GPU reads them through
+    // the library's evaluator of them, gpu/collective_evaluator.hpp)
     configure_color_gpu(solver->options.use_gpu != 0);
     fmm::env::report_environment(solver->tree->comm);
 #ifdef H2_HAVE_GPU
-    fmm::gpu::tensor_core_gemm() = solver->options.use_gpu == 2;
+    fmm::gpu::tensor_core_gemm() = solver->options.use_gpu != 0;  // (real double: FP64 tensor cores)
 #endif
     fmm::HierarchicalFactorization<
         CoordType, DataType, butterfly::H2Kernel<CoordType, DataType>> factorizer(
             solver->options.N,
-            fmm::MatrixProperty::SYMMETRIC,
+            solver->options.symmetric ? fmm::MatrixProperty::SYMMETRIC
+                                      : fmm::MatrixProperty::NONSYMMETRIC,
             &solver->kernel,
             solver->options.dimension,
             factorization_method,
@@ -53,12 +61,13 @@ void factorize(H2<CoordType, DataType>* solver,
     const double start = MPI_Wtime();
     butterfly::h2_verification_seconds() = 0.0;
     butterfly::h2_warmup_seconds() = 0.0;
+    if (solver->kernel.collective) solver->kernel.collective->reset_counts();
     hierarchical_factorization_unstructured(
         solver->tree.get(),
         &solver->kernel,
         solver->options.tolerance,
         solver->options.use_sketch,
-        true,
+        solver->options.symmetric,
         false,
         factorization_method,
         factorizer.get_unit_proxy_points(),
@@ -72,7 +81,11 @@ void factorize(H2<CoordType, DataType>* solver,
         0,
         0,
         solver->options.verbosity,
-        occupied);
+        occupied,
+        solver->options.compress_factors);
+    if (solver->kernel.collective && solver->options.verbosity >= 1) {
+        solver->kernel.collective->report("factorization");
+    }
 
     // the logdet and quick verification that end the call, and the GPU
     // warm-up before its first level, are not factorization

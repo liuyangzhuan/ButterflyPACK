@@ -3,7 +3,8 @@
 //
 // The draws reproduce the host's: std::mt19937_64 seeded with morton + 1,
 // sk draws per sketched row in row order, destination block_start[b] +
-// rand % block_range[b], positive when the top bit is set.  One block runs
+// rand % block_range[b], positive when the top bit is set (a direct target,
+// id_sketch_shape: each row to its own row, positive).  One block runs
 // a box's generator: the twist runs in its three dependency phases, a word
 // per thread, and the 312 outputs of a state are tempered in parallel.  The
 // destination lists come from a block-wide stable partition (each warp owns
@@ -82,6 +83,10 @@ __global__ void __launch_bounds__(kListThreads) sketch_draws_kernel(const Sketch
     __shared__ uint64_t state[2][kStateWords];
     const SketchListsItem item = items[blockIdx.x];
     const int t = threadIdx.x;
+    if (item.direct) {  // (sk = 1) row q to row q, positive
+        for (int q = t; q < item.rows; q += blockDim.x) item.draws[q] = q;
+        return;
+    }
     if (t == 0) {
         uint64_t* mt = state[0];
         mt[0] = item.seed;

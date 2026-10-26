@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <mpi.h>
 #include "morton.hpp"
+#include "region_partition.hpp"
 #include <unordered_map>
 #include <unordered_set>
 #include <omp.h>
@@ -125,8 +126,11 @@ enum class EdgeKind : uint8_t { Near, Far, Diag };
 struct ReplaceKey {
     int64_t target_box;   // G (the box to be updated on its owner rank)
     int64_t neighbor_box; // B (the eliminated box whose skeleton interaction is stored)
+    // the view of G it replaces: 0 its A_NS[B], 1 its A_SN[B] (a
+    // nonsymmetric matrix; a symmetric one has A_NS only)
+    uint8_t slot = 0;
     bool operator==(const ReplaceKey& o) const noexcept {
-        return target_box == o.target_box && neighbor_box == o.neighbor_box;
+        return target_box == o.target_box && neighbor_box == o.neighbor_box && slot == o.slot;
     }
 };
 
@@ -134,8 +138,12 @@ struct EdgeKey {
     int64_t lo;
     int64_t hi;
     EdgeKind kind;
+    // the delta's orientation: 0 the block K(hi, lo) (n_hi x n_lo; a
+    // symmetric matrix, and a diagonal one), 1 the block K(lo, hi) (a
+    // nonsymmetric matrix holds both)
+    uint8_t rows_lo = 0;
     bool operator==(const EdgeKey& o) const noexcept {
-        return lo == o.lo && hi == o.hi && kind == o.kind;
+        return lo == o.lo && hi == o.hi && kind == o.kind && rows_lo == o.rows_lo;
     }
 };
 
@@ -144,7 +152,7 @@ struct ReplaceKeyHash {
         // simple combine
         size_t h1 = std::hash<int64_t>{}(k.target_box);
         size_t h2 = std::hash<int64_t>{}(k.neighbor_box);
-        return h1 ^ (h2 + 0x9e3779b97f4a7c15ULL + (h1<<6) + (h1>>2));
+        return (h1 ^ (h2 + 0x9e3779b97f4a7c15ULL + (h1<<6) + (h1>>2))) + k.slot;
     }
 };
 
@@ -154,7 +162,7 @@ struct EdgeKeyHash {
         size_t h2 = std::hash<int64_t>{}(k.hi);
         size_t h3 = std::hash<uint8_t>{}(static_cast<uint8_t>(k.kind));
         size_t h = h1 ^ (h2 + 0x9e3779b97f4a7c15ULL + (h1<<6) + (h1>>2));
-        return h ^ (h3 + 0x9e3779b97f4a7c15ULL + (h<<6) + (h>>2));
+        return (h ^ (h3 + 0x9e3779b97f4a7c15ULL + (h<<6) + (h>>2))) + k.rows_lo;
     }
 };
 
@@ -178,6 +186,12 @@ struct GeneratorPayload {
     int64_t k = 0;
     std::vector<int64_t> skeleton_indices;
     std::vector<DataType> x_rs;
+    // a nonsymmetric matrix: temp4 = -X_RR^-1 X_RN (r x total_rows, the
+    // column side of the source's fill), and for its near updates (lazy
+    // Schur mode 2) the original X_RN and the solved X_SR (k x r)
+    std::vector<DataType> temp4;
+    std::vector<DataType> original_x_rn;
+    std::vector<DataType> x_sr;
 };
 
 
@@ -795,6 +809,16 @@ struct ModifiedBlock {
         return result;
     }
 
+    std::vector<DataType> copy_a_sn_data() const {
+        std::vector<DataType> result(static_cast<size_t>(A_SN.rows * A_SN.cols));
+        for (int64_t col = 0; col < A_SN.cols; ++col) {
+            for (int64_t row = 0; row < A_SN.rows; ++row) {
+                result[static_cast<size_t>(row + col * A_SN.rows)] = A_SN(row, col);
+            }
+        }
+        return result;
+    }
+
     void set_a_ns_owned(
         int64_t rows,
         int64_t cols,
@@ -1062,9 +1086,13 @@ struct BoxData {
     MatrixStorage<DataType> X_RS_entry;
     std::vector<int64_t> deferred_xnn_neighbor_point_counts;
     std::vector<DataType> deferred_xnn_temp2;
+    // (a nonsymmetric matrix: temp4 = -X_RR^-1 X_RN, held as temp2 is until
+    // the source is finalized, when it replaces X_RN)
+    std::vector<DataType> deferred_xnn_temp4;
     // Remote lazy generators keep the source-time one-hop coupling so mode 2
     // can reproduce eager near updates without reconstructing it through X_RR.
     std::vector<DataType> lazy_original_x_nr;
+    std::vector<DataType> lazy_original_x_rn;  // (nonsymmetric)
 
     
     // ===== Near-Field and Far-Field Interactions =====
@@ -1260,6 +1288,19 @@ struct TreeLevel {
     std::unordered_map<int, int> morton_to_rank; ///< Morton region ID → MPI rank
     std::unordered_map<int, int> rank_to_morton; ///< MPI rank → Morton region ID
     int my_morton_id;                  ///< This process's Morton region (-1 if inactive)
+    /// Region i holds boxes [region_start[i], region_start[i + 1]) of the level
+    /// (num_active_processes + 1 entries, region_partition.hpp): equal cubes
+    /// for a count of (2^dimension)^k, else (or where the unstructured path's
+    /// points make the cubes uneven) Morton ranges of unequal length
+    std::vector<int64_t> region_start;
+    /// Whether the regions are equal cubes (bricks): a count of
+    /// (2^dimension)^k and the equal ranges.  Else only the unstructured Color
+    /// path runs the level.
+    bool regions_cubic = true;
+    /// The ranks this one exchanges with on the level: the owners of the
+    /// boxes within three hops of its boundary boxes (compute_assisting_boxes;
+    /// filled for a level whose regions are not cubes)
+    std::vector<int> region_peers;
     ProcessPairCommunicationSchedule process_pair_schedule; ///< Cached one-peer-per-phase schedule for deterministic pairwise communication
     
     // ========== Inter-Level Communication for Reduction ==========
@@ -1303,6 +1344,10 @@ struct TreeLevel {
     {
         return (morton_index >= local_morton_start && morton_index <= local_morton_end);
     }
+
+    /// The region of box `morton` on this level, and the rank that holds it
+    int32_t region_of(int64_t morton) const { return fmm::region_of_box(region_start, morton); }
+    int owner_rank_of(int64_t morton) const { return morton_to_rank.at(region_of(morton)); }
 
 
 };
@@ -1438,6 +1483,8 @@ size_t calculate_box_data_size(const BoxData<CoordType, DataType>& box) {
     total += matrix_heap(box.X_NR);
     total += matrix_heap(box.X_RR_full);
     total += matrix_heap(box.X_RS_entry);
+    total += vec_heap(box.deferred_xnn_temp4);
+    total += vec_heap(box.lazy_original_x_rn);
 
     // ===== Interaction maps =====
     total += map_heap(box.near_field_interaction_map);
@@ -1521,11 +1568,14 @@ struct ParallelTree {
     // Process reduction configuration (Section 5.3-5.4)
     ReductionPattern reduction_pattern;  ///< Reduction strategy
     int64_t reduction_threshold;         ///< Boxes/process threshold for reduction
+    bool any_process_count = false;      ///< Any rank count (unstructured Color); else (2^dimension)^k
+    bool factor_symmetric = true;        ///< The RS-S factor's matrix: symmetric (X_RS = X_SR^T), else general
     int CA_level;                        ///< First factorization level using CA
     int id_neighborhood_radius;          ///< Diagnostic ID row-neighborhood radius
     int id_proxy_mode;                   ///< 0: none, 1: geometric surface, 2: adaptive sampling
     int id_proxy_points;                 ///< Geometric surface samples for mode 1
     int id_adaptive_batch;               ///< Adaptive rows per spatial node for mode 2
+    double id_s_op = 0.0;                ///< H2_s_op: the IDs' absolute floor is tol * id_s_op (0: off)
     std::vector<CoordType> id_source_point_coords; ///< Retained global coordinates only for ID diagnostics
     std::vector<int64_t> id_source_point_order; ///< Global point indices in spatial Morton order
     std::vector<int64_t> id_source_leaf_offsets; ///< Point offsets for every finest-level Morton box

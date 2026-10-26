@@ -2174,7 +2174,7 @@ bool owner_schedule_batch_wave(OwnerScheduleState<CoordType, DataType>& st, Tree
                         FMM_PHASE_LAP(box_lap, BOX_SKETCH);
                         compute_and_modify(
                             st.dimension, &box, level, kernel, scratch,
-                            tolerance, use_sketch,
+                            make_id_tolerance(st.tree, tolerance), use_sketch,
                             is_symmetric, is_hermitian,
                             static_cast<PendingFactorUpdates<DataType>*>(nullptr),
                             factorization_method, true);

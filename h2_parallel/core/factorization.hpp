@@ -431,7 +431,9 @@ inline void evaluate_block_by_index_split(
     DataType* matrix,
     int64_t leading_dimension,
     int split_threads) {
-    if (split_threads <= 1 || columns < 2 * split_threads) {
+    // (entries through a collective callback: one block, as fetched; a
+    // request may abandon the item, which an OpenMP task cannot throw)
+    if (split_threads <= 1 || columns < 2 * split_threads || kernel_entries_collective(kernel, 0)) {
         kernel->evaluate_block_by_index(
             row_indices, rows,
             column_indices, columns,
@@ -669,7 +671,8 @@ void apply_left_inverse_in_place(
     std::vector<DataType>& matrix,
     int64_t rows,
     int64_t cols,
-    const char* context) {
+    const char* context,
+    int split_threads = 1) {  // (LU: the columns split over that many tasks)
     if (rows == 0 || cols == 0) {
         return;
     }
@@ -699,11 +702,13 @@ void apply_left_inverse_in_place(
               matrix.data(), &m);
     } else if (factorization_method == FactorizationMethod::LU) {
         const int n = static_cast<int>(rows);
-        const int nrhs = static_cast<int>(cols);
         const int ldb = static_cast<int>(rows);
         char trans = 'N';
-        solve_lu_factored_system_in_place(
-            inverse_or_factor, pivots, trans, matrix.data(), n, nrhs, ldb, context);
+        split_columns_chunked(cols, split_threads, [&](int64_t c0, int64_t c1) {
+            solve_lu_factored_system_in_place(
+                inverse_or_factor, pivots, trans, matrix.data() + c0 * rows, n,
+                static_cast<int>(c1 - c0), ldb, context);
+        });
     } else if (factorization_method == FactorizationMethod::BUNCH_KAUFMAN) {
         const int n = static_cast<int>(rows);
         const int nrhs = static_cast<int>(cols);
@@ -3794,6 +3799,16 @@ void finalize_deferred_xnn_source_box(
     }
 
     std::vector<DataType>().swap(source_box->deferred_xnn_temp2);
+    // (a nonsymmetric matrix: temp4 replaces the original X_RN)
+    if (!source_box->deferred_xnn_temp4.empty()) {
+        if (!source_box->X_RN.is_allocated() ||
+            source_box->X_RN.data.size() != source_box->deferred_xnn_temp4.size()) {
+            throw std::runtime_error(
+                "finalize_deferred_xnn_source_box: source X_RN missing");
+        }
+        source_box->X_RN.data = std::move(source_box->deferred_xnn_temp4);
+    }
+    std::vector<DataType>().swap(source_box->deferred_xnn_temp4);
     if (lazy_far_field_mode() == LazyFarFieldMode::OFF) {
         std::vector<int64_t>().swap(
             source_box->deferred_xnn_neighbor_point_counts);
@@ -5076,7 +5091,8 @@ IDResult<DataType> compute_id_from_workspace(
     const std::vector<DataType>& workspace,
     int64_t rows,
     int64_t cols,
-    double tolerance) {
+    double tolerance,
+    double abs_tolerance) {
 
     if (rows == 0) {
         IDResult<DataType> empty_id;
@@ -5089,7 +5105,7 @@ IDResult<DataType> compute_id_from_workspace(
     }
     std::vector<DataType> factored = workspace;
     return compute_id_complex(
-        factored.data(), rows, cols, rows, tolerance, 0);
+        factored.data(), rows, cols, rows, tolerance, 0, abs_tolerance);
 }
 
 template<typename DataType>
@@ -5128,7 +5144,8 @@ std::vector<int64_t> select_independent_residual_rows(
     const std::vector<DataType>& residual,
     int64_t rows,
     int64_t cols,
-    double tolerance) {
+    double tolerance,
+    double abs_tolerance) {
 
     if (rows == 0 || cols == 0) return {};
     std::vector<DataType> transpose(static_cast<size_t>(rows * cols));
@@ -5139,7 +5156,7 @@ std::vector<int64_t> select_independent_residual_rows(
         }
     }
     IDResult<DataType> row_id = compute_id_complex(
-        transpose.data(), cols, rows, cols, tolerance, 0);
+        transpose.data(), cols, rows, cols, tolerance, 0, abs_tolerance);
     return std::move(row_id.skeleton_indices);
 }
 
@@ -5189,6 +5206,9 @@ std::vector<DataType> compute_adaptive_id_residual(
     return residual;
 }
 
+// A nonsymmetric matrix (is_symmetric false): each sampled or hold-out far
+// point gives the two rows the stacked ID target holds of it, K(p, B) and
+// K(B, p)^T (the points' K(P, B) rows, then their K(B, P)^T rows).
 template<typename CoordType, typename DataType, typename KernelType>
 void append_adaptive_id_training_rows(
     const ParallelTree<CoordType, DataType>* tree,
@@ -5203,14 +5223,32 @@ void append_adaptive_id_training_rows(
 
     if (stats != nullptr) *stats = IDAdaptiveStats{};
     if (tree->id_proxy_mode != 2 || workspace_cols == 0) return;
+    // H2_s_op: the IDs' absolute floor, and the residual tests' floor
+    // (threshold = max(tol ||W||_F, tol s_op))
+    const double abs_tolerance = id_absolute_tolerance(tree, tolerance);
     IDAdaptiveStats local_stats;
     IDAdaptiveStats& st = stats != nullptr ? *stats : local_stats;
     st.active = true;
-    if (!is_symmetric) {
-        throw std::runtime_error(
-            "adaptive H2 ID proxy selection currently requires a symmetric matrix");
-    }
     validate_id_source_index(tree);
+    // the far points' rows of the target (p x cols points: p, or 2 p rows)
+    auto far_rows = [&](const std::vector<int64_t>& points, std::vector<DataType>& rows) {
+        const int64_t p = static_cast<int64_t>(points.size());
+        const int64_t m = is_symmetric ? p : 2 * p;
+        rows.assign(static_cast<size_t>(m * workspace_cols), DataType{0});
+        kernel->evaluate_block_by_index(
+            points.data(), p, box->point_indices.data(), workspace_cols, rows.data(), m);
+        if (!is_symmetric) {
+            std::vector<DataType> kbp(static_cast<size_t>(workspace_cols * p));
+            kernel->evaluate_block_by_index(
+                box->point_indices.data(), workspace_cols, points.data(), p, kbp.data(), workspace_cols);
+            for (int64_t c = 0; c < workspace_cols; ++c) {
+                for (int64_t i = 0; i < p; ++i) {
+                    rows[static_cast<size_t>(p + i + c * m)] = kbp[static_cast<size_t>(c + i * workspace_cols)];
+                }
+            }
+        }
+        return m;
+    };
 
     const std::vector<IDAdaptiveFrame> far_frames =
         make_initial_id_far_frames(tree, box);
@@ -5229,14 +5267,14 @@ void append_adaptive_id_training_rows(
     size_t queue_head = 0;
 
     IDResult<DataType> base_id = compute_id_from_workspace(
-        workspace, workspace_rows, workspace_cols, tolerance);
+        workspace, workspace_rows, workspace_cols, tolerance, abs_tolerance);
     std::vector<IDResult<DataType>> extra_ids;
     int64_t extra_rank = 0;
     const int64_t sample_batch = std::max<int64_t>(1, tree->id_adaptive_batch);
 
     auto recompute_clean_id = [&]() {
         base_id = compute_id_from_workspace(
-            workspace, workspace_rows, workspace_cols, tolerance);
+            workspace, workspace_rows, workspace_cols, tolerance, abs_tolerance);
         extra_ids.clear();
         extra_rank = 0;
         ++st.recomputes;
@@ -5249,22 +5287,18 @@ void append_adaptive_id_training_rows(
 
         const std::vector<int64_t> sample_positions = pick_evenly_spaced_unused(
             unused, frame.lo, frame.hi, sample_batch, true);
-        const int64_t sample_rows = static_cast<int64_t>(sample_positions.size());
+        int64_t sample_rows = static_cast<int64_t>(sample_positions.size());
         ++st.frames;
-        st.sampled += sample_rows;
         std::vector<int64_t> sample_indices(static_cast<size_t>(sample_rows));
-        for (int64_t row = 0; row < sample_rows; ++row) {
+        for (int64_t row = 0; row < static_cast<int64_t>(sample_positions.size()); ++row) {
             sample_indices[static_cast<size_t>(row)] =
                 tree->id_source_point_order[static_cast<size_t>(
                     sample_positions[static_cast<size_t>(row)])];
         }
 
-        std::vector<DataType> sampled(
-            static_cast<size_t>(sample_rows * workspace_cols));
-        kernel->evaluate_block_by_index(
-            sample_indices.data(), sample_rows,
-            box->point_indices.data(), workspace_cols,
-            sampled.data(), sample_rows);
+        std::vector<DataType> sampled;
+        sample_rows = far_rows(sample_indices, sampled);
+        st.sampled += sample_rows;
 
         std::vector<DataType> residual = compute_adaptive_id_residual(
             sampled, sample_rows, workspace_cols, base_id, extra_ids);
@@ -5272,11 +5306,11 @@ void append_adaptive_id_training_rows(
             residual, sample_rows, workspace_cols);
         double reference_norm = id_frobenius_norm(
             workspace, workspace_rows, workspace_cols);
-        double threshold = reference_norm * tolerance;
+        double threshold = std::max(reference_norm * tolerance, abs_tolerance);
 
         const std::vector<int64_t> retained_rows =
             select_independent_residual_rows(
-                residual, sample_rows, workspace_cols, tolerance);
+                residual, sample_rows, workspace_cols, tolerance, abs_tolerance);
         append_selected_workspace_rows(
             workspace, workspace_rows, workspace_cols,
             sampled, sample_rows, retained_rows);
@@ -5291,7 +5325,7 @@ void append_adaptive_id_training_rows(
                 residual, sample_rows, workspace_cols);
             reference_norm = id_frobenius_norm(
                 workspace, workspace_rows, workspace_cols);
-            threshold = reference_norm * tolerance;
+            threshold = std::max(reference_norm * tolerance, abs_tolerance);
             converged = residual_norm < threshold;
         }
 
@@ -5303,22 +5337,18 @@ void append_adaptive_id_training_rows(
                 pick_evenly_spaced_unused(
                     unused, frame.lo, frame.hi, holdout_count, false);
             if (!holdout_positions.empty()) {
-                const int64_t holdout_rows =
+                const int64_t holdout_points =
                     static_cast<int64_t>(holdout_positions.size());
-                st.holdout += holdout_rows;
                 std::vector<int64_t> holdout_indices(
-                    static_cast<size_t>(holdout_rows));
-                for (int64_t row = 0; row < holdout_rows; ++row) {
+                    static_cast<size_t>(holdout_points));
+                for (int64_t row = 0; row < holdout_points; ++row) {
                     holdout_indices[static_cast<size_t>(row)] =
                         tree->id_source_point_order[static_cast<size_t>(
                             holdout_positions[static_cast<size_t>(row)])];
                 }
-                std::vector<DataType> holdout(
-                    static_cast<size_t>(holdout_rows * workspace_cols));
-                kernel->evaluate_block_by_index(
-                    holdout_indices.data(), holdout_rows,
-                    box->point_indices.data(), workspace_cols,
-                    holdout.data(), holdout_rows);
+                std::vector<DataType> holdout;
+                const int64_t holdout_rows = far_rows(holdout_indices, holdout);
+                st.holdout += holdout_rows;
                 std::vector<DataType> holdout_residual =
                     compute_adaptive_id_residual(
                         holdout, holdout_rows, workspace_cols,
@@ -5330,7 +5360,7 @@ void append_adaptive_id_training_rows(
                     const std::vector<int64_t> retained_holdout =
                         select_independent_residual_rows(
                             holdout_residual, holdout_rows,
-                            workspace_cols, tolerance);
+                            workspace_cols, tolerance, abs_tolerance);
                     append_selected_workspace_rows(
                         workspace, workspace_rows, workspace_cols,
                         holdout, holdout_rows, retained_holdout);
@@ -5349,8 +5379,10 @@ void append_adaptive_id_training_rows(
         if (!holdout_failed && residual_norm > 0.0) {
             const double residual_tolerance = std::min(
                 1.0, reference_norm / residual_norm * tolerance);
+            // (the residual is in the matrix's units: the floor applies as it is)
             IDResult<DataType> extra_id = compute_id_from_workspace(
-                residual, sample_rows, workspace_cols, residual_tolerance);
+                residual, sample_rows, workspace_cols, residual_tolerance,
+                abs_tolerance);
             if (extra_id.rank > 0 &&
                 extra_rank + extra_id.rank <= workspace_cols) {
                 extra_rank += extra_id.rank;
@@ -5384,7 +5416,8 @@ void gather_id_workspace(
     bool on_boundary = false,
     bool use_CA_boundary_semantics = false,
     IDAdaptiveStats* adaptive_stats = nullptr,
-    bool adaptive_rows = true) {  // false: the caller selects them (against its sketch)
+    bool adaptive_rows = true,  // false: the caller selects them (against its sketch)
+    int split_threads = 1) {  // the kernel blocks split over that many tasks (a small wave)
 
     if (adaptive_stats != nullptr) *adaptive_stats = IDAdaptiveStats{};
     if (box == nullptr || box->num_points == 0) {
@@ -5604,11 +5637,12 @@ void gather_id_workspace(
                     }
                     
                     std::vector<DataType> A_NB(actual_n_neighbor * workspace_cols);
-                    kernel->evaluate_block_by_index(
+                    evaluate_block_by_index_split<DataType>(
+                        kernel,
                         skeleton_indices.data(), actual_n_neighbor,
                         box->point_indices.data(), workspace_cols,
-                        A_NB.data(), actual_n_neighbor
-                    );
+                        A_NB.data(), actual_n_neighbor,
+                        split_threads);
                     
                     for (int64_t col = 0; col < workspace_cols; ++col) {
                         for (int64_t row = 0; row < actual_n_neighbor; ++row) {
@@ -5627,11 +5661,12 @@ void gather_id_workspace(
                     }
                     
                     std::vector<DataType> A_NB(n_neighbor * workspace_cols);
-                    kernel->evaluate_block_by_index(
+                    evaluate_block_by_index_split<DataType>(
+                        kernel,
                         neighbor_indices, n_neighbor,
                         box->point_indices.data(), workspace_cols,
-                        A_NB.data(), n_neighbor
-                    );
+                        A_NB.data(), n_neighbor,
+                        split_threads);
                     
                     for (int64_t col = 0; col < workspace_cols; ++col) {
                         for (int64_t row = 0; row < n_neighbor; ++row) {
@@ -5722,11 +5757,12 @@ void gather_id_workspace(
 
                 // Evaluate block A(neighbor, box_points)
                 std::vector<DataType> A_NB((size_t)n_neighbor * (size_t)workspace_cols);
-                kernel->evaluate_block_by_index(
+                evaluate_block_by_index_split<DataType>(
+                    kernel,
                     neighbor_indices_ptr, n_neighbor,
                     box->point_indices.data(), workspace_cols,
-                    A_NB.data(), n_neighbor
-                );
+                    A_NB.data(), n_neighbor,
+                    split_threads);
 
                 // Scatter into workspace (column-major)
                 for (int64_t col = 0; col < workspace_cols; ++col) {
@@ -5741,22 +5777,110 @@ void gather_id_workspace(
         current_row_offset += n_neighbor;
     }
 
+    // A nonsymmetric matrix: the ring's rows of K(B, N) too, transposed under
+    // the rows above, with the same row sets, so that one skeleton and
+    // interpolation of B serve its rows and its columns (the ID of the
+    // stacked [K(N, B); K(B, N)^T])
+    if (!is_symmetric) {
+        for (size_t neighbor_idx = 0; neighbor_idx < box->two_hop.size(); ++neighbor_idx) {
+            const int64_t neighbor_morton = box->two_hop[neighbor_idx];
+            const int64_t n_neighbor = neighbor_point_counts[neighbor_idx];
+            // the far block K(B, N) the eliminations so far have updated (its
+            // A_SN view, box by neighbor), as the stored ring rows above
+            auto sn_it = box->far_field_interaction_map_nonsymmetry.find(neighbor_morton);
+            if (sn_it != box->far_field_interaction_map_nonsymmetry.end()) {
+                get_sliced_neighbor_block_into(
+                    neighbor_morton, box->far_field_modified_interactions[static_cast<size_t>(sn_it->second)],
+                    level, false, workspace_cols, sliced_block);
+                if (static_cast<int64_t>(sliced_block.size()) != workspace_cols * n_neighbor) {
+                    throw std::runtime_error(
+                        "gather_id_workspace: stored far-field column mismatch box=" +
+                        std::to_string(box->morton_index) + " neighbor=" + std::to_string(neighbor_morton));
+                }
+                for (int64_t col = 0; col < workspace_cols; ++col) {
+                    for (int64_t row = 0; row < n_neighbor; ++row) {
+                        workspace[(current_row_offset + row) + col * workspace_rows] =
+                            sliced_block[static_cast<size_t>(col + row * workspace_cols)];
+                    }
+                }
+                current_row_offset += n_neighbor;
+                continue;
+            }
+            if (box->far_field_interaction_map.find(neighbor_morton) != box->far_field_interaction_map.end()) {
+                throw std::logic_error(
+                    "gather_id_workspace: the far block K(N, B) of box " + std::to_string(box->morton_index) +
+                    " and neighbor " + std::to_string(neighbor_morton) + " is stored, K(B, N) is not");
+            }
+            // the neighbor's rows, as above: its skeleton once eliminated
+            std::vector<int64_t> ids;
+            ids.reserve(static_cast<size_t>(n_neighbor));
+            const BoxData<CoordType, DataType>* neighbor_box = level.find_local_box(neighbor_morton);
+            if (neighbor_box == nullptr) {
+                auto ghost_it = level.ghost_id_to_index.find(neighbor_morton);
+                if (ghost_it != level.ghost_id_to_index.end()) neighbor_box = &level.ghost_boxes[ghost_it->second];
+            }
+            if (neighbor_box != nullptr) {
+                const bool keep_full_boundary_neighbor =
+                    use_CA_boundary_semantics && on_boundary && neighbor_box->on_boundary;
+                if (sketch_box_eliminated(level, neighbor_morton) && !keep_full_boundary_neighbor) {
+                    for (int64_t src : neighbor_box->skeleton_indices) {
+                        ids.push_back(neighbor_box->point_indices[static_cast<size_t>(src)]);
+                    }
+                } else {
+                    ids.assign(neighbor_box->point_indices.begin(), neighbor_box->point_indices.end());
+                }
+            } else {
+                auto assist_it = level.assisting_box_points_for_kernel_evaluation.find(neighbor_morton);
+                if (assist_it == level.assisting_box_points_for_kernel_evaluation.end()) {
+                    throw std::runtime_error("gather_id_workspace: missing assisting data for neighbor " +
+                                             std::to_string(neighbor_morton));
+                }
+                const auto& req = level.assisting_boxes[static_cast<size_t>(assist_it->second)];
+                if (!use_CA_boundary_semantics && sketch_box_eliminated(level, neighbor_morton)) {
+                    for (int64_t i = 0; i < n_neighbor && i < static_cast<int64_t>(req.skel_indices.size()); ++i) {
+                        ids.push_back(req.indices[static_cast<size_t>(req.skel_indices[static_cast<size_t>(i)])]);
+                    }
+                } else {
+                    ids.assign(req.indices.begin(), req.indices.end());
+                }
+            }
+            if (static_cast<int64_t>(ids.size()) != n_neighbor) {
+                throw std::runtime_error("gather_id_workspace: transposed ring rows of neighbor " +
+                                         std::to_string(neighbor_morton) + ": " + std::to_string(ids.size()) +
+                                         " points, " + std::to_string(n_neighbor) + " expected");
+            }
+            std::vector<DataType> A_BN(static_cast<size_t>(workspace_cols * n_neighbor));
+            evaluate_block_by_index_split<DataType>(
+                kernel, box->point_indices.data(), workspace_cols, ids.data(), n_neighbor,
+                A_BN.data(), workspace_cols, split_threads);
+            for (int64_t col = 0; col < workspace_cols; ++col) {
+                for (int64_t row = 0; row < n_neighbor; ++row) {
+                    workspace[(current_row_offset + row) + col * workspace_rows] =
+                        A_BN[static_cast<size_t>(col + row * workspace_cols)];
+                }
+            }
+            current_row_offset += n_neighbor;
+        }
+    }
+
     if (!additional_training_indices.empty()) {
         const int64_t additional_rows =
             static_cast<int64_t>(additional_training_indices.size());
-        kernel->evaluate_block_by_index(
+        evaluate_block_by_index_split<DataType>(
+            kernel,
             additional_training_indices.data(), additional_rows,
             box->point_indices.data(), workspace_cols,
-            workspace.data() + current_row_offset, workspace_rows);
+            workspace.data() + current_row_offset, workspace_rows, split_threads);
         current_row_offset += additional_rows;
 
         if (!is_symmetric) {
             std::vector<DataType> transposed_block(
                 static_cast<size_t>(workspace_cols * additional_rows));
-            kernel->evaluate_block_by_index(
+            evaluate_block_by_index_split<DataType>(
+                kernel,
                 box->point_indices.data(), workspace_cols,
                 additional_training_indices.data(), additional_rows,
-                transposed_block.data(), workspace_cols);
+                transposed_block.data(), workspace_cols, split_threads);
             for (int64_t col = 0; col < workspace_cols; ++col) {
                 for (int64_t row = 0; row < additional_rows; ++row) {
                     workspace[(current_row_offset + row) + col * workspace_rows] =
@@ -6029,6 +6153,29 @@ void slice_far_field_blocks(
                     stored_rows, k, std::move(sliced),
                     MatrixStorage<DataType>::FULL);
             }
+
+            // A nonsymmetric matrix: the A_SN views K(B, N) too, their rows
+            if (block.A_SN.is_allocated() && block.A_SN.rows != k) {
+                const int64_t stored_rows = block.A_SN.rows;
+                const int64_t stored_cols = block.A_SN.cols;
+                std::vector<DataType> sliced(
+                    static_cast<size_t>(k * stored_cols));
+                for (int64_t col = 0; col < stored_cols; ++col) {
+                    for (int64_t row = 0; row < k; ++row) {
+                        const int64_t source_row =
+                            box.skeleton_indices[static_cast<size_t>(row)];
+                        if (source_row < 0 || source_row >= stored_rows) {
+                            throw std::runtime_error(
+                                "slice_far_field_blocks: skeleton row out of bounds");
+                        }
+                        sliced[static_cast<size_t>(row + col * k)] =
+                            block.A_SN(source_row, col);
+                    }
+                }
+                block.A_SN.set_owned(
+                    k, stored_cols, std::move(sliced),
+                    MatrixStorage<DataType>::FULL);
+            }
         }
 
         // ====================================================================
@@ -6047,9 +6194,37 @@ void slice_far_field_blocks(
                 continue;  // Not on this process
             }
 
-            auto& neighbor_far_map = (is_symmetric || is_hermitian)
-                ? neighbor_box->far_field_interaction_map
-                : neighbor_box->far_field_interaction_map_nonsymmetry;
+            // (a nonsymmetric matrix: G's A_SN[B] = K(G, B) too, its columns)
+            if (!(is_symmetric || is_hermitian)) {
+                auto sn_it = neighbor_box->far_field_interaction_map_nonsymmetry.find(box.morton_index);
+                if (sn_it != neighbor_box->far_field_interaction_map_nonsymmetry.end()) {
+                    auto& sn_block = neighbor_box->far_field_modified_interactions[
+                        static_cast<size_t>(sn_it->second)];
+                    if (sn_block.A_SN.is_allocated() && sn_block.A_SN.cols != k) {
+                        const int64_t stored_rows = sn_block.A_SN.rows;
+                        const int64_t stored_cols = sn_block.A_SN.cols;
+                        std::vector<DataType> sliced(
+                            static_cast<size_t>(stored_rows * k));
+                        for (int64_t col = 0; col < k; ++col) {
+                            const int64_t source_col =
+                                box.skeleton_indices[static_cast<size_t>(col)];
+                            if (source_col < 0 || source_col >= stored_cols) {
+                                throw std::runtime_error(
+                                    "slice_far_field_blocks: skeleton column out of bounds");
+                            }
+                            for (int64_t row = 0; row < stored_rows; ++row) {
+                                sliced[static_cast<size_t>(row + col * stored_rows)] =
+                                    sn_block.A_SN(row, source_col);
+                            }
+                        }
+                        sn_block.A_SN.set_owned(
+                            stored_rows, k, std::move(sliced),
+                            MatrixStorage<DataType>::FULL);
+                    }
+                }
+            }
+
+            auto& neighbor_far_map = neighbor_box->far_field_interaction_map;
 
             auto it = neighbor_far_map.find(box.morton_index);
             if (it == neighbor_far_map.end()) {
@@ -6387,7 +6562,7 @@ void compute_step_two_internal(
             
             apply_left_inverse_in_place(
                 box->X_RR, box->X_RR_pivots, factorization_method, temp4, r, total_neighbor_points,
-                "compute_step_two_internal temp4");
+                "compute_step_two_internal temp4", scratch.split_threads);
             
             for (int64_t i = 0; i < r * total_neighbor_points; ++i) {
                 temp4[i] = -temp4[i];
@@ -6397,13 +6572,16 @@ void compute_step_two_internal(
             auto& X_SN_update = scratch.x_sn_update;
             X_SN_update.resize(static_cast<size_t>(k * total_neighbor_points));
             
-            int m = k, n = total_neighbor_points, kk = r;
+            int m = k, kk = r;
             DataType alpha = 1.0, beta = 0.0;
             
-            gemm_("N", "N", &m, &n, &kk,
-                   &alpha, box->X_SR.data.data(), &m,
-                   temp4.data(), &kk,
-                   &beta, X_SN_update.data(), &m);
+            split_columns_chunked(total_neighbor_points, scratch.split_threads, [&](int64_t c0, int64_t c1) {
+                int n = static_cast<int>(c1 - c0);
+                gemm_("N", "N", &m, &n, &kk,
+                       &alpha, box->X_SR.data.data(), &m,
+                       temp4.data() + c0 * r, &kk,
+                       &beta, X_SN_update.data() + c0 * k, &m);
+            });
             
             // Segment and update each neighbor
             int64_t current_col = 0;
@@ -6559,12 +6737,21 @@ void compute_step_two_internal(
                     pending->replace_blocks[ReplaceKey{neighbor_morton, box->morton_index}] =
                         DenseBlock<DataType>{k, n_neighbor, std::move(X_GS_transpose)};
                 } else {
-                    // Nonsymmetric: cache REPLACE into neighbor's A_SN
-                    std::vector<DataType> X_GS =
-                        modified_block.copy_a_ns_data(); // (n_neighbor x k)
-
-                    pending->replace_blocks[ReplaceKey{neighbor_morton, box->morton_index}] =
-                        DenseBlock<DataType>{n_neighbor, k, std::move(X_GS)};
+                    // Nonsymmetric: G's two views of B, A_NS[B] = K(S_B, G)
+                    // from B's A_SN[G] (k x n_G), and A_SN[B] = K(G, S_B)
+                    // from B's A_NS[G] (n_G x k)
+                    auto sn_it = box->near_field_interaction_map_nonsymmetry.find(neighbor_morton);
+                    if (sn_it == box->near_field_interaction_map_nonsymmetry.end() ||
+                        !box->near_field_modified_interactions[static_cast<size_t>(sn_it->second)]
+                             .A_SN.is_allocated()) {
+                        throw std::runtime_error("Step 7: A_SN should be allocated after step 6");
+                    }
+                    pending->replace_blocks[ReplaceKey{neighbor_morton, box->morton_index, 0}] =
+                        DenseBlock<DataType>{k, n_neighbor,
+                            box->near_field_modified_interactions[static_cast<size_t>(sn_it->second)]
+                                .copy_a_sn_data()};
+                    pending->replace_blocks[ReplaceKey{neighbor_morton, box->morton_index, 1}] =
+                        DenseBlock<DataType>{n_neighbor, k, modified_block.copy_a_ns_data()};
                 }
 
                 current_row += n_neighbor;
@@ -6695,32 +6882,27 @@ void compute_step_two_internal(
                 }
                 omp_unset_lock(box_locks.at(neighbor_morton));
             } else {
-                // ===== Nonsymmetric: Store X_GS in G's A_SN =====
-                // From B: X_GS is (n_neighbor × k) in A_NS
-                // From G: X_GS is (n_neighbor × k) in A_SN
-                std::vector<DataType> X_GS = modified_block.copy_a_ns_data();
-                
-                auto it_G = neighbor_box->near_field_interaction_map_nonsymmetry.find(box->morton_index);
-                
-                if (it_G != neighbor_box->near_field_interaction_map_nonsymmetry.end()) {
-                    // Block exists - replace with new view from B
-                    int64_t block_idx_G = it_G->second;
-                    auto& block_G = neighbor_box->near_field_modified_interactions[block_idx_G];
-                    
-                    block_G.A_SN.set_owned(
-                        n_neighbor, k, std::move(X_GS), MatrixStorage<DataType>::FULL);
-                    
-                } else {
-                    // Create new block
-                    ModifiedBlock<DataType> new_block_G;
-                    new_block_G.neighbor_morton = box->morton_index;
-                    new_block_G.A_SN.set_owned(
-                        n_neighbor, k, std::move(X_GS), MatrixStorage<DataType>::FULL);
-                    
-                    int64_t new_idx = neighbor_box->near_field_modified_interactions.size();
-                    neighbor_box->near_field_modified_interactions.push_back(std::move(new_block_G));
-                    neighbor_box->near_field_interaction_map_nonsymmetry[box->morton_index] = new_idx;
+                // ===== Nonsymmetric: G's two views of B, as the remote case
+                // above: A_SN[B] = K(G, S_B) from B's A_NS[G], A_NS[B] =
+                // K(S_B, G) from B's A_SN[G] =====
+                auto sn_it = box->near_field_interaction_map_nonsymmetry.find(neighbor_morton);
+                if (sn_it == box->near_field_interaction_map_nonsymmetry.end() ||
+                    !box->near_field_modified_interactions[static_cast<size_t>(sn_it->second)]
+                         .A_SN.is_allocated()) {
+                    throw std::runtime_error(
+                        "compute_step_two_internal: A_SN should be allocated after step 6");
                 }
+                std::vector<DataType> X_SG =
+                    box->near_field_modified_interactions[static_cast<size_t>(sn_it->second)]
+                        .copy_a_sn_data();
+                std::vector<DataType> X_GS = modified_block.copy_a_ns_data();
+
+                omp_set_lock(box_locks.at(neighbor_morton));
+                upsert_directed_block(*neighbor_box, box->morton_index, EdgeKind::Near, true)
+                    .A_SN.set_owned(n_neighbor, k, std::move(X_GS), MatrixStorage<DataType>::FULL);
+                upsert_directed_block(*neighbor_box, box->morton_index, EdgeKind::Near, false)
+                    .set_a_ns_owned(k, n_neighbor, std::move(X_SG), MatrixStorage<DataType>::FULL);
+                omp_unset_lock(box_locks.at(neighbor_morton));
             }
             
             current_row += n_neighbor;
@@ -6792,13 +6974,17 @@ void compute_step_two_internal(
                 int ldc = m;
                 
                 // dgemm computes C = alpha * op(A) * op(B) + beta * C
-                // op(A) = temp2, op(B) = X_RN
-                gemm_("N", "N", &m, &n, &k,
-                    &alpha, 
-                    temp2.data(), &lda,
-                    box->X_RN.data.data(), &ldb,
-                    &beta, 
-                    X_NN_full.data(), &ldc);
+                // op(A) = temp2, op(B) = X_RN (its columns split over the
+                // threads a small wave leaves idle)
+                split_columns_chunked(total_neighbor_points, scratch.split_threads, [&](int64_t c0, int64_t c1) {
+                    int columns = static_cast<int>(c1 - c0);
+                    gemm_("N", "N", &m, &columns, &k,
+                        &alpha,
+                        temp2.data(), &lda,
+                        box->X_RN.data.data() + c0 * box->X_RN.lda, &ldb,
+                        &beta,
+                        X_NN_full.data() + c0 * total_neighbor_points, &ldc);
+                });
             }
         }
     
@@ -6831,7 +7017,118 @@ void compute_step_two_internal(
 
         
         
-        if (total_neighbor_points > 0 && !X_NN_full.empty()) {
+        if (total_neighbor_points > 0 && !X_NN_full.empty() && !(is_symmetric || is_hermitian)) {
+            // ===== Step 9, a nonsymmetric matrix: every ordered pair (LG,
+            // RG) of B's neighbors, X(LG, RG) untransposed into LG's A_SN[RG]
+            // = K(LG, RG) and RG's A_NS[LG] = K(LG, RG) (LG's Schur block on
+            // the diagonal).  A remote endpoint's share travels oriented
+            // (EdgeKey::rows_lo); the local ones read X_NN_full in place, each
+            // neighbor taking all its updates under one hold of its lock (the
+            // free ones first: several boxes of a wave update one neighbor).
+            // The wave's views are formed before it (form_nonsymmetric_wave_views).
+            if (pending == nullptr) {
+                throw std::logic_error(
+                    "compute_step_two_internal: a nonsymmetric matrix needs the Color transport (no CA)");
+            }
+            const int64_t T = total_neighbor_points;
+            const size_t num_neighbors = box->one_hop.size();
+            std::vector<int64_t> offsets(num_neighbors + 1, 0);
+            for (size_t idx = 0; idx < num_neighbors; ++idx) {
+                offsets[idx + 1] = offsets[idx] + neighbor_point_counts[idx];
+            }
+            const int dimension = level.dimension;
+            auto kind_of = [&](int64_t a, int64_t b) {
+                if (a == b) return EdgeKind::Diag;
+                uint32_t ac[3] = {0, 0, 0};
+                uint32_t bc[3] = {0, 0, 0};
+                morton::decode_nd(dimension, a, ac[0], ac[1], ac[2]);
+                morton::decode_nd(dimension, b, bc[0], bc[1], bc[2]);
+                for (int d = 0; d < dimension; ++d) {
+                    if (std::abs(static_cast<int64_t>(ac[d]) - static_cast<int64_t>(bc[d])) > 1) {
+                        return EdgeKind::Far;
+                    }
+                }
+                return EdgeKind::Near;
+            };
+            std::vector<BoxData<CoordType, DataType>*> local(num_neighbors, nullptr);
+            for (size_t idx = 0; idx < num_neighbors; ++idx) {
+                local[idx] = level.find_local_box(box->one_hop[idx]);
+                if (local[idx] == nullptr && find_assist(box->one_hop[idx]) == nullptr) {
+                    throw std::runtime_error("Step 9: nonlocal neighbor missing assisting data");
+                }
+            }
+
+            // the remote endpoints' shares
+            for (size_t j_idx = 0; j_idx < num_neighbors; ++j_idx) {
+                for (size_t i_idx = 0; i_idx < num_neighbors; ++i_idx) {
+                    if (local[i_idx] != nullptr && local[j_idx] != nullptr) continue;
+                    const int64_t LG_morton = box->one_hop[i_idx];
+                    const int64_t RG_morton = box->one_hop[j_idx];
+                    const int64_t n_LG = neighbor_point_counts[i_idx];
+                    const int64_t n_RG = neighbor_point_counts[j_idx];
+                    std::vector<DataType> X_LG_RG(static_cast<size_t>(n_LG * n_RG));
+                    for (int64_t col = 0; col < n_RG; ++col) {
+                        std::copy_n(&X_NN_full[static_cast<size_t>(offsets[i_idx] + (offsets[j_idx] + col) * T)],
+                                    n_LG, &X_LG_RG[static_cast<size_t>(col * n_LG)]);
+                    }
+                    const EdgeKind kind = kind_of(LG_morton, RG_morton);
+                    const int64_t lo = std::min(LG_morton, RG_morton);
+                    const int64_t hi = std::max(LG_morton, RG_morton);
+                    const uint8_t rows_lo = (kind != EdgeKind::Diag && LG_morton == lo) ? 1 : 0;
+                    accumulate_dense(pending->accumulated_deltas[EdgeKey{lo, hi, kind, rows_lo}],
+                                     n_LG, n_RG, X_LG_RG);
+                }
+            }
+
+            // the local ones, a neighbor at a time
+            auto apply_target = [&](size_t t) {
+                auto& target = *local[t];
+                const int64_t n_t = neighbor_point_counts[t];
+                for (size_t j_idx = 0; j_idx < num_neighbors; ++j_idx) {
+                    const DataType* X_t_j = &X_NN_full[static_cast<size_t>(offsets[t] + offsets[j_idx] * T)];
+                    if (j_idx == t) {
+                        add_to_schur_block(level, kernel, target, n_t, X_t_j, T);
+                    } else {
+                        add_to_directed_view(level, kernel, target, box->one_hop[j_idx],
+                                             kind_of(target.morton_index, box->one_hop[j_idx]), true,
+                                             n_t, neighbor_point_counts[j_idx], X_t_j, T);
+                    }
+                }
+                for (size_t i_idx = 0; i_idx < num_neighbors; ++i_idx) {
+                    if (i_idx == t) continue;
+                    add_to_directed_view(level, kernel, target, box->one_hop[i_idx],
+                                         kind_of(box->one_hop[i_idx], target.morton_index), false,
+                                         n_t, neighbor_point_counts[i_idx],
+                                         &X_NN_full[static_cast<size_t>(offsets[i_idx] + offsets[t] * T)], T);
+                }
+            };
+            std::vector<size_t> todo;
+            for (size_t idx = 0; idx < num_neighbors; ++idx) {
+                if (local[idx] != nullptr) todo.push_back(idx);
+            }
+            std::vector<size_t> busy;
+            while (!todo.empty()) {
+                busy.clear();
+                for (size_t t : todo) {
+                    omp_lock_t* lock = box_locks.at(box->one_hop[t]);
+                    if (omp_test_lock(lock)) {
+                        apply_target(t);
+                        omp_unset_lock(lock);
+                    } else {
+                        busy.push_back(t);
+                    }
+                }
+                if (!busy.empty() && busy.size() == todo.size()) {
+                    // none free: wait for one
+                    omp_lock_t* lock = box_locks.at(box->one_hop[busy.front()]);
+                    omp_set_lock(lock);
+                    apply_target(busy.front());
+                    omp_unset_lock(lock);
+                    busy.erase(busy.begin());
+                }
+                todo.swap(busy);
+            }
+        } else if (total_neighbor_points > 0 && !X_NN_full.empty()) {
 
             if (DEBUG) {
                 // Check for NaN in X_NN_full
@@ -6890,10 +7187,15 @@ void compute_step_two_internal(
                 
                     
                     // Precompute transpose used by LG-side storage (shape n_RG × n_LG, column-major)
-                    std::vector<DataType> X_LG_RG_for_LG(n_LG * n_RG);
-                    for (int64_t i = 0; i < n_LG; ++i) {
-                        for (int64_t j = 0; j < n_RG; ++j) {
-                            X_LG_RG_for_LG[j + i * n_RG] = X_LG_RG[i + j * n_LG];
+                    // (the symmetric views take it transposed; a
+                    // nonsymmetric matrix's take X(LG, RG) as is)
+                    std::vector<DataType> X_LG_RG_for_LG;
+                    if (is_symmetric || is_hermitian) {
+                        X_LG_RG_for_LG.resize(static_cast<size_t>(n_LG * n_RG));
+                        for (int64_t i = 0; i < n_LG; ++i) {
+                            for (int64_t j = 0; j < n_RG; ++j) {
+                                X_LG_RG_for_LG[j + i * n_RG] = X_LG_RG[i + j * n_LG];
+                            }
                         }
                     }
 
@@ -7016,6 +7318,7 @@ void compute_step_two_internal(
                     // ---- Step 9: accumulate canonical ADD delta for remote delivery ----
                     // Canonical key: (lo,hi). Stored block is ΔM_{lo→hi} with dims (n_hi × n_lo)
                     // i.e., "lo's view of hi" (rows=hi, cols=lo).
+
                     if (pending != nullptr) {
 
                         // Only worth caching if at least one endpoint is nonlocal (otherwise local update already did it)
@@ -7731,7 +8034,13 @@ void compute_step_two_internal(
     if (!is_symmetric && !is_hermitian) {
         box->X_RS.data.assign(temp3.begin(), temp3.end());
         if (!temp4.empty()) {
-            box->X_RN.data.assign(temp4.begin(), temp4.end());
+            if (store) {
+                // (the owner pass and the generators read the original X_RN;
+                // finalize_deferred_xnn_source_box installs temp4)
+                box->deferred_xnn_temp4.assign(temp4.begin(), temp4.end());
+            } else {
+                box->X_RN.data.assign(temp4.begin(), temp4.end());
+            }
         }
     }
     
@@ -7882,6 +8191,50 @@ const DataType* lazy_far_source_temp2(const BoxData<CoordType, DataType>* source
     return source_box->deferred_xnn_temp2.data();
 }
 
+/**
+ * @brief A nonsymmetric source's temp4 (= -X_RR^{-1} X_RN, r x total_rows,
+ * one column slot per one_hop neighbor), or nullptr for a symmetric source
+ * (whose column side is temp2^T).  Pending in deferred_xnn_temp4 until
+ * finalize_deferred_xnn_source_box installs it into X_RN.
+ */
+template<typename CoordType, typename DataType>
+const DataType* lazy_far_source_temp4(const BoxData<CoordType, DataType>* source_box) {
+    if (!source_box->deferred_xnn_temp4.empty()) return source_box->deferred_xnn_temp4.data();
+    return source_box->X_RN.is_allocated() ? source_box->X_RN.data.data() : nullptr;
+}
+
+/**
+ * @brief The column side of a source's fill at an endpoint, (count x r)
+ * column-major: temp2's slot rows (symmetric), or temp4's slot columns
+ * transposed (nonsymmetric), so the fill of a block is
+ * -temp2[rows] X_RR_full side^T either way.
+ */
+template<typename CoordType, typename DataType>
+void lazy_far_gather_column_side(
+    const BoxData<CoordType, DataType>* source_box,
+    int64_t slot_offset,
+    const std::vector<int64_t>& positions,
+    int64_t count,
+    int64_t r,
+    std::vector<DataType>& out) {
+    out.resize(static_cast<size_t>(count * r));
+    if (const DataType* temp4 = lazy_far_source_temp4(source_box)) {
+        for (int64_t i = 0; i < count; ++i) {
+            const DataType* src = temp4 + (slot_offset + positions[static_cast<size_t>(i)]) * r;
+            for (int64_t j = 0; j < r; ++j) out[static_cast<size_t>(i + j * count)] = src[j];
+        }
+        return;
+    }
+    const DataType* temp2 = lazy_far_source_temp2(source_box);
+    const int64_t temp2_ld = source_box->X_NR.lda;
+    for (int64_t j = 0; j < r; ++j) {
+        const DataType* src_col = temp2 + j * temp2_ld + slot_offset;
+        for (int64_t i = 0; i < count; ++i) {
+            out[static_cast<size_t>(i + j * count)] = src_col[positions[static_cast<size_t>(i)]];
+        }
+    }
+}
+
 // ----- Endpoint row resolution ----------------------------------------------
 
 /**
@@ -7999,6 +8352,7 @@ bool lazy_far_locate_endpoint_rows(
  *
  * Writes the (row_end.wanted_count x col_end.wanted_count) column-major block
  *   K(rows, cols) - sum_E temp2_E[rows] * X_RR_full_E * temp2_E[cols]^T
+ * (temp4_E[:, cols] for a nonsymmetric source, lazy_far_gather_column_side)
  * into out (leading dimension out_ld). Sources must come from
  * collect_lazy_far_sources (canonical order).
  */
@@ -8093,13 +8447,7 @@ void regenerate_far_block_into(
                 Trow[i + j * a] = src_col[row_positions[static_cast<size_t>(i)]];
             }
         }
-        Tcol.resize(static_cast<size_t>(b * r));
-        for (int64_t j = 0; j < r; ++j) {
-            const DataType* src_col = temp2 + j * temp2_ld + col_slot_offset;
-            for (int64_t i = 0; i < b; ++i) {
-                Tcol[i + j * b] = src_col[col_positions[static_cast<size_t>(i)]];
-            }
-        }
+        lazy_far_gather_column_side(source_box, col_slot_offset, col_positions, b, r, Tcol);
 
         // G = Trow * X_RR_full   (a x r)
         G.resize(static_cast<size_t>(a * r));
@@ -8260,13 +8608,7 @@ void lazy_far_apply_sources_cached(
                 continue;  // cache_slot (if any) stays empty as the memo
             }
 
-            Tcol.resize(static_cast<size_t>(c * r));
-            for (int64_t j = 0; j < r; ++j) {
-                const DataType* src_col = temp2 + j * temp2_ld + col_slot_offset;
-                for (int64_t i = 0; i < c; ++i) {
-                    Tcol[i + j * c] = src_col[col_positions[static_cast<size_t>(i)]];
-                }
-            }
+            lazy_far_gather_column_side(source_box, col_slot_offset, col_positions, c, r, Tcol);
 
             std::vector<DataType>& P_dst = cache_slot ? *cache_slot : P_local;
             P_dst.resize(static_cast<size_t>(r * c));
@@ -8321,8 +8663,8 @@ void lazy_far_apply_sources_cached(
 /**
  * @brief Assemble-and-sketch the ID compression target without materializing it.
  *
- * Equivalent to gather_id_workspace followed by the sparse sign sketch inside
- * compute_id_sparse_sketch, but the (m x n) stacked target never exists: each
+ * Equivalent to gather_id_workspace followed by id_sketch (the sparse sign
+ * sketch, or the rows themselves), but the (m x n) stacked target never exists: each
  * 2-hop neighbor's row block is produced in a reusable buffer and immediately
  * accumulated into the (d x n) sketch using the same per-row stratified draws,
  * in the same row order, from the same box-keyed RNG stream. Rows from stored
@@ -8611,14 +8953,15 @@ void gather_id_target_streamed(
     };
 
     // ------------------------------------------------------------------
-    // Sketch accumulator: replicates compute_id_sparse_sketch's parameters
-    // (factor 1.0, sparsity 4, seed = morton + 1) and sketch_sparse_random's
-    // per-row draw sequence exactly, consuming rows in assembly order.
+    // Sketch accumulator: id_sketch's shape (d = n + 4 rows, sparsity 4,
+    // seed = morton + 1; or the rows themselves when there are no more than
+    // that) and sketch_sparse_random's per-row draw sequence exactly,
+    // consuming rows in assembly order.
     // ------------------------------------------------------------------
-    int64_t d = static_cast<int64_t>(std::ceil(1.0 * n));
-    d = std::min(d, total_rows);
-    d = std::max(d, n);
-    int sk = std::min(4, static_cast<int>(d));
+    const IdSketchShape shape = id_sketch_shape(total_rows, n);
+    const int64_t d = shape.d;
+    const int sk = shape.sk;
+    int64_t direct_row = 0;  // (direct: the next row's own row of Y)
 
     int block_starts[4];
     int block_ranges[4];
@@ -8654,10 +8997,8 @@ void gather_id_target_streamed(
     auto& rec_sign = scratch.stream_row_sign;
     auto& blk_idx = scratch.stream_blk_draw_idx;    // this block's draws (a x sk)
     auto& blk_sgn = scratch.stream_blk_draw_sign;
-    auto consume_rows = [&](const DataType* blk_rowmajor, int64_t a, int64_t rec_row0) {
-        int n_int = static_cast<int>(n);
-        int inc_one = 1;
-        // Draws first (sequential RNG, recorded per block), then the axpys.
+    // The draws of a rows (sequential RNG, recorded per block).
+    auto draw_rows = [&](int64_t a, int64_t rec_row0) {
         const size_t nd = static_cast<size_t>(a * sk);
         if (blk_idx.size() < nd) {
             blk_idx.resize(nd);
@@ -8665,10 +9006,16 @@ void gather_id_target_streamed(
         }
         for (int64_t jj = 0; jj < a; ++jj) {
             for (int b = 0; b < sk; ++b) {
-                const uint64_t rand_val = rng();
-                const int idx = block_starts[b] +
-                    static_cast<int>(rand_val % static_cast<uint64_t>(block_ranges[b]));
-                const bool positive = ((rand_val >> 63) & 1) != 0;
+                int idx;
+                bool positive = true;
+                if (shape.direct) {
+                    if (direct_row >= d) throw std::logic_error("gather_id_target_streamed: more rows than counted");
+                    idx = static_cast<int>(direct_row++);
+                } else {
+                    const uint64_t rand_val = rng();
+                    idx = block_starts[b] + static_cast<int>(rand_val % static_cast<uint64_t>(block_ranges[b]));
+                    positive = ((rand_val >> 63) & 1) != 0;
+                }
                 const size_t q = static_cast<size_t>(jj * sk + b);
                 blk_idx[q] = static_cast<int32_t>(idx);
                 blk_sgn[q] = positive ? int8_t{1} : int8_t{-1};
@@ -8679,6 +9026,12 @@ void gather_id_target_streamed(
                 }
             }
         }
+    };
+    auto consume_rows = [&](const DataType* blk_rowmajor, int64_t a, int64_t rec_row0) {
+        int n_int = static_cast<int>(n);
+        int inc_one = 1;
+        // Draws first, then the axpys.
+        draw_rows(a, rec_row0);
         // The axpys are memory-bound: splitting them by column ownership
         // (tried) only multiplied cache traffic and taskloop barriers, so
         // they stay on the box's own thread.
@@ -8697,6 +9050,29 @@ void gather_id_target_streamed(
                            const_cast<std::complex<double>*>(row), &inc_one,
                            ocol, &inc_one);
                 }
+            }
+        }
+    };
+
+    // Entries through a collective callback with a sketch callback: kernel
+    // rows are not evaluated; their draws become Omega's entries and the
+    // entries' source sketches them, in one request a box after pass 2
+    // (CollectiveEntries; the same Y up to the order of the sums).
+    const bool sketch_kernel_rows = kernel_sketches(kernel, 0);
+    std::vector<int64_t> sketch_ids;
+    std::vector<int> sketch_orow, sketch_odest;
+    std::vector<double> sketch_oval;
+    const double sketch_scale = 1.0 / std::sqrt(static_cast<double>(sk));
+    auto defer_rows = [&](const int64_t* ids, int64_t a, int64_t rec_row0) {
+        draw_rows(a, rec_row0);
+        const int64_t base = static_cast<int64_t>(sketch_ids.size());
+        sketch_ids.insert(sketch_ids.end(), ids, ids + a);
+        for (int64_t jj = 0; jj < a; ++jj) {
+            for (int b = 0; b < sk; ++b) {
+                const size_t q = static_cast<size_t>(jj * sk + b);
+                sketch_orow.push_back(static_cast<int>(base + jj));
+                sketch_odest.push_back(blk_idx[q]);
+                sketch_oval.push_back(blk_sgn[q] > 0 ? sketch_scale : -sketch_scale);
             }
         }
     };
@@ -8742,6 +9118,7 @@ void gather_id_target_streamed(
         blockbuf.resize(static_cast<size_t>(a * n));
 
         bool produced = false;
+        const int64_t* kernel_row_ids = nullptr;  // (kernel rows: their points)
         if (!lazy_fill && lazy_mode != LazyFarFieldMode::LAZY) {
             // Eager mode: stored far block if present. The slicer emits the
             // (a x n) block column-major; transpose once (cache-resident)
@@ -8854,7 +9231,8 @@ void gather_id_target_streamed(
 
             // Swapped orientation: evaluates (n x a) column-major, which is
             // exactly the (a x n) block in row-major layout (kernel symmetric).
-            {
+            kernel_row_ids = active_row_indices;
+            if (!sketch_kernel_rows) {
                 FMM_PHASE_SCOPE(SK_KERNEL);
                 evaluate_block_by_index_split<DataType>(
                     kernel,
@@ -8876,7 +9254,11 @@ void gather_id_target_streamed(
 
         {
             FMM_PHASE_SCOPE(SK_CONSUME);
-            consume_rows(blockbuf.data(), a, lazy_fill ? row_base : int64_t{-1});
+            if (kernel_row_ids != nullptr && sketch_kernel_rows) {
+                defer_rows(kernel_row_ids, a, lazy_fill ? row_base : int64_t{-1});
+            } else {
+                consume_rows(blockbuf.data(), a, lazy_fill ? row_base : int64_t{-1});
+            }
         }
         row_base += a;
     }
@@ -8884,14 +9266,31 @@ void gather_id_target_streamed(
     if (!extra_training_indices.empty()) {
         const int64_t extra_rows =
             static_cast<int64_t>(extra_training_indices.size());
-        blockbuf.resize(static_cast<size_t>(extra_rows * n));
-        evaluate_block_by_index_split<DataType>(
-            kernel,
-            box->point_indices.data(), n,
-            extra_training_indices.data(), extra_rows,
-            blockbuf.data(), n,
-            scratch.split_threads);
-        consume_rows(blockbuf.data(), extra_rows, int64_t{-1});
+        if (sketch_kernel_rows) {
+            defer_rows(extra_training_indices.data(), extra_rows, int64_t{-1});
+        } else {
+            blockbuf.resize(static_cast<size_t>(extra_rows * n));
+            evaluate_block_by_index_split<DataType>(
+                kernel,
+                box->point_indices.data(), n,
+                extra_training_indices.data(), extra_rows,
+                blockbuf.data(), n,
+                scratch.split_threads);
+            consume_rows(blockbuf.data(), extra_rows, int64_t{-1});
+        }
+    }
+    if (!sketch_ids.empty()) {
+        // the kernel rows' sketch from the entries' source, into O' = Y^T
+        std::vector<DataType> Yk(static_cast<size_t>(d * n));
+        FMM_PHASE_SCOPE(SK_KERNEL);
+        kernel_sketch_block(kernel, 0, sketch_ids.data(), static_cast<int64_t>(sketch_ids.size()),
+                            box->point_indices.data(), n, static_cast<int>(d),
+                            static_cast<int64_t>(sketch_orow.size()), sketch_orow.data(), sketch_odest.data(),
+                            sketch_oval.data(), Yk.data(), d);
+        for (int64_t i = 0; i < d; ++i) {
+            DataType* ocol = Oacc.data() + static_cast<size_t>(i) * n;
+            for (int64_t c = 0; c < n; ++c) ocol[c] += Yk[static_cast<size_t>(i + c * d)];
+        }
     }
 
     // ------------------------------------------------------------------
@@ -9068,6 +9467,447 @@ void gather_id_target_streamed(
     scratch.streamed_sketch_valid = true;
 }
 
+/**
+ * @brief The streamed ID target of a nonsymmetric matrix (lazy fill): the
+ * sketch of the stacked [K(F, B); K(B, F)^T; K(T, B); K(B, T)^T] (F the
+ * two-hop ring, T the training rows, the rows of gather_id_workspace in its
+ * order, with the same row sets and the same draws as its sparse sketch),
+ * never materialized.
+ *
+ * The fill of a ring block comes from the pair's eliminated common
+ * neighbors E: K(F, B) less temp2_E[F] P1_E, K(B, F)^T less
+ * temp4_E[:, F]^T P2_E, with P1_E = X_RR_E temp4_E[:, B] and P2_E =
+ * X_RR_E^T temp2_E[B]^T (r x n).  As in gather_id_target_streamed it is
+ * applied in sketch space, a source at a time: W1 (W2) gathers the sketched
+ * temp2_E rows (temp4_E columns) of the blocks listing E, and O' -= P1^T W1 +
+ * P2^T W2.  Outputs as gather_id_target_streamed's, the adaptive far rows
+ * (H2_ID_proxy 2) too, each point's two rows.
+ */
+template<typename CoordType, typename DataType, typename KernelType>
+void gather_id_target_streamed_nonsymmetric(
+    ParallelTree<CoordType, DataType>* tree,
+    BoxData<CoordType, DataType>* box,
+    TreeLevel<CoordType, DataType>& level,
+    KernelType* kernel,
+    FactorizationThreadScratch<CoordType, DataType>& scratch,
+    bool on_boundary,
+    double id_tolerance) {
+
+    scratch.streamed_sketch_valid = false;
+    scratch.id_adaptive = IDAdaptiveStats{};
+    if (box == nullptr || box->num_points == 0) {
+        scratch.workspace_rows = 0;
+        scratch.workspace_cols = 0;
+        return;
+    }
+    if (lazy_far_field_mode() != LazyFarFieldMode::LAZY) {
+        throw std::logic_error("gather_id_target_streamed_nonsymmetric: needs the lazy fill");
+    }
+
+    const int dimension = tree->dimension;
+    const int64_t n = box->num_points;
+    const std::vector<int64_t> extra = select_static_id_training_indices(tree, box);
+    const int64_t n_extra = static_cast<int64_t>(extra.size());
+    for (size_t idx = 0; idx < box->one_hop.size(); ++idx) {
+        if (sketch_box_eliminated(level, box->one_hop[idx])) box->use_full_set[idx] = 0;
+    }
+    auto resolve_neighbor = [&](int64_t morton) -> BoxData<CoordType, DataType>* {
+        BoxData<CoordType, DataType>* nb = level.find_local_box(morton);
+        if (nb == nullptr) nb = level.find_ghost_box(morton);
+        return nb;
+    };
+    auto resolve_source = [&](int64_t morton) -> BoxData<CoordType, DataType>* {
+        BoxData<CoordType, DataType>* nb = level.find_local_box(morton);
+        if (nb == nullptr) nb = level.find_ghost_box(morton);
+        if (nb == nullptr) nb = level.find_generator_box(morton);
+        return nb;
+    };
+
+    // ---- pass 1: the ring's row sets (as gather_id_target_streamed's) and
+    // each pair's fill sources ----
+    const size_t num_ring = box->two_hop.size();
+    auto& counts = scratch.stream_counts;
+    counts.clear();
+    auto& pair_src_mortons = scratch.stream_pair_source_mortons;
+    auto& pair_src_offsets = scratch.stream_pair_source_offsets;
+    pair_src_mortons.clear();
+    pair_src_offsets.assign(1, 0);
+    std::vector<int64_t> ring_full(num_ring, 0);
+    std::vector<const std::vector<int64_t>*> ring_skeleton(num_ring, nullptr);
+    std::vector<const std::vector<int64_t>*> ring_wanted(num_ring, nullptr);
+    std::vector<std::vector<int64_t>> ring_points(num_ring);
+    std::vector<LazyFarSource> pair_sources;
+    int64_t far_rows = 0;
+    for (size_t f = 0; f < num_ring; ++f) {
+        const int64_t morton = box->two_hop[f];
+        collect_lazy_far_sources(level, box, morton, dimension, pair_sources);
+        for (const auto& src : pair_sources) pair_src_mortons.push_back(src.morton);
+        pair_src_offsets.push_back(static_cast<int64_t>(pair_src_mortons.size()));
+        const std::vector<int64_t>* points = nullptr;
+        const std::vector<int64_t>* skeleton = nullptr;
+        bool use_skeleton = false;
+        if (BoxData<CoordType, DataType>* nb = resolve_neighbor(morton)) {
+            points = &nb->point_indices;
+            skeleton = &nb->skeleton_indices;
+            const bool full_boundary_pair = on_boundary && nb->on_boundary && pair_sources.empty();
+            use_skeleton = !full_boundary_pair && sketch_box_eliminated(level, morton);
+        } else {
+            auto it = level.assisting_box_points_for_kernel_evaluation.find(morton);
+            if (it == level.assisting_box_points_for_kernel_evaluation.end()) {
+                throw std::runtime_error(
+                    "gather_id_target_streamed_nonsymmetric: no points of ring box " + std::to_string(morton));
+            }
+            const auto& assist = level.assisting_boxes[static_cast<size_t>(it->second)];
+            points = &assist.indices;
+            skeleton = &assist.skel_indices;
+            use_skeleton = level.eliminated_boxes.count(morton) != 0 && !assist.skel_indices.empty();
+        }
+        ring_full[f] = static_cast<int64_t>(points->size());
+        ring_skeleton[f] = skeleton;
+        if (use_skeleton) {
+            ring_wanted[f] = skeleton;
+            ring_points[f].resize(skeleton->size());
+            for (size_t i = 0; i < skeleton->size(); ++i) {
+                ring_points[f][i] = (*points)[static_cast<size_t>((*skeleton)[i])];
+            }
+        } else {
+            ring_points[f] = *points;
+        }
+        const int64_t a = static_cast<int64_t>(ring_points[f].size());
+        if (a == 0) {
+            throw std::runtime_error(
+                "gather_id_target_streamed_nonsymmetric: ring box " + std::to_string(morton) + " has no points");
+        }
+        counts.push_back(a);
+        far_rows += a;
+    }
+    const int64_t total_rows = 2 * far_rows + 2 * n_extra;
+
+    // ---- sketch parameters and draws (id_sketch's) ----
+    const IdSketchShape shape = id_sketch_shape(total_rows, n);
+    const int64_t d = shape.d;
+    const int sk = shape.sk;
+    int64_t direct_row = 0;  // (direct: the next row's own row of Y)
+    int block_starts[4];
+    int block_ranges[4];
+    {
+        const int block_size = static_cast<int>(d) / sk;
+        for (int b = 0; b < sk; ++b) {
+            block_starts[b] = b * block_size;
+            const int end = (b == sk - 1) ? static_cast<int>(d) : (b + 1) * block_size;
+            block_ranges[b] = end - block_starts[b];
+        }
+    }
+    using RealType = std::conditional_t<std::is_same_v<DataType, std::complex<double>>, double, DataType>;
+    const DataType norm_factor = DataType(1.0 / std::sqrt(static_cast<RealType>(sk)));
+    std::mt19937_64 rng(static_cast<uint64_t>(box->morton_index + 1));
+
+    auto& Oacc = scratch.stream_sketch_acc;  // O' = Y^T (n x d)
+    Oacc.assign(static_cast<size_t>(n * d), DataType{0.0});
+    // the draws of the ring rows (both stacks: K(F, B) rows at [0, far_rows),
+    // K(B, F)^T rows at [far_rows, 2 far_rows)), for the fill pass
+    auto& rec_idx = scratch.stream_row_idx;
+    auto& rec_sign = scratch.stream_row_sign;
+    rec_idx.resize(static_cast<size_t>(2 * far_rows * sk));
+    rec_sign.resize(static_cast<size_t>(2 * far_rows * sk));
+    auto& blk_idx = scratch.stream_blk_draw_idx;
+    auto& blk_sgn = scratch.stream_blk_draw_sign;
+    // the draws of `a` rows (recorded from rec_row0 for the fill pass)
+    auto draw_rows = [&](int64_t a, int64_t rec_row0) {
+        const size_t nd = static_cast<size_t>(a * sk);
+        if (blk_idx.size() < nd) {
+            blk_idx.resize(nd);
+            blk_sgn.resize(nd);
+        }
+        for (int64_t jj = 0; jj < a; ++jj) {
+            for (int b = 0; b < sk; ++b) {
+                const size_t q = static_cast<size_t>(jj * sk + b);
+                if (shape.direct) {
+                    if (direct_row >= d) {
+                        throw std::logic_error("gather_id_target_streamed_nonsymmetric: more rows than counted");
+                    }
+                    blk_idx[q] = static_cast<int32_t>(direct_row++);
+                    blk_sgn[q] = int8_t{1};
+                } else {
+                    const uint64_t rand_val = rng();
+                    const int idx = block_starts[b] + static_cast<int>(rand_val % static_cast<uint64_t>(block_ranges[b]));
+                    blk_idx[q] = static_cast<int32_t>(idx);
+                    blk_sgn[q] = ((rand_val >> 63) & 1) != 0 ? int8_t{1} : int8_t{-1};
+                }
+                if (rec_row0 >= 0) {
+                    const size_t g = static_cast<size_t>((rec_row0 + jj) * sk + b);
+                    rec_idx[g] = blk_idx[q];
+                    rec_sign[g] = blk_sgn[q];
+                }
+            }
+        }
+    };
+    auto consume_rows = [&](const DataType* rows_rowmajor, int64_t a, int64_t rec_row0) {
+        draw_rows(a, rec_row0);
+        int n_int = static_cast<int>(n);
+        int inc_one = 1;
+        for (int64_t jj = 0; jj < a; ++jj) {
+            const DataType* row = rows_rowmajor + jj * n;
+            for (int b = 0; b < sk; ++b) {
+                const size_t q = static_cast<size_t>(jj * sk + b);
+                DataType sign = blk_sgn[q] > 0 ? norm_factor : DataType{0.0} - norm_factor;
+                DataType* ocol = Oacc.data() + static_cast<size_t>(blk_idx[q]) * n;
+                if constexpr (std::is_same_v<DataType, double>) {
+                    daxpy_(&n_int, &sign, const_cast<double*>(row), &inc_one, ocol, &inc_one);
+                } else {
+                    zaxpy_(&n_int, &sign, const_cast<std::complex<double>*>(row), &inc_one, ocol, &inc_one);
+                }
+            }
+        }
+    };
+
+    // ---- pass 2: the kernel rows, in the stacked order ----
+    auto& block_cm = scratch.stream_stored_tmp;  // (a x n) column-major
+    auto& block_rm = scratch.stream_block;       // row-major rows
+    auto rows_of = [&](const int64_t* row_points, int64_t a) {
+        // K(rows, B), (a x n), into row-major
+        block_cm.resize(static_cast<size_t>(a * n));
+        evaluate_block_by_index_split<DataType>(
+            kernel, row_points, a, box->point_indices.data(), n, block_cm.data(), a, scratch.split_threads);
+        block_rm.resize(static_cast<size_t>(a * n));
+        constexpr int64_t tile = 32;
+        for (int64_t i0 = 0; i0 < a; i0 += tile) {
+            for (int64_t c0 = 0; c0 < n; c0 += tile) {
+                for (int64_t c = c0; c < std::min(n, c0 + tile); ++c) {
+                    for (int64_t i = i0; i < std::min(a, i0 + tile); ++i) {
+                        block_rm[static_cast<size_t>(i * n + c)] = block_cm[static_cast<size_t>(i + c * a)];
+                    }
+                }
+            }
+        }
+    };
+    auto transposed_rows_of = [&](const int64_t* row_points, int64_t a) {
+        // K(B, rows) (n x a) column-major: the rows of K(B, rows)^T, row-major
+        block_rm.resize(static_cast<size_t>(a * n));
+        evaluate_block_by_index_split<DataType>(
+            kernel, box->point_indices.data(), n, row_points, a, block_rm.data(), n, scratch.split_threads);
+    };
+    // Entries through a collective callback with both sketch callbacks: the
+    // kernel rows are not evaluated; their draws become Omega's entries, the
+    // K(F, B) rows' in a request sketched from the left (Omega A(F, B)), the
+    // K(B, F)^T rows' in a transposed one (Omega A(B, F)^T), each box's after
+    // the pass (CollectiveEntries; the same Y up to the order of the sums)
+    const bool sketch_kernel_rows = kernel_sketches(kernel, 0);
+    struct Deferred {
+        std::vector<int64_t> ids;
+        std::vector<int> orow, odest;
+        std::vector<double> oval;
+    };
+    Deferred deferred[2];  // K(F, B) rows, K(B, F)^T rows
+    const double sketch_scale = 1.0 / std::sqrt(static_cast<double>(sk));
+    auto defer_rows = [&](int part, const int64_t* ids, int64_t a, int64_t rec_row0) {
+        draw_rows(a, rec_row0);
+        Deferred& to = deferred[part];
+        const int64_t base = static_cast<int64_t>(to.ids.size());
+        to.ids.insert(to.ids.end(), ids, ids + a);
+        for (int64_t jj = 0; jj < a; ++jj) {
+            for (int b = 0; b < sk; ++b) {
+                const size_t q = static_cast<size_t>(jj * sk + b);
+                to.orow.push_back(static_cast<int>(base + jj));
+                to.odest.push_back(blk_idx[q]);
+                to.oval.push_back(blk_sgn[q] > 0 ? sketch_scale : -sketch_scale);
+            }
+        }
+    };
+    std::vector<int64_t> row_base(num_ring + 1, 0);
+    for (size_t f = 0; f < num_ring; ++f) row_base[f + 1] = row_base[f] + counts[f];
+    for (size_t f = 0; f < num_ring; ++f) {
+        const int64_t rec = pair_src_offsets[f + 1] > pair_src_offsets[f] ? row_base[f] : -1;
+        if (sketch_kernel_rows) {
+            defer_rows(0, ring_points[f].data(), counts[f], rec);
+        } else {
+            rows_of(ring_points[f].data(), counts[f]);
+            consume_rows(block_rm.data(), counts[f], rec);
+        }
+    }
+    for (size_t f = 0; f < num_ring; ++f) {
+        const int64_t rec = pair_src_offsets[f + 1] > pair_src_offsets[f] ? far_rows + row_base[f] : -1;
+        if (sketch_kernel_rows) {
+            defer_rows(1, ring_points[f].data(), counts[f], rec);
+        } else {
+            transposed_rows_of(ring_points[f].data(), counts[f]);
+            consume_rows(block_rm.data(), counts[f], rec);
+        }
+    }
+    if (n_extra > 0) {
+        if (sketch_kernel_rows) {
+            defer_rows(0, extra.data(), n_extra, -1);
+            defer_rows(1, extra.data(), n_extra, -1);
+        } else {
+            rows_of(extra.data(), n_extra);
+            consume_rows(block_rm.data(), n_extra, -1);
+            transposed_rows_of(extra.data(), n_extra);
+            consume_rows(block_rm.data(), n_extra, -1);
+        }
+    }
+    if (sketch_kernel_rows) {
+        // the kernel rows' sketches from the entries' source, into O' = Y^T
+        std::vector<DataType> Yk(static_cast<size_t>(d * n));
+        FMM_PHASE_SCOPE(SK_KERNEL);
+        for (int part = 0; part < 2; ++part) {
+            const Deferred& from = deferred[part];
+            if (from.ids.empty()) continue;
+            kernel_sketch_block(kernel, 0, from.ids.data(), static_cast<int64_t>(from.ids.size()),
+                                box->point_indices.data(), n, static_cast<int>(d),
+                                static_cast<int64_t>(from.orow.size()), from.orow.data(), from.odest.data(),
+                                from.oval.data(), Yk.data(), d, part == 1);
+            for (int64_t i = 0; i < d; ++i) {
+                DataType* ocol = Oacc.data() + static_cast<size_t>(i) * n;
+                for (int64_t c = 0; c < n; ++c) ocol[c] += Yk[static_cast<size_t>(i + c * d)];
+            }
+        }
+    }
+
+    // ---- pass 3: the fill, in sketch space, a source at a time ----
+    if (!pair_src_mortons.empty()) {
+        LazyFarEndpoint<CoordType> b_end;
+        b_end.morton = box->morton_index;
+        b_end.full_size = n;
+        b_end.skeleton = &box->skeleton_indices;
+        b_end.wanted = nullptr;
+        b_end.wanted_count = n;
+        b_end.indices = box->point_indices.data();
+        std::vector<int64_t> sources;
+        for (int64_t candidate : box->one_hop) {
+            if (sketch_box_eliminated(level, candidate) &&
+                level.elimination_wave.find(candidate) != level.elimination_wave.end()) {
+                sources.push_back(candidate);
+            }
+        }
+        auto& positions = scratch.stream_positions;
+        std::vector<DataType> P1, P2, W1, W2, side;
+        for (int64_t src_morton : sources) {
+            BoxData<CoordType, DataType>* src = resolve_source(src_morton);
+            if (src == nullptr) {
+                throw std::runtime_error(
+                    "gather_id_target_streamed_nonsymmetric: fill source " + std::to_string(src_morton) + " not found");
+            }
+            const int64_t r = src->X_NR.is_allocated() ? src->X_NR.cols : 0;
+            if (r == 0) continue;
+            const DataType* temp4 = lazy_far_source_temp4(src);
+            if (temp4 == nullptr || !src->X_RR_full.is_allocated() || src->X_RR_full.rows != r) {
+                throw std::runtime_error(
+                    "gather_id_target_streamed_nonsymmetric: incomplete fill source " + std::to_string(src_morton));
+            }
+            const DataType* temp2 = lazy_far_source_temp2(src);
+            const int64_t temp2_ld = src->X_NR.lda;
+            int64_t b_off = 0, b_count = 0;
+            if (!lazy_far_locate_endpoint_rows(src, b_end, b_off, b_count, positions)) continue;
+
+            // W1 (W2): the sketched temp2_E rows (temp4_E columns) of the
+            // blocks listing E, (r x d) column-major
+            W1.assign(static_cast<size_t>(r * d), DataType{0.0});
+            W2.assign(static_cast<size_t>(r * d), DataType{0.0});
+            bool any = false;
+            int r_int = static_cast<int>(r);
+            int inc_one = 1;
+            for (size_t f = 0; f < num_ring; ++f) {
+                bool lists = false;
+                for (int64_t si = pair_src_offsets[f]; si < pair_src_offsets[f + 1]; ++si) {
+                    if (pair_src_mortons[static_cast<size_t>(si)] == src_morton) {
+                        lists = true;
+                        break;
+                    }
+                }
+                if (!lists) continue;
+                const int64_t a = counts[f];
+                LazyFarEndpoint<CoordType> f_end;
+                f_end.morton = box->two_hop[f];
+                f_end.full_size = ring_full[f];
+                f_end.skeleton = ring_skeleton[f];
+                f_end.wanted = ring_wanted[f];
+                f_end.wanted_count = a;
+                int64_t f_off = 0, f_count = 0;
+                if (!lazy_far_locate_endpoint_rows(src, f_end, f_off, f_count, positions)) continue;
+                any = true;
+                for (int64_t i = 0; i < a; ++i) {
+                    const int64_t row = f_off + positions[static_cast<size_t>(i)];
+                    // temp2_E row (strided) and temp4_E column (contiguous)
+                    side.resize(static_cast<size_t>(r));
+                    for (int64_t j = 0; j < r; ++j) side[static_cast<size_t>(j)] = temp2[row + j * temp2_ld];
+                    const DataType* t4 = temp4 + row * r;
+                    for (int b = 0; b < sk; ++b) {
+                        const size_t g1 = static_cast<size_t>((row_base[f] + i) * sk + b);
+                        const size_t g2 = static_cast<size_t>((far_rows + row_base[f] + i) * sk + b);
+                        DataType s1 = rec_sign[g1] > 0 ? norm_factor : DataType{0.0} - norm_factor;
+                        DataType s2 = rec_sign[g2] > 0 ? norm_factor : DataType{0.0} - norm_factor;
+                        DataType* w1 = W1.data() + static_cast<size_t>(rec_idx[g1]) * r;
+                        DataType* w2 = W2.data() + static_cast<size_t>(rec_idx[g2]) * r;
+                        if constexpr (std::is_same_v<DataType, double>) {
+                            daxpy_(&r_int, &s1, side.data(), &inc_one, w1, &inc_one);
+                            daxpy_(&r_int, &s2, const_cast<double*>(t4), &inc_one, w2, &inc_one);
+                        } else {
+                            zaxpy_(&r_int, &s1, side.data(), &inc_one, w1, &inc_one);
+                            zaxpy_(&r_int, &s2, const_cast<std::complex<double>*>(t4), &inc_one, w2, &inc_one);
+                        }
+                    }
+                }
+            }
+            if (!any) continue;
+
+            // P1 = X_RR_E temp4_E[:, B], P2 = X_RR_E^T temp2_E[B]^T (r x n);
+            // B's rows of a source are its full point set, in order
+            if (b_count != n) {
+                throw std::runtime_error(
+                    "gather_id_target_streamed_nonsymmetric: the box's slot in a fill source is not its full point set");
+            }
+            P1.resize(static_cast<size_t>(r * n));
+            P2.resize(static_cast<size_t>(r * n));
+            {
+                int m_i = static_cast<int>(r);
+                int k_i = static_cast<int>(r);
+                int lda = static_cast<int>(src->X_RR_full.lda);
+                DataType one = 1.0;
+                DataType zero = 0.0;
+                split_columns_chunked(n, scratch.split_threads, [&](int64_t c0, int64_t c1) {
+                    int n_t = static_cast<int>(c1 - c0);
+                    int ldb4 = static_cast<int>(r);
+                    gemm_("N", "N", &m_i, &n_t, &k_i, &one, src->X_RR_full.data.data(), &lda,
+                          temp4 + (b_off + c0) * r, &ldb4, &zero, P1.data() + c0 * r, &m_i);
+                    int ldb2 = static_cast<int>(temp2_ld);
+                    gemm_("T", "T", &m_i, &n_t, &k_i, &one, src->X_RR_full.data.data(), &lda,
+                          temp2 + b_off + c0, &ldb2, &zero, P2.data() + c0 * r, &m_i);
+                });
+            }
+            // O' (n x d) -= P1^T W1 + P2^T W2
+            {
+                int m_i = static_cast<int>(n);
+                int k_i = static_cast<int>(r);
+                int ldp = static_cast<int>(r);
+                int ldc = static_cast<int>(n);
+                DataType minus_one = -1.0;
+                DataType one = 1.0;
+                split_columns_chunked(d, scratch.split_threads, [&](int64_t c0, int64_t c1) {
+                    int n_t = static_cast<int>(c1 - c0);
+                    gemm_("T", "N", &m_i, &n_t, &k_i, &minus_one, P1.data(), &ldp, W1.data() + c0 * r, &ldp,
+                          &one, Oacc.data() + c0 * n, &ldc);
+                    gemm_("T", "N", &m_i, &n_t, &k_i, &minus_one, P2.data(), &ldp, W2.data() + c0 * r, &ldp,
+                          &one, Oacc.data() + c0 * n, &ldc);
+                });
+            }
+        }
+    }
+
+    // Y (d x n) = O'^T
+    auto& Y = scratch.sketch_storage;
+    Y.resize(static_cast<size_t>(d * n));
+    for (int64_t j = 0; j < n; ++j) {
+        for (int64_t i = 0; i < d; ++i) Y[static_cast<size_t>(i + j * d)] = Oacc[static_cast<size_t>(i * n + j)];
+    }
+    // adaptive far rows (H2_ID_proxy 2), as gather_id_target_streamed's
+    int64_t sketch_rows = d;
+    append_adaptive_id_training_rows(tree, box, kernel, id_tolerance, false, Y, sketch_rows, n, &scratch.id_adaptive);
+    scratch.workspace_rows = total_rows + (sketch_rows - d);
+    scratch.workspace_cols = n;
+    scratch.streamed_sketch_rows = sketch_rows;
+    scratch.streamed_sketch_valid = true;
+}
+
 
 
 template<typename CoordType, typename DataType, typename KernelType>
@@ -9077,7 +9917,7 @@ void compute_and_modify(
     TreeLevel<CoordType, DataType>& level,
     KernelType* kernel,
     FactorizationThreadScratch<CoordType, DataType>& scratch,
-    double tolerance,
+    IdTolerance tolerance,  // make_id_tolerance(tree, tol): tol and the H2_s_op floor
     int use_sketch,
     bool is_symmetric,
     bool is_hermitian,
@@ -9148,12 +9988,8 @@ void compute_and_modify(
     // compute ID
     
     // const bool force_id_diagnostics = (box->morton_index == 238736);
-    const double sketch_factor = 1.0;
-    const int sketch_nonzeros = 4;
-    int64_t sketch_rows = static_cast<int64_t>(
-        std::ceil(sketch_factor * static_cast<double>(workspace_cols)));
-    sketch_rows = std::min(sketch_rows, workspace_rows);
-    sketch_rows = std::max(sketch_rows, workspace_cols);
+    const IdSketchShape sketch_shape = id_sketch_shape(workspace_rows, workspace_cols);
+    const int64_t sketch_rows = sketch_shape.d;
     // if (force_id_diagnostics) {
     //     const auto workspace_summary =
     //         summarize_colmajor_matrix(workspace, workspace_rows, workspace_cols);
@@ -9191,21 +10027,22 @@ void compute_and_modify(
                 scratch.streamed_sketch_rows,
                 workspace_cols,
                 scratch.streamed_sketch_rows,
-                tolerance, 0);
+                tolerance.relative, 0, tolerance.absolute);
         } else if (use_sketch != 0) {
-            id_result = fmm::compute_id_sparse_sketch(
-                workspace.data(), sketch_storage,
-                workspace_rows, workspace_cols, workspace_rows,
-                tolerance, sketch_factor, sketch_nonzeros, box->morton_index + 1
-            );
+            fmm::id_sketch(workspace.data(), workspace_rows, workspace_cols, workspace_rows, sketch_storage,
+                           static_cast<uint64_t>(box->morton_index + 1));
+            id_result = fmm::compute_id_complex(sketch_storage.data(), sketch_rows, workspace_cols, sketch_rows,
+                                                tolerance.relative, 0, tolerance.absolute);
         } else {
             id_result = fmm::compute_id_complex(
                 workspace.data(),
                 workspace_rows, workspace_cols, workspace_rows,
-                tolerance, 0
+                tolerance.relative, 0, tolerance.absolute
             );
         }
         ensure_nonempty_box_id_rank(id_result, workspace_cols);
+    } catch (const H2EntryMiss&) {
+        throw;
     } catch (const std::exception& e) {
         const auto workspace_summary = summarize_colmajor_matrix(
             workspace,
@@ -9231,8 +10068,8 @@ void compute_and_modify(
                 << (scratch.streamed_sketch_valid
                         ? scratch.streamed_sketch_rows : sketch_rows)
                 << ", sketch_cols=" << workspace_cols
-                << ", sketch_factor=" << sketch_factor
-                << ", sketch_nonzeros=" << sketch_nonzeros;
+                << ", sketch_nonzeros=" << sketch_shape.sk
+                << (sketch_shape.direct ? " (the rows themselves)" : "");
         }
         oss
             << ")\n  "
@@ -10275,7 +11112,13 @@ void compute_and_modify(
                     // );
                     
                     int64_t actual_cols = A_SN_block.size() / workspace_cols;
-                    n_neighbor = actual_cols;
+                    if (actual_cols != n_neighbor) {
+                        throw std::runtime_error(
+                            "compute_and_modify: stored near-field column mismatch box=" +
+                            std::to_string(box->morton_index) + " neighbor=" + std::to_string(neighbor_morton) +
+                            " expected_cols=" + std::to_string(n_neighbor) +
+                            " actual_cols=" + std::to_string(actual_cols));
+                    }
                     
                     for (int64_t j = 0; j < actual_cols; ++j) {
                         for (int64_t i = 0; i < k; ++i) {
@@ -10320,15 +11163,38 @@ void compute_and_modify(
                     }
 
                     if (is_assisting) {
-                        // Assisting box: use full coords (no slicing, ignore eliminated status)
-                        n_neighbor = assisting_neighbor->indices.size();
+                        // Assisting box: its skeleton once eliminated, as
+                        // the rows of X_NR above (CA: its full point set)
+                        const bool neighbor_elim =
+                            !use_CA_redundant_assisting &&
+                            (level.eliminated_boxes.find(neighbor_morton) !=
+                             level.eliminated_boxes.end());
+                        const int64_t* nb_indices = assisting_neighbor->indices.data();
+                        int64_t n_use = static_cast<int64_t>(assisting_neighbor->indices.size());
+                        auto& skel_indices = scratch.index_buffer;
+                        if (neighbor_elim) {
+                            n_use = static_cast<int64_t>(assisting_neighbor->skel_indices.size());
+                            skel_indices.resize(static_cast<size_t>(n_use));
+                            for (int64_t i = 0; i < n_use; ++i) {
+                                skel_indices[static_cast<size_t>(i)] = assisting_neighbor->indices[
+                                    static_cast<size_t>(assisting_neighbor->skel_indices[static_cast<size_t>(i)])];
+                            }
+                            nb_indices = skel_indices.data();
+                        }
+                        if (n_use != n_neighbor) {
+                            throw std::runtime_error(
+                                "compute_and_modify: assisting column mismatch box=" +
+                                std::to_string(box->morton_index) + " neighbor=" +
+                                std::to_string(neighbor_morton) + " expected_cols=" +
+                                std::to_string(n_neighbor) + " actual_cols=" + std::to_string(n_use));
+                        }
                         
                         auto& A_BN = scratch.eval_buffer;
                         A_BN.resize(static_cast<size_t>(workspace_cols * n_neighbor));
                         evaluate_block_by_index_split<DataType>(
                             kernel,
                             box->point_indices.data(), workspace_cols,
-                            assisting_neighbor->indices.data(), n_neighbor,
+                            nb_indices, n_neighbor,
                             A_BN.data(), workspace_cols,
                             scratch.split_threads
                         );
@@ -10390,10 +11256,12 @@ void compute_and_modify(
                         // Local or ghost box that has NOT been eliminated: use full coords
                         auto& A_BN = scratch.eval_buffer;
                         A_BN.resize(static_cast<size_t>(workspace_cols * n_neighbor));
-                        kernel->evaluate_block_by_index(
+                        evaluate_block_by_index_split<DataType>(
+                            kernel,
                             box->point_indices.data(), workspace_cols,
                             neighbor_box->point_indices.data(), n_neighbor,
-                            A_BN.data(), workspace_cols
+                            A_BN.data(), workspace_cols,
+                            scratch.split_threads
                         );
                         
                         for (int64_t j = 0; j < n_neighbor; ++j) {
@@ -10437,6 +11305,9 @@ void compute_and_modify(
     // STEP 2: Second Elimination (Section 2.4) - Call internal helper
     // ========================================================================
     FMM_PHASE_LAP(box_lap, BOX_NEAR);
+    // (entries through a collective callback: the box's requests are all
+    // made; abandoned here if one was not fetched, before step 2's updates)
+    entry_checkpoint();
     
     compute_step_two_internal(
         box, level, X_BB,
@@ -10461,7 +11332,7 @@ void compute_and_modify(
     std::vector<DataType>& workspace,
     int64_t workspace_rows,
     int64_t workspace_cols,
-    double tolerance,
+    IdTolerance tolerance,
     int use_sketch,
     bool is_symmetric,
     bool is_hermitian,

@@ -1,5 +1,5 @@
 // Batched DGEMM of variable sizes on the FP64 tensor cores (sm_80 DMMA,
-// mma.sync m8n8k4) for H2_use_gpu=2.  See launch_dgemm_vbatched_tc in
+// mma.sync m8n8k4) for the H2 GPU backend and HODLR_use_gpu=2.  See launch_dgemm_vbatched_tc in
 // device_kernels.hpp.
 //
 // A block computes a BM x BM tile of one C_i with WM x WN warps, each warp a

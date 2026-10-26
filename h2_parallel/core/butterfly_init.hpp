@@ -167,6 +167,8 @@ inline ProgramOptions parse_program_options64(
         );
     }
 
+    h2_options.nmin_leaf = Nmin_leaf;
+
     // need to check DataType: want to support double and double complex
     h2_options.tolerance = tolerance;
 
@@ -444,13 +446,8 @@ int distributed_leaf_owner(
     throw std::runtime_error(
         "distributed_leaf_owner: unsupported leaf box distribution");
   }
-  const int64_t quotient = boxes / processes;
-  const int64_t remainder = boxes % processes;
-  const int64_t enlarged_span = remainder * (quotient + 1);
-  const int region = morton < enlarged_span
-      ? static_cast<int>(morton / (quotient + 1))
-      : static_cast<int>(remainder +
-            (morton - enlarged_span) / quotient);
+  // the leaf's region ranges (region_partition.hpp: equal for (2^d)^k ranks)
+  const int region = leaf.region_of(morton);
   const auto owner = leaf.morton_to_rank.find(region);
   if (owner == leaf.morton_to_rank.end()) {
     throw std::runtime_error(
@@ -767,6 +764,39 @@ void assign_distributed_points(
 }
 
 
+// H2_unstructured: the tree depth from the occupied boxes
+// (fmm::occupancy_num_levels): options' num_levels made deeper while the
+// occupied leaf boxes hold at least nmin_leaf points on average; CA_level
+// kept at least the depth (the unstructured path is Color only).  `points`:
+// this rank's (distributed) or all of them.  Collective; rank 0 reports.
+template<typename CoordType>
+ProgramOptions with_occupancy_depth(const ProgramOptions& options, const CoordType* points, int64_t count,
+                                    const CoordType bounds[6], MPI_Comm comm, bool distributed) {
+  ProgramOptions out = options;
+  if (options.unstructured == 0 || options.nmin_leaf <= 0) return out;
+  int64_t occupied = 0;
+  bool capped = false;
+  out.num_levels = fmm::occupancy_num_levels(points, count, options.dimension, options.num_levels, options.N,
+                                             options.nmin_leaf, bounds, comm, distributed, &occupied, &capped);
+  out.CA_level = std::max(out.CA_level, out.num_levels);
+  int rank = 0;
+  MPI_Comm_rank(comm, &rank);
+  if (rank == 0 && options.verbosity >= 1 && (out.num_levels != options.num_levels || capped)) {
+    std::cout << "H2 tree depth: " << out.num_levels << " levels from the occupied boxes ("
+              << options.num_levels << " from N alone)";
+    if (occupied > 0) {
+      std::cout << ", " << occupied << " occupied leaf boxes of "
+                << static_cast<double>(options.N) / static_cast<double>(occupied) << " points on average (nmin_leaf "
+                << options.nmin_leaf << ")";
+    }
+    if (capped) {
+      std::cout << "; a deeper tree would exceed " << fmm::kOccupancyBoxesPerPoint << " leaf boxes a point";
+    }
+    std::cout << std::endl;
+  }
+  return out;
+}
+
 template<typename CoordType, typename DataType>
 int bpack_initiate_distributed64(
     H2<CoordType, DataType>* solver,
@@ -802,17 +832,33 @@ int bpack_initiate_distributed64(
       solver->comm, input_coordinates, input_local_count,
       options.dimension, supplied_bounds, bounds_provided, bounds);
 
+  // (H2_unstructured: the depth from the occupied boxes; `options` may be
+  // solver->options itself)
+  const ProgramOptions shaped =
+      with_occupancy_depth(options, input_coordinates, input_local_count, bounds, solver->comm, true);
+  solver->options.num_levels = shaped.num_levels;
+  solver->options.CA_level = shaped.CA_level;
+
+  // the unstructured path splits the ranks' ranges by points (each rank's own)
+  const fmm::RegionWeights region_weights =
+      shaped.unstructured != 0
+          ? fmm::region_weights_of_points(input_coordinates, input_local_count, shaped.dimension,
+                                          shaped.num_levels, bounds, solver->comm, true)
+          : fmm::RegionWeights{};
   std::vector<int> unused_index_map;
   auto tree = std::unique_ptr<fmm::ParallelTree<CoordType, DataType>>(
       fmm::create_uniform_tree<CoordType, DataType>(
-          nullptr, 0, options.num_levels, bounds, options.dimension,
-          solver->comm, options.reduction_threshold, options.CA_level,
-          unused_index_map));
+          nullptr, 0, shaped.num_levels, bounds, shaped.dimension,
+          solver->comm, shaped.reduction_threshold, shaped.CA_level,
+          unused_index_map, fmm::ReductionPattern::UNIFORM,
+          shaped.unstructured != 0,  // (any rank count: unstructured Color only)
+          region_weights));
   tree->num_points = options.N;
   tree->id_neighborhood_radius = options.id_neighborhood_radius;
   tree->id_proxy_mode = options.id_proxy_mode;
   tree->id_proxy_points = options.id_proxy_points;
   tree->id_adaptive_batch = options.id_adaptive_batch;
+  tree->id_s_op = options.s_op;
 
   auto layout = std::make_unique<DistributedLayout64>();
   assign_distributed_points(
@@ -858,19 +904,35 @@ int h2_initiate(H2<CoordType, DataType>* H2_solver, const ProgramOptions& option
       bounds
   );
 
+  // (H2_unstructured: the depth from the occupied boxes)
+  const ProgramOptions shaped =
+      with_occupancy_depth(options, Locations, static_cast<int64_t>(options.N), bounds, H2_solver->comm, false);
+  H2_solver->options.num_levels = shaped.num_levels;
+  H2_solver->options.CA_level = shaped.CA_level;
+
+  // the unstructured path splits the ranks' ranges by points (every rank has
+  // all of them)
+  const fmm::RegionWeights region_weights =
+      shaped.unstructured != 0
+          ? fmm::region_weights_of_points(Locations, static_cast<int64_t>(shaped.N), shaped.dimension,
+                                          shaped.num_levels, bounds, H2_solver->comm, false)
+          : fmm::RegionWeights{};
   std::vector<int> idx_map;
   // Provide Locations to nullptr, check compatibility
   auto tree = std::unique_ptr<fmm::ParallelTree<CoordType, DataType>>(
       fmm::create_uniform_tree<CoordType, DataType>(
           Locations,
-          options.N,
-          options.num_levels,
+          shaped.N,
+          shaped.num_levels,
           bounds,
-          options.dimension,
+          shaped.dimension,
           H2_solver->comm,
-          options.reduction_threshold,
-          options.CA_level,
-          idx_map));
+          shaped.reduction_threshold,
+          shaped.CA_level,
+          idx_map,
+          fmm::ReductionPattern::UNIFORM,
+          shaped.unstructured != 0,  // (any rank count: unstructured Color only)
+          region_weights));
 
   H2_solver->tree = std::move(tree); 
 
@@ -878,6 +940,7 @@ int h2_initiate(H2<CoordType, DataType>* H2_solver, const ProgramOptions& option
   H2_solver->tree->id_proxy_mode = options.id_proxy_mode;
   H2_solver->tree->id_proxy_points = options.id_proxy_points;
   H2_solver->tree->id_adaptive_batch = options.id_adaptive_batch;
+  H2_solver->tree->id_s_op = options.s_op;
 
   idxs = 0;
   idxe = -1;

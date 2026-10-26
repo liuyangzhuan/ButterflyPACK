@@ -3358,12 +3358,67 @@ contains
       return
    end subroutine PIKSRT_DBLE_Multi
 
-! sort the first dimension of the array
+! sort the first dimension of the array: the rows by their first column,
+! stably (rows with equal keys keep their order).  A straight insertion sort
+! below 32 rows; above, a bottom-up merge sort of the row order, which gives
+! the same order in O(N log N) - the insertion sort's O(N^2) took 100 s for
+! one block of 190K rows in the EMSURF element extraction.
    subroutine PIKSRT_INT_Multi(N, M, ARR)
       implicit none
       integer j, i, N, M
       integer ARR(N, M)
       integer, allocatable::a(:)
+      integer, allocatable::idx(:), tmp(:), rows(:, :)
+      integer width, lo, mid, hi, ia, ib, k
+      if (N > 32) then
+         allocate (idx(N), tmp(N))
+         do i = 1, N
+            idx(i) = i
+         end do
+         width = 1
+         do while (width < N)
+            lo = 1
+            do while (lo <= N)
+               mid = min(lo + width - 1, N)
+               hi = min(lo + 2*width - 1, N)
+               if (mid < hi) then
+                  ia = lo
+                  ib = mid + 1
+                  k = lo
+                  do while (ia <= mid .and. ib <= hi)
+                     if (ARR(idx(ib), 1) < ARR(idx(ia), 1)) then
+                        tmp(k) = idx(ib)
+                        ib = ib + 1
+                     else
+                        tmp(k) = idx(ia)
+                        ia = ia + 1
+                     end if
+                     k = k + 1
+                  end do
+                  do while (ia <= mid)
+                     tmp(k) = idx(ia)
+                     ia = ia + 1
+                     k = k + 1
+                  end do
+                  do while (ib <= hi)
+                     tmp(k) = idx(ib)
+                     ib = ib + 1
+                     k = k + 1
+                  end do
+                  idx(lo:hi) = tmp(lo:hi)
+               end if
+               lo = lo + 2*width
+            end do
+            width = 2*width
+         end do
+         allocate (rows(N, M))
+         do i = 1, N
+            rows(i, :) = ARR(idx(i), :)
+         end do
+         ARR = rows
+         deallocate (idx, tmp, rows)
+         return
+      end if
       allocate (a(M))
       do j = 2, N
          a = ARR(j, :)

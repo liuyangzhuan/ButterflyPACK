@@ -52,7 +52,7 @@ The registrations take an or-ed combination of:
 
 | Flag | Value | Meaning |
 |---|---|---|
-| `BPACK_GPU_SYMMETRIC` | 1 | K(i, j) == K(j, i). **Required by the H2 format**, which factors symmetric matrices: H2 refuses an evaluator without it (and says so) and runs as without one. HODLR does not need it. |
+| `BPACK_GPU_SYMMETRIC` | 1 | K(i, j) == K(j, i). **Required by the H2 format for a symmetric matrix** (`sym 1`, the default): H2 refuses an evaluator without it (and says so) and runs as without one. A nonsymmetric H2 (`sym 0`) and HODLR do not need it. |
 | `BPACK_GPU_COORDINATES` | 2 | The evaluator reads the points' coordinates. |
 | `BPACK_GPU_HOST_IDS` | 4 | Block evaluators only: the evaluator reads the ids of each block on the host (`row_ids_host`, `col_ids_host`). The library then waits for their copy to the host before each batch, which costs a synchronization per batch. |
 
@@ -264,7 +264,10 @@ Gaussian-process kernel).
 
 ## H2 specifics
 
-- The evaluator must be symmetric (`BPACK_GPU_SYMMETRIC`).
+- A symmetric matrix needs a symmetric evaluator (`BPACK_GPU_SYMMETRIC`). A
+  nonsymmetric one (`sym 0`, with `H2_unstructured 1`) takes an evaluator of
+  any form but entries through a collective callback, and its levels shared by
+  several ranks need CUDA-aware MPI (else they run on the host).
 - The factorization calls it on the levels its GPU box path takes, which
   needs `h2_use_sketch 2`, `H2_XRR_factor 1`, and `h2_lazy_schur 2` on levels
   shared by several ranks (`h2_lazy_schur 1` or 2 on CA levels). With

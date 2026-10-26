@@ -10,6 +10,7 @@
 #include <mpi.h>
 
 #include "runtime_thread_support.hpp"
+#include "omp_region.hpp"
 
 namespace butterfly {
 
@@ -150,20 +151,38 @@ private:
         }
         std::vector<DataType> send_buffer(send_points * nrhs);
         std::vector<DataType> recv_buffer(recv_points * nrhs);
-
-        // Each point packet stores all RHS contiguously.  This uses one
-        // collective for the full batch rather than one collective per RHS.
-        for (size_t packet = 0; packet < send_points; ++packet) {
-            const int64_t slot = send_slots[packet];
+        for (const int64_t slot : send_slots) {
             if (slot < 0 || slot >= source_size) {
                 throw std::runtime_error(
                     "DistributedLayout64::redistribute: invalid send slot");
             }
-            for (int rhs = 0; rhs < nrhs; ++rhs) {
-                send_buffer[packet * nrhs + static_cast<size_t>(rhs)] =
-                    source[static_cast<size_t>(slot) +
-                           static_cast<size_t>(rhs) * source_size];
+        }
+        for (const int64_t slot : recv_slots) {
+            if (slot < 0 || slot >= destination_size) {
+                throw std::runtime_error(
+                    "DistributedLayout64::redistribute: invalid receive slot");
             }
+        }
+
+        // One collective for the whole batch.  A process's chunk holds its
+        // points column by column ([rhs][point]), so that packing reads and
+        // unpacking writes run along the columns (a point's RHS packed
+        // together were a stride of the local length apart), in threads.
+        for (int process = 0; process < size; ++process) {
+            const int64_t first = point_send_displacements[static_cast<size_t>(process)];
+            const int64_t count = point_send_counts[static_cast<size_t>(process)];
+            DataType* chunk = send_buffer.data() + first * nrhs;
+            const int64_t* slots = send_slots.data() + first;
+            fmm::omp_parallel_if(count * nrhs > 65536, [&] {
+                #pragma omp for collapse(2) schedule(static)
+                for (int rhs = 0; rhs < nrhs; ++rhs) {
+                    for (int64_t i = 0; i < count; ++i) {
+                        chunk[static_cast<size_t>(rhs) * count + i] =
+                            source[static_cast<size_t>(slots[i]) +
+                                   static_cast<size_t>(rhs) * source_size];
+                    }
+                }
+            });
         }
 
         MPI_Alltoallv(
@@ -172,17 +191,21 @@ private:
             recv_buffer.data(), recv_counts.data(), recv_displacements.data(),
             fmm::mpi_datatype_for<DataType>(), comm);
 
-        for (size_t packet = 0; packet < recv_points; ++packet) {
-            const int64_t slot = recv_slots[packet];
-            if (slot < 0 || slot >= destination_size) {
-                throw std::runtime_error(
-                    "DistributedLayout64::redistribute: invalid receive slot");
-            }
-            for (int rhs = 0; rhs < nrhs; ++rhs) {
-                destination[static_cast<size_t>(slot) +
-                            static_cast<size_t>(rhs) * destination_size] =
-                    recv_buffer[packet * nrhs + static_cast<size_t>(rhs)];
-            }
+        for (int process = 0; process < size; ++process) {
+            const int64_t first = point_recv_displacements[static_cast<size_t>(process)];
+            const int64_t count = point_recv_counts[static_cast<size_t>(process)];
+            const DataType* chunk = recv_buffer.data() + first * nrhs;
+            const int64_t* slots = recv_slots.data() + first;
+            fmm::omp_parallel_if(count * nrhs > 65536, [&] {
+                #pragma omp for collapse(2) schedule(static)
+                for (int rhs = 0; rhs < nrhs; ++rhs) {
+                    for (int64_t i = 0; i < count; ++i) {
+                        destination[static_cast<size_t>(slots[i]) +
+                                    static_cast<size_t>(rhs) * destination_size] =
+                            chunk[static_cast<size_t>(rhs) * count + i];
+                    }
+                }
+            });
         }
     }
 };
