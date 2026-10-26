@@ -685,7 +685,6 @@ public:
             // ranks): they must fit beside the kept factors.
             const double working = opt_.is_symmetric ? 0.0 : keep_bound_;
             ok = kept_expected_ + working <= budget ? 1 : 0;
-            if (tree_->partial()) ok = 0;  // (H2_partial: the partial solves run on the host)
         }
         MPI_Allreduce(MPI_IN_PLACE, &ok, 1, MPI_INT, MPI_MIN, level_comm);
         if (level_) level_->set_solve_keep(ok != 0, budget, kept_expected_);

@@ -489,6 +489,36 @@ point set and on a plain cube split, dense checks at small N.
   over ranks.  Then: FrontH2Partial in STRUMPACK (its own CompressionType and
   options; the other variant reuses FrontHODLR with HODLROptions::use_h2()),
   in a worktree of its own.
-  Later: the records on the device (with compression, or several cards) for
-  a device CB product and partial solves; with compression they would fit
-  (5.9 GB at 64^3) and the device decompresses at hundreds of GB/s.
+- **Device residency** (2026-10-25).  The full GPU H2 keeps its solve
+  factors on the device (kept at factor time when they fit under 0.8 of the
+  heap, else uploaded once at the first solve), and the partial path had
+  opted out at three places: no kept factors (decide_solve_keep), the
+  partial solves on the host (solver_impl.hpp), the F22 records, T22 and the
+  CB on the host.
+  - **G1 done:** the partial solves' level sweeps on the device
+    (device_partial_sweeps): the forward's waves without the diagonal
+    solves, then the F22 step x_R22 -= T22^T x_S'; the backward's diagonal
+    solves, the F22 step x_S' -= T22 x_R22 and the waves.  The F22 step is a
+    T-only SolveBox table per level (T22 over the live set S', R22) through
+    the existing forward/backward kernels; the F11 factors index
+    factor_skeleton (the skeleton before the F22 phase) in the set-up.  The
+    root's partial solve and the F22 passes stay on the host, as the full
+    device solve keeps its root and hand-offs there.  Partial levels now keep
+    their factors at factor time like any level (the guard is gone; the
+    partial code reads only the F22 records and the root's X_RR on the
+    host).  BPACK_CHECK=solve: device vs host 1e-16 .. 1e-15, 1/3/8 ranks,
+    compressed and not; check values unchanged.  64^3 one GPU: forward
+    0.146 -> 0.155 s (device sweeps 0.110, the host's root and F22 pass
+    0.045), backward 0.156 -> 0.089 (0.046 + 0.043); the factors (3.5 GB)
+    upload at the first solve, 1 s (at 64^3 only level 4 fits the keep
+    budget during the factorization; 32^3 on 8 ranks keeps levels 2, 3).
+    The forward waves are the existing one-block-a-box kernels (a level-3
+    wave is 64 boxes, X_NR about 19 MB a box with the F22 points in the
+    neighbours' skeletons: 7 ms a wave), a device-solve optimisation of its
+    own.
+  - **G2:** the F22 records (compressed under H2_compress_factors: 5.9 GB at
+    64^3), T22 and the root's CB kept on the device when they fit (decided
+    collectively, else on the host as now); the CB product on the device.
+  - **G3:** the CB entries on the device: the host plans the block pairs, the
+    device decompresses the chunks they read, gathers, multiplies (batched)
+    and scatter-adds.

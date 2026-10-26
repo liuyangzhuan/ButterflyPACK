@@ -160,6 +160,38 @@ void hierarchical_solve_unstructured(
         }
     }
 #endif
+    // H2_partial on the device: the levels' sweeps there (device_partial_sweeps:
+    // the forward's waves and F22 steps; the backward's diagonal solves, F22
+    // steps and waves), the root's partial solve and the F22 passes here.
+    // With BPACK_CHECK=solve the host path runs too, on a copy (the backward:
+    // of the forward's vectors), and rank 0 prints their difference.
+    bool device_partial = false;
+    std::vector<std::vector<SolveDataRequest<CoordType, DataType>>> check_data;
+#ifdef H2_HAVE_GPU
+    if constexpr (gpu::gpu_data_type<DataType>) {
+        if (partial_mode != 0) {
+            device_partial = gpu::device_partial_ready(tree, verbosity);
+            if (device_partial && partial_mode == 2 && gpu::device_solve_check()) {
+                // (the records' vectors and lists; their factor blocks are filled on demand)
+                check_data.resize(solve_data.size());
+                for (size_t l = 0; l < solve_data.size(); ++l) {
+                    check_data[l].resize(solve_data[l].size());
+                    for (size_t b = 0; b < solve_data[l].size(); ++b) {
+                        const auto& from = solve_data[l][b];
+                        auto& to = check_data[l][b];
+                        to.initialize(from.morton_index, from.source_rank, from.num_points, from.nrhs);
+                        to.right_side = from.right_side;
+                        to.left_side = from.left_side;
+                        to.redundant_indices = from.redundant_indices;
+                        to.skeleton_indices = from.skeleton_indices;
+                        to.one_hop = from.one_hop;
+                        to.use_full_set = from.use_full_set;
+                    }
+                }
+            }
+        }
+    }
+#endif
 
     // ===== Phase 1: Forward Sweep (V^{-1}) with level transitions =====
 
@@ -170,7 +202,12 @@ void hierarchical_solve_unstructured(
     auto forward_start = std::chrono::high_resolution_clock::now();
     PendingSolveUpdates<DataType> pending_solve;
 
-    if (partial_mode != 2)
+#ifdef H2_HAVE_GPU
+    if constexpr (gpu::gpu_data_type<DataType>) {
+        if (device_partial && partial_mode == 1) gpu::device_partial_sweeps(tree, solve_data, nrhs, true, verbosity);
+    }
+#endif
+    if (partial_mode != 2 && !device_partial)
     for (int level = leaf_level; level >= 1; level--) {
         auto& tree_level = tree->levels[level];
         const int level_print_rank = smallest_active_rank(tree_level);
@@ -440,8 +477,9 @@ void hierarchical_solve_unstructured(
 
     int64_t num_diagonal_solves = 0;
 
-    // Solve all X_RR blocks (levels N-1 down to 2)
-    if (partial_mode != 1)
+    // Solve all X_RR blocks (levels N-1 down to 2; H2_partial on the device:
+    // with each level's backward sweep)
+    if (partial_mode != 1 && !device_partial)
     for (int level = leaf_level; level >= 2; level--) {
         auto& tree_level = tree->levels[level];
         const int level_print_rank = smallest_active_rank(tree_level);
@@ -639,7 +677,12 @@ void hierarchical_solve_unstructured(
 
     auto backward_start = std::chrono::high_resolution_clock::now();
 
-    if (partial_mode != 1)
+#ifdef H2_HAVE_GPU
+    if constexpr (gpu::gpu_data_type<DataType>) {
+        if (device_partial && partial_mode == 2) gpu::device_partial_sweeps(tree, solve_data, nrhs, false, verbosity);
+    }
+#endif
+    if (partial_mode != 1 && !device_partial)
     for (int level = 1; level <= leaf_level; level++) {
         auto& tree_level = tree->levels[level];
         const int level_print_rank = smallest_active_rank(tree_level);
@@ -937,6 +980,47 @@ void hierarchical_solve_unstructured(
         std::cout << "========================================\n" << std::endl;
     }
 
+#ifdef H2_HAVE_GPU
+    if constexpr (gpu::gpu_data_type<DataType>) {
+        if (device_partial && gpu::device_solve_check()) {
+            // the host path (the device's suspended): the forward's output, the
+            // backward's F11 solution (the leaves' vectors)
+            std::vector<DataType> host_out2;
+            if (partial_mode == 1) {
+                check_data.clear();
+                check_data.resize(static_cast<size_t>(tree->num_levels));
+            }
+            gpu::device_solve_suspended() = true;
+            hierarchical_solve_unstructured(tree, rhs, check_data, nrhs, -1, false, partial_mode, partial_x2,
+                                            partial_mode == 1 ? &host_out2 : nullptr);
+            gpu::device_solve_suspended() = false;
+            double sums[2] = {0.0, 0.0};
+            if (partial_mode == 1) {
+                for (size_t i = 0; i < host_out2.size(); ++i) {
+                    sums[0] += std::norm((*partial_out2)[i] - host_out2[i]);
+                    sums[1] += std::norm(host_out2[i]);
+                }
+            } else {
+                if (tree->levels[static_cast<size_t>(leaf_level)].is_process_active) {
+                    for (size_t b = 0; b < solve_data[static_cast<size_t>(leaf_level)].size(); ++b) {
+                        const auto& x = solve_data[static_cast<size_t>(leaf_level)][b].left_side;
+                        const auto& y = check_data[static_cast<size_t>(leaf_level)][b].left_side;
+                        for (size_t i = 0; i < x.size(); ++i) {
+                            sums[0] += std::norm(x[i] - y[i]);
+                            sums[1] += std::norm(y[i]);
+                        }
+                    }
+                }
+                MPI_Allreduce(MPI_IN_PLACE, sums, 2, MPI_DOUBLE, MPI_SUM, tree->comm);
+            }
+            if (rank == 0) {
+                std::printf("GPU partial %s check: |gpu - host| / |host| = %.3e\n", partial_mode == 1 ? "forward" : "backward",
+                            sums[1] > 0.0 ? std::sqrt(sums[0] / sums[1]) : 0.0);
+                std::fflush(stdout);
+            }
+        }
+    }
+#endif
     restore_base_process_affinity();
     clear_runtime_fmm_thread_count();
     destroy_solve_communicators(solve_comms);
