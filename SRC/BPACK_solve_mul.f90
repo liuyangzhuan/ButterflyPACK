@@ -979,7 +979,8 @@ contains
       if (iter .eq. 0) itmax = ntotal
       if (itmax <= 0) itmax = max(1, ntotal)
 
-      restart = 30
+      restart = option%gmres_restart
+      if (restart <= 0) restart = 30
       if (present(restart_in)) restart = restart_in
       restart = max(1, min(restart, itmax))
       breakdown_tol = 1d-300
@@ -2004,7 +2005,7 @@ contains
       integer::i, j, ierr, nn_loc, nn_loc_MD(Ndim)
       DT, dimension(1:product(nn_loc_MD),1)::x, b
       DT, allocatable::V(:,:), Ax(:,:), b_prec(:,:), hess(:,:), givens_c(:), givens_s(:), g(:), y(:)
-      real(kind=8)::err, tol, rho, rho0, relres, wnorm, delta, breakdown_tol
+      real(kind=8)::err, tol, rho, rho0, relres, wnorm, delta, breakdown_tol, bnorm, true_res
       DT::x_sum, b_sum, vtmp, norm_local, norm_sum, dot_local, dot_sum, tmp
       logical::converged, happy_breakdown
       type(Hstat)::stats
@@ -2046,7 +2047,8 @@ contains
       if (iter .eq. 0) itmax = ntotal
       if (itmax <= 0) itmax = max(1, ntotal)
 
-      restart = 30
+      restart = option%gmres_restart
+      if (restart <= 0) restart = 30
       if (present(restart_in)) restart = restart_in
       restart = max(1, min(restart, itmax))
       breakdown_tol = 1d-300
@@ -2056,6 +2058,10 @@ contains
       allocate(g(restart+1), y(restart))
 
       call blackbox_precon_MVP(Ndim, 'N', nn_loc_MD, nn_loc_MD, 1, b, b_prec, ker)
+      ! ||b||, for the true residual ||b - A x|| / ||b|| at each restart (relres is the preconditioned one)
+      norm_local = dot_product(b(:,1), b(:,1))
+      call MPI_ALLREDUCE(norm_local, norm_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      bnorm = sqrt(abs(norm_sum))
 
       rho0 = 0d0
       relres = 1d0
@@ -2065,6 +2071,10 @@ contains
       do while (.not. converged .and. total_iter < itmax)
          call blackbox_MVP(Ndim, 'N', nn_loc_MD, nn_loc_MD, 1, x, Ax, ker)
          stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+         norm_local = dot_product(b(:,1) - Ax(:,1), b(:,1) - Ax(:,1))
+         call MPI_ALLREDUCE(norm_local, norm_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+         true_res = 0d0
+         if (bnorm > 0d0) true_res = sqrt(abs(norm_sum))/bnorm
          call blackbox_precon_MVP(Ndim, 'N', nn_loc_MD, nn_loc_MD, 1, Ax, V(:,1:1), ker)
          V(:,1:1) = b_prec - V(:,1:1)
 
@@ -2082,7 +2092,7 @@ contains
 
          relres = rho/rho0
          if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
-            print *, '# of GMRES,error:', total_iter, relres, ' restart'
+            print *, '# of GMRES,error:', total_iter, relres, ' restart, true residual:', true_res
          end if
 
          if (relres < tol) then

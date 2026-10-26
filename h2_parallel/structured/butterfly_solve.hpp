@@ -3,6 +3,7 @@
 #include "core/butterfly_types.hpp"
 #include "core/butterfly_ca_level.hpp"
 #include "core/butterfly_communicators.hpp"
+#include "core/omp_region.hpp"
 #ifdef H2_HAVE_GPU
 #include "h2_gpu/device_solve.hpp"
 #endif
@@ -82,8 +83,7 @@ int64_t diagonal_solve_level(
     std::mutex diagonal_exception_mutex;
     std::atomic<bool> diagonal_failed{false};
 
-    #pragma omp parallel default(shared) if (tree_level.num_boxes_local > 1)
-    {
+    omp_parallel_if(tree_level.num_boxes_local > 1, [&] {
         int64_t local_diagonal_solves = 0;
 
         #pragma omp for schedule(static)
@@ -199,7 +199,7 @@ int64_t diagonal_solve_level(
 
         #pragma omp atomic
         count += local_diagonal_solves;
-    }
+    });
 
     if (diagonal_exception) {
         std::rethrow_exception(diagonal_exception);
@@ -225,8 +225,7 @@ int64_t diagonal_mul_level(
     std::mutex diagonal_exception_mutex;
     std::atomic<bool> diagonal_failed{false};
 
-    #pragma omp parallel default(shared) if (tree_level.num_boxes_local > 1)
-    {
+    omp_parallel_if(tree_level.num_boxes_local > 1, [&] {
         int64_t local_diagonal_muls = 0;
 
         #pragma omp for schedule(static)
@@ -330,7 +329,7 @@ int64_t diagonal_mul_level(
 
         #pragma omp atomic
         count += local_diagonal_muls;
-    }
+    });
 
     if (diagonal_exception) {
         std::rethrow_exception(diagonal_exception);
@@ -880,8 +879,7 @@ void hierarchical_solve_parallel(
                 std::mutex forward_wave_exception_mutex;
                 std::atomic<bool> forward_wave_failed{false};
 
-                #pragma omp parallel default(shared) if (color_list.size() > 1)
-                {
+                omp_parallel_if(color_list.size() > 1, [&] {
                     const int tid = omp_get_thread_num();
                     auto& local_pending = thread_pending[static_cast<size_t>(tid)];
 
@@ -911,7 +909,7 @@ void hierarchical_solve_parallel(
                             }
                         }
                     }
-                }
+                });
 
                 if (forward_wave_exception) {
                     std::rethrow_exception(forward_wave_exception);
@@ -1094,8 +1092,7 @@ void hierarchical_solve_parallel(
                 std::mutex backward_wave_exception_mutex;
                 std::atomic<bool> backward_wave_failed{false};
 
-                #pragma omp parallel default(shared) if (bins.size() > 1)
-                {
+                omp_parallel_if(bins.size() > 1, [&] {
                     #pragma omp for schedule(static)
                     for (int64_t idx = 0; idx < static_cast<int64_t>(bins.size()); ++idx) {
                         if (backward_wave_failed.load(std::memory_order_relaxed)) {
@@ -1121,7 +1118,7 @@ void hierarchical_solve_parallel(
                             }
                         }
                     }
-                }
+                });
 
                 if (backward_wave_exception) {
                     std::rethrow_exception(backward_wave_exception);
@@ -1416,8 +1413,7 @@ void hierarchical_mul_parallel(
                 std::mutex wave_exception_mutex;
                 std::atomic<bool> wave_failed{false};
 
-                #pragma omp parallel default(shared) if (bins.size() > 1)
-                {
+                omp_parallel_if(bins.size() > 1, [&] {
                     #pragma omp for schedule(static)
                     for (int64_t idx = 0; idx < static_cast<int64_t>(bins.size()); ++idx) {
                         if (wave_failed.load(std::memory_order_relaxed)) continue;
@@ -1439,7 +1435,7 @@ void hierarchical_mul_parallel(
                             }
                         }
                     }
-                }
+                });
 
                 if (wave_exception) {
                     std::rethrow_exception(wave_exception);
@@ -1578,8 +1574,7 @@ void hierarchical_mul_parallel(
                 std::mutex wave_exception_mutex;
                 std::atomic<bool> wave_failed{false};
 
-                #pragma omp parallel default(shared) if (bins.size() > 1)
-                {
+                omp_parallel_if(bins.size() > 1, [&] {
                     const int tid = omp_get_thread_num();
                     auto& local_pending = thread_pending[static_cast<size_t>(tid)];
 
@@ -1607,7 +1602,7 @@ void hierarchical_mul_parallel(
                             }
                         }
                     }
-                }
+                });
 
                 if (wave_exception) {
                     std::rethrow_exception(wave_exception);

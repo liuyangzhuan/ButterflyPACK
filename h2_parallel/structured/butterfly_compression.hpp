@@ -4,6 +4,7 @@
 #include "core/butterfly_types.hpp"
 #include "butterfly_solve.hpp"
 #include "core/butterfly_matvec.hpp"
+#include "core/omp_region.hpp"
 #ifdef H2_HAVE_GPU
 #include "h2_gpu/compression_gpu.hpp"
 #include "h2_gpu/h2_matvec.hpp"
@@ -127,74 +128,76 @@ void build_h2_blocks_for_level(
     std::mutex build_exception_mutex;
     std::atomic<bool> build_failed{false};
 
-    #pragma omp parallel for schedule(dynamic) if (level.local_boxes.size() > 1)
-    for (int64_t box_index = 0;
-         box_index < static_cast<int64_t>(level.local_boxes.size());
-         ++box_index) {
-        if (build_failed.load(std::memory_order_relaxed)) continue;
+    omp_parallel_if(level.local_boxes.size() > 1, [&] {
+        #pragma omp for schedule(dynamic)
+        for (int64_t box_index = 0;
+             box_index < static_cast<int64_t>(level.local_boxes.size());
+             ++box_index) {
+            if (build_failed.load(std::memory_order_relaxed)) continue;
 
-        try {
-            auto& target = level.local_boxes[static_cast<size_t>(box_index)];
-            target.h2_interaction_blocks.clear();
-            target.h2_near_blocks.clear();
+            try {
+                auto& target = level.local_boxes[static_cast<size_t>(box_index)];
+                target.h2_interaction_blocks.clear();
+                target.h2_near_blocks.clear();
 
-            if (build_interactions) {
-                const auto target_indices =
-                    h2_box_global_indices(level, target.morton_index, true);
-                const auto interaction = h2_interaction_list(tree, target);
-                target.h2_interaction_blocks.reserve(interaction.size());
+                if (build_interactions) {
+                    const auto target_indices =
+                        h2_box_global_indices(level, target.morton_index, true);
+                    const auto interaction = h2_interaction_list(tree, target);
+                    target.h2_interaction_blocks.reserve(interaction.size());
 
-                for (int64_t source_morton : interaction) {
-                    const auto source_indices =
-                        h2_box_global_indices(level, source_morton, true);
-                    if (target_indices.empty() || source_indices.empty()) continue;
+                    for (int64_t source_morton : interaction) {
+                        const auto source_indices =
+                            h2_box_global_indices(level, source_morton, true);
+                        if (target_indices.empty() || source_indices.empty()) continue;
 
-                    H2Block<DataType> block;
-                    block.source_morton = source_morton;
-                    block.matrix.allocate(
-                        static_cast<int64_t>(target_indices.size()),
-                        static_cast<int64_t>(source_indices.size()),
-                        MatrixStorage<DataType>::FULL);
-                    kernel->evaluate_block_by_index(
-                        target_indices.data(), static_cast<int64_t>(target_indices.size()),
-                        source_indices.data(), static_cast<int64_t>(source_indices.size()),
-                        block.matrix.data.data(), block.matrix.lda);
-                    target.h2_interaction_blocks.push_back(std::move(block));
+                        H2Block<DataType> block;
+                        block.source_morton = source_morton;
+                        block.matrix.allocate(
+                            static_cast<int64_t>(target_indices.size()),
+                            static_cast<int64_t>(source_indices.size()),
+                            MatrixStorage<DataType>::FULL);
+                        kernel->evaluate_block_by_index(
+                            target_indices.data(), static_cast<int64_t>(target_indices.size()),
+                            source_indices.data(), static_cast<int64_t>(source_indices.size()),
+                            block.matrix.data.data(), block.matrix.lda);
+                        target.h2_interaction_blocks.push_back(std::move(block));
+                    }
                 }
-            }
 
-            if (build_leaf_near) {
-                std::vector<int64_t> near = target.one_hop;
-                near.push_back(target.morton_index);
-                std::sort(near.begin(), near.end());
-                near.erase(std::unique(near.begin(), near.end()), near.end());
-                target.h2_near_blocks.reserve(near.size());
+                if (build_leaf_near) {
+                    std::vector<int64_t> near = target.one_hop;
+                    near.push_back(target.morton_index);
+                    std::sort(near.begin(), near.end());
+                    near.erase(std::unique(near.begin(), near.end()), near.end());
+                    target.h2_near_blocks.reserve(near.size());
 
-                for (int64_t source_morton : near) {
-                    const auto source_indices =
-                        h2_box_global_indices(level, source_morton, false);
-                    if (target.point_indices.empty() || source_indices.empty()) continue;
+                    for (int64_t source_morton : near) {
+                        const auto source_indices =
+                            h2_box_global_indices(level, source_morton, false);
+                        if (target.point_indices.empty() || source_indices.empty()) continue;
 
-                    H2Block<DataType> block;
-                    block.source_morton = source_morton;
-                    block.matrix.allocate(
-                        target.num_points,
-                        static_cast<int64_t>(source_indices.size()),
-                        MatrixStorage<DataType>::FULL);
-                    kernel->evaluate_block_by_index(
-                        target.point_indices.data(), target.num_points,
-                        source_indices.data(), static_cast<int64_t>(source_indices.size()),
-                        block.matrix.data.data(), block.matrix.lda);
-                    target.h2_near_blocks.push_back(std::move(block));
+                        H2Block<DataType> block;
+                        block.source_morton = source_morton;
+                        block.matrix.allocate(
+                            target.num_points,
+                            static_cast<int64_t>(source_indices.size()),
+                            MatrixStorage<DataType>::FULL);
+                        kernel->evaluate_block_by_index(
+                            target.point_indices.data(), target.num_points,
+                            source_indices.data(), static_cast<int64_t>(source_indices.size()),
+                            block.matrix.data.data(), block.matrix.lda);
+                        target.h2_near_blocks.push_back(std::move(block));
+                    }
                 }
-            }
-        } catch (...) {
-            if (!build_failed.exchange(true, std::memory_order_relaxed)) {
-                std::lock_guard<std::mutex> lock(build_exception_mutex);
-                build_exception = std::current_exception();
+            } catch (...) {
+                if (!build_failed.exchange(true, std::memory_order_relaxed)) {
+                    std::lock_guard<std::mutex> lock(build_exception_mutex);
+                    build_exception = std::current_exception();
+                }
             }
         }
-    }
+    });
 
     if (build_exception) std::rethrow_exception(build_exception);
 }
@@ -354,24 +357,26 @@ void hierarchical_compression_parallel(
                     std::iota(host_boxes.begin(), host_boxes.end(), int64_t{0});
                 }
 
-                #pragma omp parallel for schedule(dynamic) if (host_boxes.size() > 1)
-                for (int64_t host_index = 0;
-                     host_index < static_cast<int64_t>(host_boxes.size());
-                     ++host_index) {
-                    if (id_failed.load(std::memory_order_relaxed)) continue;
-                    try {
-                        const int64_t box_index = host_boxes[static_cast<size_t>(host_index)];
-                        h2_skeletonize_box(
-                            tree,
-                            &level.local_boxes[static_cast<size_t>(box_index)],
-                            level, kernel, tolerance, use_sketch);
-                    } catch (...) {
-                        if (!id_failed.exchange(true, std::memory_order_relaxed)) {
-                            std::lock_guard<std::mutex> lock(id_exception_mutex);
-                            id_exception = std::current_exception();
+                omp_parallel_if(host_boxes.size() > 1, [&] {
+                    #pragma omp for schedule(dynamic)
+                    for (int64_t host_index = 0;
+                         host_index < static_cast<int64_t>(host_boxes.size());
+                         ++host_index) {
+                        if (id_failed.load(std::memory_order_relaxed)) continue;
+                        try {
+                            const int64_t box_index = host_boxes[static_cast<size_t>(host_index)];
+                            h2_skeletonize_box(
+                                tree,
+                                &level.local_boxes[static_cast<size_t>(box_index)],
+                                level, kernel, tolerance, use_sketch);
+                        } catch (...) {
+                            if (!id_failed.exchange(true, std::memory_order_relaxed)) {
+                                std::lock_guard<std::mutex> lock(id_exception_mutex);
+                                id_exception = std::current_exception();
+                            }
                         }
                     }
-                }
+                });
                 if (id_exception) std::rethrow_exception(id_exception);
 
                 for (const auto& box : level.local_boxes) {
@@ -496,58 +501,60 @@ void apply_h2_interactions(
     std::mutex apply_exception_mutex;
     std::atomic<bool> apply_failed{false};
 
-    #pragma omp parallel for schedule(dynamic) if (level.local_boxes.size() > 1)
-    for (int64_t box_index = 0;
-         box_index < static_cast<int64_t>(level.local_boxes.size());
-         ++box_index) {
-        if (apply_failed.load(std::memory_order_relaxed)) continue;
-        try {
-            const auto& target = level.local_boxes[static_cast<size_t>(box_index)];
-            auto& target_vector = target_data[static_cast<size_t>(box_index)].left_side;
-            for (const auto& block : target.h2_interaction_blocks) {
-                std::vector<DataType> source;
-                if (level.find_local_box(block.source_morton) != nullptr) {
-                    source = h2_local_vector_for_morton(
-                        level, source_data, block.source_morton, true);
-                } else {
-                    auto it = remote_sources.find(block.source_morton);
-                    if (it == remote_sources.end()) {
-                        throw std::runtime_error(
-                            "apply_h2_interactions: missing remote multipole vector");
+    omp_parallel_if(level.local_boxes.size() > 1, [&] {
+        #pragma omp for schedule(dynamic)
+        for (int64_t box_index = 0;
+             box_index < static_cast<int64_t>(level.local_boxes.size());
+             ++box_index) {
+            if (apply_failed.load(std::memory_order_relaxed)) continue;
+            try {
+                const auto& target = level.local_boxes[static_cast<size_t>(box_index)];
+                auto& target_vector = target_data[static_cast<size_t>(box_index)].left_side;
+                for (const auto& block : target.h2_interaction_blocks) {
+                    std::vector<DataType> source;
+                    if (level.find_local_box(block.source_morton) != nullptr) {
+                        source = h2_local_vector_for_morton(
+                            level, source_data, block.source_morton, true);
+                    } else {
+                        auto it = remote_sources.find(block.source_morton);
+                        if (it == remote_sources.end()) {
+                            throw std::runtime_error(
+                                "apply_h2_interactions: missing remote multipole vector");
+                        }
+                        source = it->second;
                     }
-                    source = it->second;
-                }
 
-                std::vector<DataType> contribution;
-                const int64_t nrhs =
-                    target_data[static_cast<size_t>(box_index)].nrhs;
-                h2_matrix_vector_product(
-                    block.matrix, source, contribution, nrhs, 'N');
-                const int64_t skeleton_count =
-                    static_cast<int64_t>(target.skeleton_indices.size());
-                if (contribution.size() !=
-                    static_cast<size_t>(skeleton_count * nrhs)) {
-                    throw std::runtime_error(
-                        "apply_h2_interactions: target rank mismatch");
-                }
-                const int64_t target_rows =
-                    target_data[static_cast<size_t>(box_index)].num_points;
-                for (int64_t column = 0; column < nrhs; ++column) {
-                    for (int64_t i = 0; i < skeleton_count; ++i) {
-                        target_vector.at(static_cast<size_t>(
-                            target.skeleton_indices[static_cast<size_t>(i)] +
-                            column * target_rows)) += contribution[static_cast<size_t>(
-                                i + column * skeleton_count)];
+                    std::vector<DataType> contribution;
+                    const int64_t nrhs =
+                        target_data[static_cast<size_t>(box_index)].nrhs;
+                    h2_matrix_vector_product(
+                        block.matrix, source, contribution, nrhs, 'N');
+                    const int64_t skeleton_count =
+                        static_cast<int64_t>(target.skeleton_indices.size());
+                    if (contribution.size() !=
+                        static_cast<size_t>(skeleton_count * nrhs)) {
+                        throw std::runtime_error(
+                            "apply_h2_interactions: target rank mismatch");
+                    }
+                    const int64_t target_rows =
+                        target_data[static_cast<size_t>(box_index)].num_points;
+                    for (int64_t column = 0; column < nrhs; ++column) {
+                        for (int64_t i = 0; i < skeleton_count; ++i) {
+                            target_vector.at(static_cast<size_t>(
+                                target.skeleton_indices[static_cast<size_t>(i)] +
+                                column * target_rows)) += contribution[static_cast<size_t>(
+                                    i + column * skeleton_count)];
+                        }
                     }
                 }
-            }
-        } catch (...) {
-            if (!apply_failed.exchange(true, std::memory_order_relaxed)) {
-                std::lock_guard<std::mutex> lock(apply_exception_mutex);
-                apply_exception = std::current_exception();
+            } catch (...) {
+                if (!apply_failed.exchange(true, std::memory_order_relaxed)) {
+                    std::lock_guard<std::mutex> lock(apply_exception_mutex);
+                    apply_exception = std::current_exception();
+                }
             }
         }
-    }
+    });
     if (apply_exception) std::rethrow_exception(apply_exception);
 }
 
@@ -562,47 +569,49 @@ void apply_h2_leaf_near(
     std::mutex apply_exception_mutex;
     std::atomic<bool> apply_failed{false};
 
-    #pragma omp parallel for schedule(dynamic) if (leaf.local_boxes.size() > 1)
-    for (int64_t box_index = 0;
-         box_index < static_cast<int64_t>(leaf.local_boxes.size());
-         ++box_index) {
-        if (apply_failed.load(std::memory_order_relaxed)) continue;
-        try {
-            const auto& target = leaf.local_boxes[static_cast<size_t>(box_index)];
-            auto& output = target_data[static_cast<size_t>(box_index)].left_side;
-            for (const auto& block : target.h2_near_blocks) {
-                std::vector<DataType> source;
-                if (leaf.find_local_box(block.source_morton) != nullptr) {
-                    source = h2_local_vector_for_morton(
-                        leaf, source_data, block.source_morton, false);
-                } else {
-                    auto it = remote_sources.find(block.source_morton);
-                    if (it == remote_sources.end()) {
-                        throw std::runtime_error(
-                            "apply_h2_leaf_near: missing remote source vector");
+    omp_parallel_if(leaf.local_boxes.size() > 1, [&] {
+        #pragma omp for schedule(dynamic)
+        for (int64_t box_index = 0;
+             box_index < static_cast<int64_t>(leaf.local_boxes.size());
+             ++box_index) {
+            if (apply_failed.load(std::memory_order_relaxed)) continue;
+            try {
+                const auto& target = leaf.local_boxes[static_cast<size_t>(box_index)];
+                auto& output = target_data[static_cast<size_t>(box_index)].left_side;
+                for (const auto& block : target.h2_near_blocks) {
+                    std::vector<DataType> source;
+                    if (leaf.find_local_box(block.source_morton) != nullptr) {
+                        source = h2_local_vector_for_morton(
+                            leaf, source_data, block.source_morton, false);
+                    } else {
+                        auto it = remote_sources.find(block.source_morton);
+                        if (it == remote_sources.end()) {
+                            throw std::runtime_error(
+                                "apply_h2_leaf_near: missing remote source vector");
+                        }
+                        source = it->second;
                     }
-                    source = it->second;
+                    std::vector<DataType> contribution;
+                    const int64_t nrhs =
+                        target_data[static_cast<size_t>(box_index)].nrhs;
+                    h2_matrix_vector_product(
+                        block.matrix, source, contribution, nrhs, 'N');
+                    if (contribution.size() != output.size()) {
+                        throw std::runtime_error(
+                            "apply_h2_leaf_near: target size mismatch");
+                    }
+                    for (size_t i = 0; i < contribution.size(); ++i) {
+                        output[i] += contribution[i];
+                    }
                 }
-                std::vector<DataType> contribution;
-                const int64_t nrhs =
-                    target_data[static_cast<size_t>(box_index)].nrhs;
-                h2_matrix_vector_product(
-                    block.matrix, source, contribution, nrhs, 'N');
-                if (contribution.size() != output.size()) {
-                    throw std::runtime_error(
-                        "apply_h2_leaf_near: target size mismatch");
+            } catch (...) {
+                if (!apply_failed.exchange(true, std::memory_order_relaxed)) {
+                    std::lock_guard<std::mutex> lock(apply_exception_mutex);
+                    apply_exception = std::current_exception();
                 }
-                for (size_t i = 0; i < contribution.size(); ++i) {
-                    output[i] += contribution[i];
-                }
-            }
-        } catch (...) {
-            if (!apply_failed.exchange(true, std::memory_order_relaxed)) {
-                std::lock_guard<std::mutex> lock(apply_exception_mutex);
-                apply_exception = std::current_exception();
             }
         }
-    }
+    });
     if (apply_exception) std::rethrow_exception(apply_exception);
 }
 
@@ -701,14 +710,16 @@ void hierarchical_h2_mul_parallel(
         for (int level_number = leaf_level; level_number >= 2; --level_number) {
             auto& level = tree->levels[level_number];
             if (level.is_process_active) {
-                #pragma omp parallel for schedule(static) if (level.local_boxes.size() > 1)
-                for (int64_t box_index = 0;
-                     box_index < static_cast<int64_t>(level.local_boxes.size());
-                     ++box_index) {
-                    apply_h2_upward_projection(
-                        level.local_boxes[static_cast<size_t>(box_index)],
-                        source_data[level_number][static_cast<size_t>(box_index)]);
-                }
+                omp_parallel_if(level.local_boxes.size() > 1, [&] {
+                    #pragma omp for schedule(static)
+                    for (int64_t box_index = 0;
+                         box_index < static_cast<int64_t>(level.local_boxes.size());
+                         ++box_index) {
+                        apply_h2_upward_projection(
+                            level.local_boxes[static_cast<size_t>(box_index)],
+                            source_data[level_number][static_cast<size_t>(box_index)]);
+                    }
+                });
             }
             if (level_number > 2) {
                 gather_skeleton_to_parent(
@@ -741,14 +752,16 @@ void hierarchical_h2_mul_parallel(
                 apply_h2_interactions(
                     level, source_data[level_number], target_data[level_number],
                     remote_sources);
-                #pragma omp parallel for schedule(static) if (level.local_boxes.size() > 1)
-                for (int64_t box_index = 0;
-                     box_index < static_cast<int64_t>(level.local_boxes.size());
-                     ++box_index) {
-                    apply_h2_downward_interpolation(
-                        level.local_boxes[static_cast<size_t>(box_index)],
-                        target_data[level_number][static_cast<size_t>(box_index)]);
-                }
+                omp_parallel_if(level.local_boxes.size() > 1, [&] {
+                    #pragma omp for schedule(static)
+                    for (int64_t box_index = 0;
+                         box_index < static_cast<int64_t>(level.local_boxes.size());
+                         ++box_index) {
+                        apply_h2_downward_interpolation(
+                            level.local_boxes[static_cast<size_t>(box_index)],
+                            target_data[level_number][static_cast<size_t>(box_index)]);
+                    }
+                });
             }
 
             if (level_number < leaf_level) {

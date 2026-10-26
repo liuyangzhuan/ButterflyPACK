@@ -7,6 +7,7 @@
 #endif
 
 #include "occupied_topology.hpp"
+#include "core/omp_region.hpp"
 
 namespace butterfly {
 namespace color_unstructured {
@@ -130,88 +131,90 @@ void build_h2_blocks_for_level_unstructured(
                     [&](const std::vector<int64_t>& items) {
     std::vector<int64_t> abandoned;
     std::mutex abandoned_mutex;
-    #pragma omp parallel for schedule(dynamic) if (items.size() > 1)
-    for (int64_t occupied_slot = 0;
-         occupied_slot < static_cast<int64_t>(items.size());
-         ++occupied_slot) {
-        if (build_failed.load(std::memory_order_relaxed)) continue;
-        const int64_t box_index = items[static_cast<size_t>(occupied_slot)];
-        try {
-            entry_item_begin();
-            auto& target = level.local_boxes[static_cast<size_t>(box_index)];
-            target.h2_interaction_blocks.clear();
-            target.h2_near_blocks.clear();
+    omp_parallel_if(items.size() > 1, [&] {
+        #pragma omp for schedule(dynamic)
+        for (int64_t occupied_slot = 0;
+             occupied_slot < static_cast<int64_t>(items.size());
+             ++occupied_slot) {
+            if (build_failed.load(std::memory_order_relaxed)) continue;
+            const int64_t box_index = items[static_cast<size_t>(occupied_slot)];
+            try {
+                entry_item_begin();
+                auto& target = level.local_boxes[static_cast<size_t>(box_index)];
+                target.h2_interaction_blocks.clear();
+                target.h2_near_blocks.clear();
 
-            if (build_interactions) {
-                const auto target_indices =
-                    h2_box_global_indices(level, target.morton_index, true);
-                const auto interaction = h2_interaction_list_unstructured(
-                    tree, target, occupied_topology);
-                target.h2_interaction_blocks.reserve(interaction.size());
-                for (int64_t source_morton : interaction) {
-                    const auto source_indices =
-                        h2_box_global_indices(level, source_morton, true);
-                    if (target_indices.empty() || source_indices.empty()) continue;
+                if (build_interactions) {
+                    const auto target_indices =
+                        h2_box_global_indices(level, target.morton_index, true);
+                    const auto interaction = h2_interaction_list_unstructured(
+                        tree, target, occupied_topology);
+                    target.h2_interaction_blocks.reserve(interaction.size());
+                    for (int64_t source_morton : interaction) {
+                        const auto source_indices =
+                            h2_box_global_indices(level, source_morton, true);
+                        if (target_indices.empty() || source_indices.empty()) continue;
 
-                    H2Block<DataType> block;
-                    block.source_morton = source_morton;
-                    block.matrix.allocate(
-                        static_cast<int64_t>(target_indices.size()),
-                        static_cast<int64_t>(source_indices.size()),
-                        MatrixStorage<DataType>::FULL);
-                    kernel->evaluate_block_by_index(
-                        target_indices.data(),
-                        static_cast<int64_t>(target_indices.size()),
-                        source_indices.data(),
-                        static_cast<int64_t>(source_indices.size()),
-                        block.matrix.data.data(), block.matrix.lda);
-                    target.h2_interaction_blocks.push_back(std::move(block));
-                }
-            }
-
-            if (build_leaf_near) {
-                std::vector<int64_t> near = target.one_hop;
-                near.push_back(target.morton_index);
-                std::sort(near.begin(), near.end());
-                near.erase(std::unique(near.begin(), near.end()), near.end());
-                target.h2_near_blocks.reserve(near.size());
-                for (int64_t source_morton : near) {
-                    const auto source_indices =
-                        h2_box_global_indices(level, source_morton, false);
-                    if (target.point_indices.empty() || source_indices.empty()) {
-                        continue;
+                        H2Block<DataType> block;
+                        block.source_morton = source_morton;
+                        block.matrix.allocate(
+                            static_cast<int64_t>(target_indices.size()),
+                            static_cast<int64_t>(source_indices.size()),
+                            MatrixStorage<DataType>::FULL);
+                        kernel->evaluate_block_by_index(
+                            target_indices.data(),
+                            static_cast<int64_t>(target_indices.size()),
+                            source_indices.data(),
+                            static_cast<int64_t>(source_indices.size()),
+                            block.matrix.data.data(), block.matrix.lda);
+                        target.h2_interaction_blocks.push_back(std::move(block));
                     }
-
-                    H2Block<DataType> block;
-                    block.source_morton = source_morton;
-                    block.matrix.allocate(
-                        target.num_points,
-                        static_cast<int64_t>(source_indices.size()),
-                        MatrixStorage<DataType>::FULL);
-                    kernel->evaluate_block_by_index(
-                        target.point_indices.data(), target.num_points,
-                        source_indices.data(),
-                        static_cast<int64_t>(source_indices.size()),
-                        block.matrix.data.data(), block.matrix.lda);
-                    target.h2_near_blocks.push_back(std::move(block));
                 }
-            }
-            entry_item_end();
-        } catch (const H2EntryMiss&) {
-            std::lock_guard<std::mutex> lock(abandoned_mutex);
-            abandoned.push_back(box_index);
-        } catch (...) {
-            if (entry_item_abandoned()) {
+
+                if (build_leaf_near) {
+                    std::vector<int64_t> near = target.one_hop;
+                    near.push_back(target.morton_index);
+                    std::sort(near.begin(), near.end());
+                    near.erase(std::unique(near.begin(), near.end()), near.end());
+                    target.h2_near_blocks.reserve(near.size());
+                    for (int64_t source_morton : near) {
+                        const auto source_indices =
+                            h2_box_global_indices(level, source_morton, false);
+                        if (target.point_indices.empty() || source_indices.empty()) {
+                            continue;
+                        }
+
+                        H2Block<DataType> block;
+                        block.source_morton = source_morton;
+                        block.matrix.allocate(
+                            target.num_points,
+                            static_cast<int64_t>(source_indices.size()),
+                            MatrixStorage<DataType>::FULL);
+                        kernel->evaluate_block_by_index(
+                            target.point_indices.data(), target.num_points,
+                            source_indices.data(),
+                            static_cast<int64_t>(source_indices.size()),
+                            block.matrix.data.data(), block.matrix.lda);
+                        target.h2_near_blocks.push_back(std::move(block));
+                    }
+                }
+                entry_item_end();
+            } catch (const H2EntryMiss&) {
                 std::lock_guard<std::mutex> lock(abandoned_mutex);
                 abandoned.push_back(box_index);
-                continue;
-            }
-            if (!build_failed.exchange(true, std::memory_order_relaxed)) {
-                std::lock_guard<std::mutex> lock(build_exception_mutex);
-                build_exception = std::current_exception();
+            } catch (...) {
+                if (entry_item_abandoned()) {
+                    std::lock_guard<std::mutex> lock(abandoned_mutex);
+                    abandoned.push_back(box_index);
+                    continue;
+                }
+                if (!build_failed.exchange(true, std::memory_order_relaxed)) {
+                    std::lock_guard<std::mutex> lock(build_exception_mutex);
+                    build_exception = std::current_exception();
+                }
             }
         }
-    }
+    });
     if (build_exception) std::rethrow_exception(build_exception);
     return abandoned;
     });
@@ -403,35 +406,37 @@ void hierarchical_compression_unstructured(
                             [&](const std::vector<int64_t>& items) {
                 std::vector<int64_t> abandoned;
                 std::mutex abandoned_mutex;
-                #pragma omp parallel for schedule(dynamic) if (items.size() > 1)
-                for (int64_t host_slot = 0;
-                     host_slot < static_cast<int64_t>(items.size());
-                     ++host_slot) {
-                    if (id_failed.load(std::memory_order_relaxed)) continue;
-                    const int64_t box_index = items[static_cast<size_t>(host_slot)];
-                    try {
-                        entry_item_begin();
-                        auto& box = level.local_boxes[static_cast<size_t>(box_index)];
-                        h2_skeletonize_box(
-                            tree,
-                            &box,
-                            level, kernel, tolerance, use_sketch);
-                        entry_item_end();
-                    } catch (const H2EntryMiss&) {
-                        std::lock_guard<std::mutex> lock(abandoned_mutex);
-                        abandoned.push_back(box_index);
-                    } catch (...) {
-                        if (entry_item_abandoned()) {
+                omp_parallel_if(items.size() > 1, [&] {
+                    #pragma omp for schedule(dynamic)
+                    for (int64_t host_slot = 0;
+                         host_slot < static_cast<int64_t>(items.size());
+                         ++host_slot) {
+                        if (id_failed.load(std::memory_order_relaxed)) continue;
+                        const int64_t box_index = items[static_cast<size_t>(host_slot)];
+                        try {
+                            entry_item_begin();
+                            auto& box = level.local_boxes[static_cast<size_t>(box_index)];
+                            h2_skeletonize_box(
+                                tree,
+                                &box,
+                                level, kernel, tolerance, use_sketch);
+                            entry_item_end();
+                        } catch (const H2EntryMiss&) {
                             std::lock_guard<std::mutex> lock(abandoned_mutex);
                             abandoned.push_back(box_index);
-                            continue;
-                        }
-                        if (!id_failed.exchange(true, std::memory_order_relaxed)) {
-                            std::lock_guard<std::mutex> lock(id_exception_mutex);
-                            id_exception = std::current_exception();
+                        } catch (...) {
+                            if (entry_item_abandoned()) {
+                                std::lock_guard<std::mutex> lock(abandoned_mutex);
+                                abandoned.push_back(box_index);
+                                continue;
+                            }
+                            if (!id_failed.exchange(true, std::memory_order_relaxed)) {
+                                std::lock_guard<std::mutex> lock(id_exception_mutex);
+                                id_exception = std::current_exception();
+                            }
                         }
                     }
-                }
+                });
                 if (id_exception) std::rethrow_exception(id_exception);
                 return abandoned;
             });

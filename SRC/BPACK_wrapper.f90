@@ -870,6 +870,10 @@ contains
          val_d = option%iter_solver
          valid_opt = 1
       endif
+      if (trim(str) == 'gmres_restart') then
+         val_d = option%gmres_restart
+         valid_opt = 1
+      endif
       if (trim(str) == 'xyzsort') then
          val_d = option%xyzsort
          valid_opt = 1
@@ -1232,6 +1236,11 @@ contains
       if (trim(str) == 'iter_solver') then
          call c_f_pointer(val_Cptr, val_i)
          option%iter_solver = val_i
+         valid_opt = 1
+      endif
+      if (trim(str) == 'gmres_restart') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%gmres_restart = val_i
          valid_opt = 1
       endif
       if (trim(str) == 'xyzsort') then
@@ -4425,7 +4434,7 @@ contains
          do ll = 0, maxlevel - 1
             do gg = 2**ll, 2**(ll + 1) - 1
                call assert(tails(gg) > heads(gg), 'detected zero-sized group in simple diagonal split')
-               mid = (heads(gg) + tails(gg))/2
+               mid = heads(gg) + (tails(gg) - heads(gg))/2  ! (heads + tails overflows a 32-bit integer near 2^31 points)
                heads(2*gg) = heads(gg)
                tails(2*gg) = mid
                heads(2*gg + 1) = mid + 1
@@ -4489,14 +4498,14 @@ contains
                   xyzmax = -1d300
                   do idx = heads(gg), tails(gg)
                      do dim_i = 1, Dimn
-                        xyzmax(dim_i) = max(xyzmax(dim_i), Locs((new2old(idx) - 1)*Dimn + dim_i))
-                        xyzmin(dim_i) = min(xyzmin(dim_i), Locs((new2old(idx) - 1)*Dimn + dim_i))
+                        xyzmax(dim_i) = max(xyzmax(dim_i), Locs(int(new2old(idx) - 1, 8)*Dimn + dim_i))
+                        xyzmin(dim_i) = min(xyzmin(dim_i), Locs(int(new2old(idx) - 1, 8)*Dimn + dim_i))
                      enddo
                   enddo
                   xyzrange = xyzmax - xyzmin
                   sortdirec = maxloc(xyzrange, 1)
                   do idx = heads(gg), tails(gg)
-                     distance(idx - heads(gg) + 1) = Locs((new2old(idx) - 1)*Dimn + sortdirec)
+                     distance(idx - heads(gg) + 1) = Locs(int(new2old(idx) - 1, 8)*Dimn + sortdirec)
                   enddo
                endif
 
@@ -4604,7 +4613,7 @@ contains
                lo = 1
                hi = N + 1
                do while (lo < hi)
-                  mid = (lo + hi)/2
+                  mid = lo + (hi - lo)/2
                   if (ScatterTensor(mid) < tensor_idx) then
                      lo = mid + 1
                   else
@@ -4620,7 +4629,7 @@ contains
                lo = 1
                hi = ngroup
                do while (lo < hi)
-                  mid = (lo + hi)/2
+                  mid = lo + (hi - lo)/2
                   group_idx = ngroup + mid - 1
                   if (group_tail(group_idx) < new_idx) then
                      lo = mid + 1

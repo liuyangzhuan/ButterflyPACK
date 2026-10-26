@@ -20,6 +20,7 @@
 #include "owner_schedule.hpp"
 #include "staged_halo.hpp"
 #include "tree.hpp"
+#include "omp_region.hpp"
 
 namespace butterfly {
 using namespace fmm;
@@ -124,8 +125,7 @@ void apply_CA_level_schedule(
             std::mutex wave_exception_mutex;
             std::atomic<bool> wave_failed{false};
 
-            #pragma omp parallel default(shared) if (wave.size() > 1)
-            {
+            omp_parallel_if(wave.size() > 1, [&] {
                 const int tid = omp_get_thread_num();
                 auto& pending = thread_pending[static_cast<size_t>(tid)];
 
@@ -156,7 +156,7 @@ void apply_CA_level_schedule(
                         }
                     }
                 }
-            }
+            });
 
             if (wave_exception) std::rethrow_exception(wave_exception);
 
@@ -435,8 +435,7 @@ void factorize_CA_level(
                 std::mutex candidate_exception_mutex;
                 std::atomic<bool> candidate_failed{false};
 
-                #pragma omp parallel default(shared) if (wave.size() > 1)
-                {
+                omp_parallel_if(wave.size() > 1, [&] {
                     const int tid = omp_get_thread_num();
                     auto& local_candidates =
                         thread_xnn_candidate_boxes[static_cast<size_t>(tid)];
@@ -470,7 +469,7 @@ void factorize_CA_level(
                             }
                         }
                     }
-                }
+                });
 
                 if (candidate_exception) {
                     std::rethrow_exception(candidate_exception);
@@ -574,8 +573,7 @@ void factorize_CA_level(
                 std::mutex mirror_exception_mutex;
                 std::atomic<bool> mirror_failed{false};
 
-                #pragma omp parallel default(shared) if (wave_xnn_candidate_boxes.size() > 1)
-                {
+                omp_parallel_if(wave_xnn_candidate_boxes.size() > 1, [&] {
                     #pragma omp for schedule(static)
                     for (int64_t idx = 0;
                          idx < static_cast<int64_t>(
@@ -611,7 +609,7 @@ void factorize_CA_level(
                             }
                         }
                     }
-                }
+                });
 
                 if (mirror_exception) {
                     std::rethrow_exception(mirror_exception);
@@ -625,8 +623,7 @@ void factorize_CA_level(
                 std::mutex finalize_exception_mutex;
                 std::atomic<bool> finalize_failed{false};
 
-                #pragma omp parallel default(shared) if (wave.size() > 1)
-                {
+                omp_parallel_if(wave.size() > 1, [&] {
                     #pragma omp for schedule(static)
                     for (int64_t idx = 0;
                          idx < static_cast<int64_t>(wave.size());
@@ -653,7 +650,7 @@ void factorize_CA_level(
                             }
                         }
                     }
-                }
+                });
 
                 if (finalize_exception) {
                     std::rethrow_exception(finalize_exception);

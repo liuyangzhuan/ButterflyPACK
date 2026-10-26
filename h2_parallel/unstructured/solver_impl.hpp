@@ -5,6 +5,7 @@
 #include "core/butterfly_communicators.hpp"
 
 #include "h2_gpu/device_solve.hpp"
+#include "core/omp_region.hpp"
 
 namespace butterfly {
 namespace color_unstructured {
@@ -331,8 +332,7 @@ void hierarchical_solve_unstructured(
 
                 // Distance-2 boxes in a Color wave can share an update target.
                 // Accumulate into per-thread buffers and merge after the wave.
-                #pragma omp parallel default(shared) if (color_list.size() > 1)
-                {
+                omp_parallel_if(color_list.size() > 1, [&] {
                     const int tid = omp_get_thread_num();
                     auto& local_pending = thread_pending[static_cast<size_t>(tid)];
 
@@ -364,7 +364,7 @@ void hierarchical_solve_unstructured(
                             }
                         }
                     }
-                }
+                });
 
                 if (forward_wave_exception) {
                     std::rethrow_exception(forward_wave_exception);
@@ -432,8 +432,7 @@ void hierarchical_solve_unstructured(
         const int64_t occupied_box_count = static_cast<int64_t>(
             tree_level.boundary_id.size() + tree_level.interior_id.size());
         // Each occupied box owns its factor and right-hand side storage.
-        #pragma omp parallel default(shared) if (occupied_box_count > 1)
-        {
+        omp_parallel_if(occupied_box_count > 1, [&] {
             int64_t local_diagonal_solves = 0;
 
             #pragma omp for schedule(static)
@@ -555,7 +554,7 @@ void hierarchical_solve_unstructured(
 
             #pragma omp atomic
             num_diagonal_solves += local_diagonal_solves;
-        }
+        });
 
         if (diagonal_exception) {
             std::rethrow_exception(diagonal_exception);
@@ -751,8 +750,7 @@ void hierarchical_solve_unstructured(
                 std::atomic<bool> backward_wave_failed{false};
 
                 // Same-color boxes write distinct local solve records.
-                #pragma omp parallel default(shared) if (bins.size() > 1)
-                {
+                omp_parallel_if(bins.size() > 1, [&] {
                     #pragma omp for schedule(static)
                     for (int64_t idx = 0; idx < static_cast<int64_t>(bins.size()); ++idx) {
                         if (backward_wave_failed.load(std::memory_order_relaxed)) {
@@ -778,7 +776,7 @@ void hierarchical_solve_unstructured(
                             }
                         }
                     }
-                }
+                });
 
                 if (backward_wave_exception) {
                     std::rethrow_exception(backward_wave_exception);
@@ -1108,8 +1106,7 @@ void hierarchical_mul_unstructured(
                 std::mutex wave_exception_mutex;
                 std::atomic<bool> wave_failed{false};
 
-                #pragma omp parallel default(shared) if (bins.size() > 1)
-                {
+                omp_parallel_if(bins.size() > 1, [&] {
                     #pragma omp for schedule(static)
                     for (int64_t idx = 0; idx < static_cast<int64_t>(bins.size()); ++idx) {
                         if (wave_failed.load(std::memory_order_relaxed)) continue;
@@ -1131,7 +1128,7 @@ void hierarchical_mul_unstructured(
                             }
                         }
                     }
-                }
+                });
 
                 if (wave_exception) {
                     std::rethrow_exception(wave_exception);
@@ -1179,8 +1176,7 @@ void hierarchical_mul_unstructured(
         const int64_t occupied_box_count = static_cast<int64_t>(
             tree_level.boundary_id.size() + tree_level.interior_id.size());
         // Each occupied box owns its factor and vector storage.
-        #pragma omp parallel default(shared) if (occupied_box_count > 1)
-        {
+        omp_parallel_if(occupied_box_count > 1, [&] {
             int64_t local_diagonal_muls = 0;
 
             #pragma omp for schedule(static)
@@ -1296,7 +1292,7 @@ void hierarchical_mul_unstructured(
 
             #pragma omp atomic
             num_diagonal_muls += local_diagonal_muls;
-        }
+        });
 
         if (diagonal_exception) {
             std::rethrow_exception(diagonal_exception);
@@ -1473,8 +1469,7 @@ void hierarchical_mul_unstructured(
                 std::mutex wave_exception_mutex;
                 std::atomic<bool> wave_failed{false};
 
-                #pragma omp parallel default(shared) if (bins.size() > 1)
-                {
+                omp_parallel_if(bins.size() > 1, [&] {
                     const int tid = omp_get_thread_num();
                     auto& local_pending = thread_pending[static_cast<size_t>(tid)];
 
@@ -1504,7 +1499,7 @@ void hierarchical_mul_unstructured(
                             }
                         }
                     }
-                }
+                });
 
                 if (wave_exception) {
                     std::rethrow_exception(wave_exception);

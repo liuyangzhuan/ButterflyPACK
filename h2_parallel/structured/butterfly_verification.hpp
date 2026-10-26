@@ -5,6 +5,7 @@
 #include "core/butterfly_types.hpp"
 #include "butterfly_solve.hpp"
 #include "core/butterfly_matvec.hpp"
+#include "core/omp_region.hpp"
 
 namespace butterfly {
 using namespace fmm;
@@ -70,12 +71,14 @@ double verify_solution_direct(
     // evaluate_by_index), stored column-major (A[i + j*N]) to match the BLAS matvec below.
     // No /N scaling and no special diagonal case: evaluate_by_index returns the exact matrix
     // entry for every (i, j), including the self term when i == j.
-    #pragma omp parallel for collapse(2) if(N > 1000)
-    for (int64_t i = 0; i < N; ++i) {
-        for (int64_t j = 0; j < N; ++j) {
-            kernel->evaluate_by_index(i, j, A.data(), N);   // writes A[i + j*N] = K(i, j)
+    omp_parallel_if(N > 1000, [&] {
+        #pragma omp for collapse(2)
+        for (int64_t i = 0; i < N; ++i) {
+            for (int64_t j = 0; j < N; ++j) {
+                kernel->evaluate_by_index(i, j, A.data(), N);   // writes A[i + j*N] = K(i, j)
+            }
         }
-    }
+    });
     
     auto build_end = std::chrono::high_resolution_clock::now();
     auto build_duration = std::chrono::duration_cast<std::chrono::milliseconds>(build_end - build_start);

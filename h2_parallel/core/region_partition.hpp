@@ -46,6 +46,7 @@
 // leaf boxes.
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -261,6 +262,22 @@ inline bool region_starts_are_bricks(int dimension, int level, const std::vector
 // plan_regions takes the first reduction a level finer.
 inline constexpr double kRegionImbalance = 1.15;
 
+// The limit in use: kRegionImbalance, or the environment's H2_REGION_IMBALANCE
+// (>= 1).  A larger limit keeps more ranks on the coarse levels of uneven
+// geometries (whole parent boxes as leaf regions), at the price of a less even
+// leaf level.  Every rank must see the same value.
+inline double region_imbalance_limit() {
+    static const double limit = [] {
+        if (const char* v = std::getenv("H2_REGION_IMBALANCE")) {
+            char* end = nullptr;
+            const double x = std::strtod(v, &end);
+            if (end != v && x >= 1.0) return x;
+        }
+        return kRegionImbalance;
+    }();
+    return limit;
+}
+
 // The counts of the levels above `level` by the reduction rule of
 // region_counts, from count[level].
 inline void region_counts_above(int dimension, int level, int64_t threshold, std::vector<int32_t>& count) {
@@ -314,8 +331,8 @@ inline std::vector<int32_t> region_counts_keeping_ranks(int dimension, int num_l
             bool empty = false;
             std::vector<int32_t> c = layout(n, imbalance, empty);
             if (imbalance < 0.0 || (empty && !plain_empty)) continue;
-            const double limit =
-                plain_imbalance < 0.0 ? kRegionImbalance : std::max(kRegionImbalance, plain_imbalance);
+            const double limit = plain_imbalance < 0.0 ? region_imbalance_limit()
+                                                       : std::max(region_imbalance_limit(), plain_imbalance);
             if (imbalance <= limit) {
                 chosen = c;
                 break;
@@ -349,7 +366,7 @@ inline RegionPlan plan_regions(int dimension, int num_levels, int num_procs, int
         if (a.empty_region != b.empty_region) return !a.empty_region;
         return a.leaf_imbalance < b.leaf_imbalance;
     };
-    auto good = [](const RegionPlan& p) { return !p.empty_region && p.leaf_imbalance <= kRegionImbalance; };
+    auto good = [](const RegionPlan& p) { return !p.empty_region && p.leaf_imbalance <= region_imbalance_limit(); };
     // the layout of these counts (no starts where whole parent boxes cannot be)
     auto build = [&](const std::vector<int32_t>& count, int64_t t) {
         RegionPlan p;
