@@ -1815,6 +1815,68 @@ void c_bf_gpu_extract(void* bf, void* ptree, const int* ninter, const int* allro
 #endif
 }
 
+// This rank's rows of a butterfly's intersections, on the device, for
+// BF_ExtractElement on a process group: BF_block_extraction's part, whose
+// blocks the host's redistribution then sends where they are wanted
+// (bf_extract.hpp, extract_dist).  ninter intersections of nr and nc rows and
+// columns; each row's leaf and position in it (row_leaf, row_pos, zero based,
+// stacked), each column's likewise; nloc: this rank's rows of each, local:
+// their positions in its rows (zero based, stacked, in dat_loc's order);
+// row_owner and col_owner: the rank in the block's communicator holding each
+// leaf (2^L each, -1 for one several ranks share).  out: each
+// intersection's dat_loc, nloc x nc column major, stacked (host).  info 1:
+// the device declined, on every rank of the group, and the host runs.
+// Collective over the group.
+void c_bf_gpu_extract_dist(void* bf, void* ptree, const int* ninter, const int* nr, const int* nc,
+                           const int* row_leaf, const int* row_pos, const int* col_leaf, const int* col_pos,
+                           const int* nloc, const int* local, const int* row_owner, const int* col_owner,
+                           void* out, double* flops, int* info) {
+#ifdef BPACK_BF_GPU_ENABLED
+  *info = 1;
+  *flops = 0.0;
+  try {
+    // BF_ExtractElement may call from any of its OpenMP threads
+    fmm::gpu::Context::instance().activate();
+    bf::gpu::BfResident* r = bf_resident(bf, ptree);
+    if (r == nullptr || r->bridge.nproc <= 1) return;
+    bf::gpu::ExtractRequest q;
+    q.count = *ninter;
+    q.nr = nr;
+    q.nc = nc;
+    q.row_leaf = row_leaf;
+    q.row_pos = row_pos;
+    q.col_leaf = col_leaf;
+    q.col_pos = col_pos;
+    q.nloc = nloc;
+    q.local = local;
+    q.row_owner = row_owner;
+    q.col_owner = col_owner;
+    bf::gpu::ExtractProfile prof;
+    if (bf::gpu::extract_dist(r->dev, r->bridge.comm, q, static_cast<double*>(out), prof, r->extract_meta,
+                              r->extract_meta_device) != 0) {
+      return;
+    }
+    *flops = prof.flops;
+    *info = 0;
+    if (fmm::env::trace("phase") && r->dev.myid == 0) {
+      std::printf("BF GPU extract (rank 0 of %d): %d intersections, %lld local entries, %lld GEMMs, %.3e flops: "
+                  "plan %.4f s, run %.4f s (midpoint %.4f s, %lld sent, %lld received)\n",
+                  r->bridge.nproc, q.count, static_cast<long long>(prof.entries), static_cast<long long>(prof.items),
+                  prof.flops, prof.plan, prof.run, prof.mid, static_cast<long long>(prof.sent),
+                  static_cast<long long>(prof.received));
+      std::fflush(stdout);
+    }
+  } catch (const std::exception& e) {
+    gpu_fail("c_bf_gpu_extract_dist", e.what());
+  }
+#else
+  (void)bf; (void)ptree; (void)ninter; (void)nr; (void)nc; (void)row_leaf; (void)row_pos; (void)col_leaf;
+  (void)col_pos; (void)nloc; (void)local; (void)row_owner; (void)col_owner; (void)out;
+  *flops = 0.0;
+  *info = 1;
+#endif
+}
+
 // The registration of a butterfly's GPU evaluator (C_BPACK_wrapper.cpp's
 // c_bf_set_gpu_*), before its construction: `evaluator` points to a
 // std::shared_ptr<fmm::gpu::Evaluator>, an empty one clearing it.

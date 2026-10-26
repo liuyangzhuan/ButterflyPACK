@@ -5,6 +5,7 @@
 #include "bf_exchange.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <map>
 #include <numeric>
 #include <stdexcept>
@@ -399,6 +400,77 @@ void group_level(const GroupPlan& g, DataType* data, int64_t n, cudaStream_t str
     }
     check_cuda(cudaMemcpyAsync(data, h, bytes, cudaMemcpyHostToDevice, stream), "bf group stage in");
     check_cuda(cudaStreamSynchronize(stream), "bf group stage in");
+}
+
+void alltoallv_device(MPI_Comm comm, const DataType* send, const int64_t* scount, DataType* recv,
+                      const int64_t* rcount, cudaStream_t stream) {
+    int nproc = 1, me = 0;
+    MPI_Comm_size(comm, &nproc);
+    MPI_Comm_rank(comm, &me);
+    constexpr int kWords = static_cast<int>(sizeof(DataType) / sizeof(double));
+    std::vector<int64_t> sd(static_cast<size_t>(nproc) + 1, 0), rd(sd.size(), 0);
+    for (int p = 0; p < nproc; ++p) {
+        sd[static_cast<size_t>(p) + 1] = sd[static_cast<size_t>(p)] + scount[p];
+        rd[static_cast<size_t>(p) + 1] = rd[static_cast<size_t>(p)] + rcount[p];
+    }
+    // this rank's own part, on the device
+    if (scount[me] > 0) {
+        check_cuda(cudaMemcpyAsync(recv + rd[static_cast<size_t>(me)], send + sd[static_cast<size_t>(me)],
+                                   static_cast<size_t>(scount[me]) * sizeof(DataType), cudaMemcpyDeviceToDevice, stream),
+                   "bf alltoallv self");
+    }
+#ifdef BPACK_HAVE_NCCL
+    // nccl_comm_of is collective, so every rank asks, whether or not it sends
+    if (ncclComm_t nc = nccl_comm_of(comm)) {
+        check_nccl(ncclGroupStart(), "bf alltoallv");
+        for (int p = 0; p < nproc; ++p) {
+            if (p == me) continue;
+            if (rcount[p] > 0) {
+                check_nccl(ncclRecv(recv + rd[static_cast<size_t>(p)], static_cast<size_t>(rcount[p]) * kWords, ncclDouble,
+                                    p, nc, stream), "bf alltoallv receive");
+            }
+            if (scount[p] > 0) {
+                check_nccl(ncclSend(send + sd[static_cast<size_t>(p)], static_cast<size_t>(scount[p]) * kWords, ncclDouble,
+                                    p, nc, stream), "bf alltoallv send");
+            }
+        }
+        check_nccl(ncclGroupEnd(), "bf alltoallv");
+        return;
+    }
+#endif
+    // MPI, staged through pinned host memory (never freed: see PinnedPool)
+    static fmm::gpu::PinnedBuffer* hs = new fmm::gpu::PinnedBuffer;
+    static fmm::gpu::PinnedBuffer* hr = new fmm::gpu::PinnedBuffer;
+    const int64_t stotal = sd[static_cast<size_t>(nproc)], rtotal = rd[static_cast<size_t>(nproc)];
+    DataType* sbuf = static_cast<DataType*>(hs->reserve(static_cast<size_t>(std::max<int64_t>(stotal, 1)) * sizeof(DataType)));
+    DataType* rbuf = static_cast<DataType*>(hr->reserve(static_cast<size_t>(std::max<int64_t>(rtotal, 1)) * sizeof(DataType)));
+    if (stotal > 0) {
+        check_cuda(cudaMemcpyAsync(sbuf, send, static_cast<size_t>(stotal) * sizeof(DataType), cudaMemcpyDeviceToHost,
+                                   stream), "bf alltoallv stage out");
+    }
+    check_cuda(cudaStreamSynchronize(stream), "bf alltoallv stage out");
+    std::vector<int> sc(static_cast<size_t>(nproc), 0), sdi(sc.size(), 0), rc(sc.size(), 0), rdi(sc.size(), 0);
+    for (int p = 0; p < nproc; ++p) {
+        if (p == me) continue;  // already in place
+        const int64_t a = scount[p] * kWords, b = rcount[p] * kWords, x = sd[static_cast<size_t>(p)] * kWords,
+                      y = rd[static_cast<size_t>(p)] * kWords;
+        if (a > INT32_MAX || b > INT32_MAX || x > INT32_MAX || y > INT32_MAX) {
+            throw std::runtime_error("bf::gpu::alltoallv_device: more than MPI's int counts");
+        }
+        sc[static_cast<size_t>(p)] = static_cast<int>(a);
+        rc[static_cast<size_t>(p)] = static_cast<int>(b);
+        sdi[static_cast<size_t>(p)] = static_cast<int>(x);
+        rdi[static_cast<size_t>(p)] = static_cast<int>(y);
+    }
+    MPI_Alltoallv(sbuf, sc.data(), sdi.data(), MPI_DOUBLE, rbuf, rc.data(), rdi.data(), MPI_DOUBLE, comm);
+    // the received parts back, around this rank's own
+    for (int p = 0; p < nproc; ++p) {
+        if (p == me || rcount[p] <= 0) continue;
+        check_cuda(cudaMemcpyAsync(recv + rd[static_cast<size_t>(p)], rbuf + rd[static_cast<size_t>(p)],
+                                   static_cast<size_t>(rcount[p]) * sizeof(DataType), cudaMemcpyHostToDevice, stream),
+                   "bf alltoallv stage in");
+    }
+    check_cuda(cudaStreamSynchronize(stream), "bf alltoallv stage in");
 }
 
 void launch_pack(const DataType* level, const ExchangeRecord* recs, int nrecs, const int64_t* displ, int nrhs,

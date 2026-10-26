@@ -1,7 +1,8 @@
-// The two kernels of the butterfly's entry extraction (bf_extract.hpp): the
-// gather of factor rows into the first partial products, and the scatter of
-// the entries from leaf order to the caller's.  Everything between them is
-// batched GEMMs.
+// The kernels of the butterfly's entry extraction (bf_extract.hpp): the
+// gather of factor rows into the first partial products, the scatter of the
+// entries from leaf order to the caller's, and on several ranks the copies
+// that pack and unpack the partial products the ranks exchange.  Everything
+// else is batched GEMMs.
 
 #include "bf_extract.hpp"
 
@@ -58,7 +59,21 @@ extract_scatter_kernel(const ExtractScatter* items, const int* idx, const DataTy
     }
 }
 
+// One thread block per copy of n contiguous elements.
+__global__ void __launch_bounds__(kThreads)
+extract_copy_kernel(const ExtractCopy* items, const DataType* src, DataType* dst) {
+    const ExtractCopy c = items[blockIdx.x];
+    for (int64_t t = threadIdx.x; t < c.n; t += kThreads) dst[c.dst + t] = src[c.src + t];
+}
+
 }  // namespace
+
+void launch_extract_copies(const ExtractCopy* items, int count, const DataType* src, DataType* dst,
+                           cudaStream_t stream) {
+    if (count <= 0) return;
+    extract_copy_kernel<<<count, kThreads, 0, stream>>>(items, src, dst);
+    check_launch("launch_extract_copies");
+}
 
 void launch_extract_gather(const ExtractGather* items, int count, const int* idx, const DataType* values,
                            DataType* dst, cudaStream_t stream) {

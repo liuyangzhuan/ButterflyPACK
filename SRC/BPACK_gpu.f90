@@ -448,6 +448,24 @@ module BPACK_GPU
          real(c_double) :: flops
       end subroutine c_bf_gpu_extract
 
+      !>**** This rank's rows of a butterfly's intersections, on the device,
+      !> for BF_ExtractElement on a process group (GPU_BACKEND/bf_gpu/
+      !> bf_extract.hpp, extract_dist): nr and nc rows and columns of each,
+      !> every row's leaf and position in it (zero based, stacked), every
+      !> column's, nloc local rows of each at positions local (zero based, in
+      !> dat_loc's order), the rank holding each leaf (2^L each).  out: the
+      !> dat_loc blocks, nloc x nc each, stacked.  info 1: the device declined
+      !> on every rank together.  Collective over the group.
+      subroutine c_bf_gpu_extract_dist(bf, ptree, ninter, nr, nc, row_leaf, row_pos, col_leaf, col_pos, nloc, &
+                                       local, row_owner, col_owner, out, flops, info) bind(c, name="c_bf_gpu_extract_dist")
+         import :: c_int, c_double, c_ptr
+         type(c_ptr), value :: bf, ptree, out
+         integer(c_int) :: ninter, info
+         integer(c_int) :: nr(*), nc(*), row_leaf(*), row_pos(*), col_leaf(*), col_pos(*), nloc(*), local(*)
+         integer(c_int) :: row_owner(*), col_owner(*)
+         real(c_double) :: flops
+      end subroutine c_bf_gpu_extract_dist
+
       !>**** The handle of a butterfly's GPU evaluator (c_bf_set_gpu_*), null
       !> when it has none, for its M rows and N columns; xyz: the butterfly
       !> mesh's coordinates xyz(1:dim, -N:M), or null.  warm: the evaluator's
