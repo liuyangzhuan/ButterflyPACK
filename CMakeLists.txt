@@ -661,7 +661,10 @@ install(TARGETS butterflypack EXPORT MYBPACKTargets
 install(FILES GPU_INTERFACE/bpack_gpu.h GPU_INTERFACE/bpack_gpu_entry.cuh GPU_INTERFACE/bpack_gpu_kernels.cuh
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
-add_subdirectory(EXAMPLE)
+option(enable_examples "Build and install ButterflyPACK examples" ON)
+if(enable_examples)
+  add_subdirectory(EXAMPLE)
+endif()
 
 
 # Documentation
