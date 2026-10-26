@@ -7666,6 +7666,36 @@ of the pages (level 5: 8.45M minor faults after the Color leaf, 0.86M
 after CA3's) - the after-effect of the 16-thread runs, much larger at
 128 threads a rank.
 
+*640^3 on 64 ranks, CPU nodes (2026-10-23).*  32^3 bricks with interior
+ranks: 32 CPU nodes, 2 ranks a node, 64 threads a rank (m4484 regular,
+job 60178851, h2_c1_work/cpu64), frozen_cpu_dg1, BPACK_TRACE=memory,phase,skew.
+All three pass the quick verification (acc_forward 6.40-6.47e-3).
+
+| variant | factor time | the factorization's own total | leaf (7) | levels 6 / 5 / 4 / 3 / 2 | peak RSS a rank |
+|---|---|---|---|---|---|
+| Color | 656 s | 393 s | 57.6 | 107.3 / 77.4 / 48.3 / 25.0 / 17.3 | 172 GB |
+| CA3 at the leaf | 459 s | 349 s | 40.3 | 82.4 / 54.4 / 68.0 / 25.3 / 16.7 | 203 GB |
+| CA0 at the leaf | 382 s | 330 s | 39.8 | 65.3 / 75.9 / 50.3 / 22.5 / 16.8 | 175 GB |
+
+The factor time includes 52-263 s after the factorization's own timer
+stops: the memory trace's post-factorization snapshot and rank-by-rank
+print.  A rerun without it (BPACK_TRACE=phase,skew, job 60187739) gives
+factor time = own total: Color 395, CA3 355, CA0 327 s, logdets bitwise
+the first run's, levels within a few seconds of it.  The leaf, the
+only level where the variants differ, is 30% faster with either CA, as on
+8 ranks (55.9 / 37.5 / 37.7 s at 128 threads): the interior ranks did not
+cost CA0 its lead (the 16-thread projection, CA0 about even, was wrong).
+Color's leaf loses it in its transport (staged 23.6 s on rank 0, of it
+14.3 s exchanges).  The levels above are Color in all three yet differ by
+up to 42 s a level, in the waits (level 6 staged 69.3 / 48.7 / 32.2 s; box
+and owner work equal); rank 0's minor faults follow it at level 6 (7.48M
+after the Color leaf, 2.11M / 1.75M after the CA leaves) but not at level
+4 (CA3's 58.2 s of staged with 0.48M).  Not noise: the rerun repeats every
+variant's pattern (CA3's level 4 66.4 s, CA0's level 5 79.4 s, Color's
+level 6 103.7 s), with the same skeleton sizes in all three (61.5 / 84.5 /
+104.3 at levels 6-4), so the leaf variant changes how the Color levels
+above wait, not their work.  Cause not yet found.
+
 #### logdet of an operator after another one is built (2026-10-17)
 
 GPTune's GP training factors K, builds the derivative operators (compression
