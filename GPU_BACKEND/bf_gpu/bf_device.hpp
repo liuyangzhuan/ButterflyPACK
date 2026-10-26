@@ -28,13 +28,16 @@
 #include <string>
 #include <vector>
 
+#include "../gpu_common/device_scalar.hpp"
 #include "../h2_gpu/device_heap.hpp"
 
 namespace bf {
 namespace gpu {
 
-// double or std::complex<double>, as the library's precision copy fixes it
-using DataType = double;
+// The scalar T of every type here is double or fmm::gpu::dcomplex (complex
+// double laid out as std::complex<double>), as the library's precision copy
+// fixes it: the double library instantiates the first, the double complex
+// one the second.
 
 // One small matrix of a butterfly, as the device sees it.
 struct BlockDesc {
@@ -44,8 +47,8 @@ struct BlockDesc {
     int lda = 0;         // == rows: the upload packs each block tightly
     // the block itself where it lies outside that allocation: a butterfly the
     // construction from matvecs is building, level by level (only the sweep
-    // reads it)
-    const DataType* ptr = nullptr;
+    // reads it); a T*, untyped so the descriptor serves either scalar
+    const void* ptr = nullptr;
 };
 
 // One level's grid of blocks: ButterflyKerl(level) has nr x nc of them,
@@ -76,7 +79,9 @@ struct SweepRanges {
 // The levels of a butterfly, in the order the matvec sweeps them for 'N':
 // V (level 0), Kerl(1) .. Kerl(level_butterfly), U (level_butterfly + 1).
 // A low-rank block (level_butterfly == 0) has V and U only.
+template<typename T>
 struct BfDevice {
+    using DataType = T;
     int level_butterfly = 0;
     int level_half = 0;
     int M = 0, N = 0, M_loc = 0, N_loc = 0;

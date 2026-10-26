@@ -9,7 +9,8 @@
 namespace bf {
 namespace gpu {
 
-inline void SweepScratch::release() {
+template<typename T>
+inline void SweepScratch<T>::release() {
     auto& heap = fmm::gpu::DeviceHeap::instance();
     for (auto*& p : vec) { if (p) { heap.free(p); p = nullptr; } }
     for (void* p : {static_cast<void*>(d_a), static_cast<void*>(d_b),
@@ -24,7 +25,8 @@ inline void SweepScratch::release() {
     vec_elements = 0; batch_capacity = 0;
 }
 
-inline void SweepScratch::reserve(int64_t batch, int64_t elements) {
+template<typename T>
+inline void SweepScratch<T>::reserve(int64_t batch, int64_t elements) {
     auto& heap = fmm::gpu::DeviceHeap::instance();
     heap.ensure_initialized();
     // MAGMA's vbatched reads batch + 1 entries of each size array
@@ -62,10 +64,12 @@ inline void SweepScratch::reserve(int64_t batch, int64_t elements) {
 
 // One level's batch: C_i = op(A_i) * B_i, A_i the level's blocks, B_i and C_i
 // slices of the ping-pong buffers.  Returns the flops.
-inline double apply_level(const BfDevice& bf, int l, bool transposed, int nrhs,
-                          const DataType* in, DataType* out,
+template<typename T>
+inline double apply_level(const BfDevice<T>& bf, int l, bool transposed, int nrhs,
+                          const T* in, T* out,
                           const int* in_off, const int* out_off,
-                          SweepScratch& s) {
+                          SweepScratch<T>& s) {
+    using DataType = T;
     const LevelDesc& d = bf.level(l);
     const int64_t nblk = static_cast<int64_t>(d.nr) * d.nc;
     s.reserve(nblk, 0);

@@ -48,12 +48,14 @@ struct BfFingerprint {
     bool operator!=(const BfFingerprint& o) const { return !(*this == o); }
 };
 
+template<typename T>
 struct BfResident {
+    using DataType = T;
     BfFingerprint print;
-    BfDevice dev;
+    BfDevice<T> dev;
     BfBridge bridge;
-    SweepPlan plan_n, plan_t;
-    SweepScratch scratch;
+    SweepPlan<T> plan_n, plan_t;
+    SweepScratch<T> scratch;
     // the entry extraction's (bf_extract.hpp): the leaves, and the metadata
     // image of a call with its device copy, both reused between calls
     ExtractLeaves leaves;
@@ -69,42 +71,49 @@ struct BfResident {
         bf::gpu::release(dev);
     }
     // the plan of one orientation, built on first use
-    SweepPlan& plan(char op) { return (op == 'N' || op == 'n') ? plan_n : plan_t; }
+    SweepPlan<T>& plan(char op) { return (op == 'N' || op == 'n') ? plan_n : plan_t; }
 };
 
-// The process's resident butterflies.  Not thread safe: the callers are the
-// matvec entry points, which STRUMPACK reaches from one thread per front.
-inline std::map<const void*, std::unique_ptr<BfResident>>& bf_store() {
-    static std::map<const void*, std::unique_ptr<BfResident>> store;
+// The process's resident butterflies of scalar T, the precision copy's.  Not
+// thread safe: the callers are the matvec entry points, which STRUMPACK
+// reaches from one thread per front.
+template<typename T>
+inline std::map<const void*, std::unique_ptr<BfResident<T>>>& bf_store() {
+    static std::map<const void*, std::unique_ptr<BfResident<T>>> store;
     return store;
 }
 
-inline BfResident* bf_store_find(const void* block, const BfFingerprint& print) {
-    auto it = bf_store().find(block);
-    if (it == bf_store().end()) return nullptr;
+template<typename T>
+inline BfResident<T>* bf_store_find(const void* block, const BfFingerprint& print) {
+    auto it = bf_store<T>().find(block);
+    if (it == bf_store<T>().end()) return nullptr;
     if (it->second->print != print) {    // the address now holds another block
-        bf_store().erase(it);
+        bf_store<T>().erase(it);
         return nullptr;
     }
     return it->second.get();
 }
 
-inline BfResident& bf_store_add(const void* block, const BfFingerprint& print) {
-    auto entry = std::make_unique<BfResident>();
+template<typename T>
+inline BfResident<T>& bf_store_add(const void* block, const BfFingerprint& print) {
+    auto entry = std::make_unique<BfResident<T>>();
     entry->print = print;
-    BfResident& ref = *entry;
-    bf_store()[block] = std::move(entry);
+    BfResident<T>& ref = *entry;
+    bf_store<T>()[block] = std::move(entry);
     return ref;
 }
 
-inline void bf_store_release(const void* block) { bf_store().erase(block); }
-inline void bf_store_release_all() { bf_store().clear(); }
+template<typename T>
+inline void bf_store_release(const void* block) { bf_store<T>().erase(block); }
+template<typename T>
+inline void bf_store_release_all() { bf_store<T>().clear(); }
 
 // Device bytes the store holds, for the memory trace.
+template<typename T>
 inline size_t bf_store_bytes() {
     size_t bytes = 0;
-    for (const auto& e : bf_store()) {
-        bytes += static_cast<size_t>(e.second->dev.elements) * sizeof(DataType);
+    for (const auto& e : bf_store<T>()) {
+        bytes += static_cast<size_t>(e.second->dev.elements) * sizeof(T);
     }
     return bytes;
 }

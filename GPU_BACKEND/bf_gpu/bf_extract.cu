@@ -25,6 +25,7 @@ void check_launch(const char* what) {
 
 // One thread block per gather: rows idx of the factor block, transposed
 // (V: r x count) or as they are (U: count x r).
+template<typename DataType>
 __global__ void __launch_bounds__(kThreads)
 extract_gather_kernel(const ExtractGather* items, const int* idx, const DataType* values, DataType* dst) {
     const ExtractGather g = items[blockIdx.x];
@@ -47,6 +48,7 @@ extract_gather_kernel(const ExtractGather* items, const int* idx, const DataType
 
 // One thread block per intersection: entry (p, q) of the caller's block is
 // entry (pos_r[p], pos_c[q]) of the leaf-ordered one.
+template<typename DataType>
 __global__ void __launch_bounds__(kThreads)
 extract_scatter_kernel(const ExtractScatter* items, const int* idx, const DataType* src, DataType* dst) {
     const ExtractScatter s = items[blockIdx.x];
@@ -60,6 +62,7 @@ extract_scatter_kernel(const ExtractScatter* items, const int* idx, const DataTy
 }
 
 // One thread block per copy of n elements, contiguous or into a block.
+template<typename DataType>
 __global__ void __launch_bounds__(kThreads)
 extract_copy_kernel(const ExtractCopy* items, const DataType* src, DataType* dst) {
     const ExtractCopy c = items[blockIdx.x];
@@ -73,26 +76,38 @@ extract_copy_kernel(const ExtractCopy* items, const DataType* src, DataType* dst
 
 }  // namespace
 
+template<typename DataType>
 void launch_extract_copies(const ExtractCopy* items, int count, const DataType* src, DataType* dst,
                            cudaStream_t stream) {
     if (count <= 0) return;
-    extract_copy_kernel<<<count, kThreads, 0, stream>>>(items, src, dst);
+    extract_copy_kernel<DataType><<<count, kThreads, 0, stream>>>(items, src, dst);
     check_launch("launch_extract_copies");
 }
 
+template<typename DataType>
 void launch_extract_gather(const ExtractGather* items, int count, const int* idx, const DataType* values,
                            DataType* dst, cudaStream_t stream) {
     if (count <= 0) return;
-    extract_gather_kernel<<<count, kThreads, 0, stream>>>(items, idx, values, dst);
+    extract_gather_kernel<DataType><<<count, kThreads, 0, stream>>>(items, idx, values, dst);
     check_launch("launch_extract_gather");
 }
 
+template<typename DataType>
 void launch_extract_scatter(const ExtractScatter* items, int count, const int* idx, const DataType* src,
                             DataType* dst, cudaStream_t stream) {
     if (count <= 0) return;
-    extract_scatter_kernel<<<count, kThreads, 0, stream>>>(items, idx, src, dst);
+    extract_scatter_kernel<DataType><<<count, kThreads, 0, stream>>>(items, idx, src, dst);
     check_launch("launch_extract_scatter");
 }
+
+// the double and the double complex libraries
+#define BF_EXTRACT_INSTANTIATE(T)                                                                                     \
+    template void launch_extract_copies<T>(const ExtractCopy*, int, const T*, T*, cudaStream_t);                       \
+    template void launch_extract_gather<T>(const ExtractGather*, int, const int*, const T*, T*, cudaStream_t);         \
+    template void launch_extract_scatter<T>(const ExtractScatter*, int, const int*, const T*, T*, cudaStream_t);
+BF_EXTRACT_INSTANTIATE(double)
+BF_EXTRACT_INSTANTIATE(fmm::gpu::dcomplex)
+#undef BF_EXTRACT_INSTANTIATE
 
 }  // namespace gpu
 }  // namespace bf

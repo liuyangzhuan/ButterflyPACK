@@ -94,7 +94,7 @@ struct Product {
 // The pair runs along the kernel's columns; `on_input` says whether the
 // second of the pair is a second input ('N' below the midpoint: a gather) or
 // a second output ('T' above it: a scatter).
-inline Product pair_along_columns(const LevelDesc& k, const VecLevel& in, const VecLevel& out, int index_i,
+inline Product pair_along_columns(const LevelDesc& k, const VecGrid& in, const VecGrid& out, int index_i,
                                   int index_j, int w, bool on_input) {
     Product p;
     p.kj = local_of(2 * index_j - 1, k.idx_c, k.inc_c, k.nc, "kernel column") + w;
@@ -114,7 +114,7 @@ inline Product pair_along_columns(const LevelDesc& k, const VecLevel& in, const 
 }
 
 // The pair runs along the kernel's rows: the transpose of the above.
-inline Product pair_along_rows(const LevelDesc& k, const VecLevel& in, const VecLevel& out, int index_i,
+inline Product pair_along_rows(const LevelDesc& k, const VecGrid& in, const VecGrid& out, int index_i,
                                int index_j, int w, bool on_input) {
     Product p;
     p.ki = local_of(2 * index_i - 1, k.idx_r, k.inc_r, k.nr, "kernel row") + w;
@@ -141,7 +141,8 @@ struct LevelForm {
     int in_level = 0, out_level = 0;
 };
 
-inline LevelForm form_of(const BfDevice& bf, bool forward, int level) {
+template<typename T>
+inline LevelForm form_of(const BfDevice<T>& bf, bool forward, int level) {
     const int L = bf.level_butterfly;
     LevelForm f;
     f.transposed = !forward;
@@ -157,12 +158,13 @@ inline LevelForm form_of(const BfDevice& bf, bool forward, int level) {
 
 // The grid a level's loop runs over: the kernel ranges in the ordering that
 // half of the sweep uses.
-inline const SweepRanges& loop_grid(const BfDevice& bf, bool forward, bool below) {
+template<typename T>
+inline const SweepRanges& loop_grid(const BfDevice<T>& bf, bool forward, bool below) {
     const bool row_wise = forward ? below : !below;
     return row_wise ? bf.kernel_r : bf.kernel_c;
 }
 
-inline void set_grid(VecLevel& v, const SweepRanges& r, int l) {
+inline void set_grid(VecGrid& v, const SweepRanges& r, int l) {
     const size_t u = static_cast<size_t>(l);
     v.idx_r = r.idx_r[u]; v.inc_r = r.inc_r[u]; v.nr = r.nr[u];
     v.idx_c = r.idx_c[u]; v.inc_c = r.inc_c[u]; v.nc = r.nc[u];
@@ -187,7 +189,7 @@ inline void set_grid(VecLevel& v, const SweepRanges& r, int l) {
 // by buffer and element offset.  Buffers: 0 the caller's x, 1 and 2 the two
 // the vector levels take turns in, 3 the caller's y.
 struct SweepItem {
-    const DataType* a = nullptr;  // the factor block itself, when it lives outside the factors' block
+    const void* a = nullptr;  // the factor block itself (a T*), when it lives outside the factors' block
     int64_t a_off = 0, b_off = 0, c_off = 0;
     int b_buf = 0, c_buf = 0;
     int m = 0, n = 0, k = 0, lda = 0, ldb = 0, ldc = 0;
@@ -201,7 +203,7 @@ struct SweepBatch {
     int first = 0, count = 0;
     bool trans_a = false;
     bool closing = false;
-    DataType beta = DataType(1);
+    double beta = 1.0;  // 0 or 1
     int max_m = 0, max_n = 0, max_k = 0;
     int tc_first = 0, tc32 = 0, tc48 = 0, tc64 = 0;  // its tensor-core tiles in the exec's list (32s, 48s, 64s)
     double flops = 0.0;
@@ -209,20 +211,24 @@ struct SweepBatch {
 
 // The recorded sweep: the steps in order, the batches, which buffer each
 // vector level lives in, and the GEMMs' arrays on the device.
+// A step of a recorded sweep.
+enum class SweepOp { Launch, Zero, Exchange, Midpoint, Copy, Group };
+struct SweepStep {
+    SweepOp op = SweepOp::Launch;
+    int arg = 0;     // Launch: the batch; Zero, Copy: the level written (index into levels);
+                     // Exchange: the sweep level whose pair exchange this is; Group: the
+                     // plan's group
+    int level = -1;  // Exchange, Group: the level exchanged; Copy: the level copied from
+    int tag = 0;
+};
+
+template<typename T>
 struct SweepExec {
-    enum class Op { Launch, Zero, Exchange, Midpoint, Copy, Group };
-    struct Step {
-        Op op = Op::Launch;
-        int arg = 0;     // Launch: the batch; Zero, Copy: the level written (index into levels);
-                         // Exchange: the sweep level whose pair exchange this is; Group: the
-                         // plan's group
-        int level = -1;  // Exchange, Group: the level exchanged; Copy: the level copied from
-        int tag = 0;
-    };
+    using DataType = T;
     int nrhs = 0;
-    std::vector<Step> program;
+    std::vector<SweepStep> program;
     std::vector<SweepBatch> batches;
-    std::vector<VecLevel*> levels;   // the vector levels, in the order the sweep writes them
+    std::vector<VecLevel<T>*> levels;  // the vector levels, in the order the sweep writes them
     std::vector<int> buffer;         // 1 or 2, per entry of levels
     int64_t buffer_elements = 0;
     int count = 0;
@@ -251,32 +257,40 @@ struct SweepExec {
 // MAGMA's order, so the result is MAGMA's to the bit.  sweep_narrow_kind:
 // 0 none fits, else the kernel launch_sweep_narrow will use.
 int sweep_narrow_kind(bool trans_a, int max_m, int max_n);
-void launch_sweep_narrow(bool trans_a, int count, const int* m, const int* n, const int* k, DataType alpha,
-                         const DataType* const* a, const int* lda, const DataType* const* b, const int* ldb,
-                         DataType beta, DataType* const* c, const int* ldc, int max_m, int max_n,
-                         cudaStream_t stream);
+void launch_sweep_narrow(bool trans_a, int count, const int* m, const int* n, const int* k, double alpha,
+                         const double* const* a, const int* lda, const double* const* b, const int* ldb,
+                         double beta, double* const* c, const int* ldc, int max_m, int max_n, cudaStream_t stream);
+// The narrow kernel of a batch of scalar T: they are real kernels, so a
+// complex batch has none.
+template<typename T>
+inline int narrow_kind(bool trans_a, int max_m, int max_n) {
+    return std::is_same<T, double>::value ? sweep_narrow_kind(trans_a, max_m, max_n) : 0;
+}
 
 // The kernel of a replay (bf_sweep_exec.cu): every GEMM's input and output
 // pointer from its offset and buffer, and the leading dimensions of x and y.
+// (defined for double and fmm::gpu::dcomplex)
+template<typename T>
 void launch_sweep_patch(int count, const int64_t* b_off, const int64_t* c_off, const signed char* b_buf,
-                        const signed char* c_buf, const DataType* vin, DataType* buf0, DataType* buf1,
-                        DataType* vout, int ldi, int ldo, const DataType** b, DataType** c, int* ldb, int* ldc,
-                        cudaStream_t stream);
+                        const signed char* c_buf, const T* vin, T* buf0, T* buf1, T* vout, int ldi, int ldo,
+                        const T** b, T** c, int* ldb, int* ldc, cudaStream_t stream);
 
 // A sweep's plan for one orientation: the vector levels and the exchange
 // plans of every level.  Built once per butterfly block and reused, because
 // building an exchange plan costs two small collectives and a matvec is
 // called tens of thousands of times in a STRUMPACK factorization.  Only the
 // element offsets depend on nrhs, and those are a host-side prefix sum.
+template<typename T>
 struct SweepPlan {
+    using DataType = T;
     char chara = 0;
     int nrhs = 0;
-    std::vector<VecLevel> vec;
+    std::vector<VecLevel<T>> vec;
     // The midpoint level has two grids: the ordering it is written in by the
     // first half, and the one the redistribution leaves it in, which is what
     // the second half reads.  `vec[mid_level]` holds the second; `mid_src`
     // the first.
-    VecLevel mid_src;
+    VecLevel<T> mid_src;
     int mid_level = -1;
     std::vector<ExchangePlan> pair;   // the exchange after sweep level l
     ExchangePlan mid;                 // the midpoint redistribution
@@ -289,7 +303,7 @@ struct SweepPlan {
     int stop = -1, result = -1;
     bool built = false;
     // the sweep recorded for each nrhs a caller has used (sweep_exec)
-    std::map<int, std::unique_ptr<SweepExec>> execs;
+    std::map<int, std::unique_ptr<SweepExec<T>>> execs;
 
     // The traffic the plan carries: records and rows sent and received, over
     // the pair-wise exchanges and the midpoint.  A sweep that matches the CPU
@@ -351,8 +365,10 @@ struct SweepPlan {
 //
 // Collective over the block's communicator.  Called once per butterfly block
 // and orientation; a later matvec with a different nrhs only re-packs.
-inline void build_sweep_plan(const BfBridge& bridge, const BfDevice& bf, char chara, int nrhs,
-                             SweepPlan& plan, int stop = -1) {
+template<typename T>
+inline void build_sweep_plan(const BfBridge& bridge, const BfDevice<T>& bf, char chara, int nrhs,
+                             SweepPlan<T>& plan, int stop = -1) {
+    using VecLevel = bf::gpu::VecLevel<T>;
     if (!bridge.usable()) {
         throw std::invalid_argument("bf::gpu::build_sweep_plan: the bridge is missing a rule");
     }
@@ -543,16 +559,18 @@ inline void build_sweep_plan(const BfBridge& bridge, const BfDevice& bf, char ch
 // Re-pack a built plan for a different nrhs.  Only the element offsets and
 // the message sizes change with it; the records, the peers and the grids do
 // not, which is why a plan outlives a matvec.
-inline void repack(SweepPlan& plan, int nrhs) {
+template<typename T>
+inline void repack(SweepPlan<T>& plan, int nrhs) {
     if (plan.nrhs == nrhs) return;
-    for (VecLevel& v : plan.vec) v.pack(nrhs);
+    for (VecLevel<T>& v : plan.vec) v.pack(nrhs);
     plan.mid_src.pack(nrhs);
     plan.nrhs = nrhs;
 }
 
 // The leaf and closing products' row partitions: where each of this rank's
 // V and U blocks starts in x and y (arr_acc_n and arr_acc_m on the host).
-inline void leaf_offsets(const BfDevice& bf, std::vector<int64_t>& acc_n, std::vector<int64_t>& acc_m) {
+template<typename T>
+inline void leaf_offsets(const BfDevice<T>& bf, std::vector<int64_t>& acc_n, std::vector<int64_t>& acc_m) {
     const int L = bf.level_butterfly;
     const LevelDesc& dV = bf.level(0);
     const LevelDesc& dU = bf.level(L + 1);
@@ -573,8 +591,9 @@ inline void leaf_offsets(const BfDevice& bf, std::vector<int64_t>& acc_n, std::v
 // of 128 x 24, MAGMA's 0.21 against 0.34).  Measured on the same A100
 // (262144^2, L = 12, ms a matvec, with 48 and 64 tiles): untransposed 9.2
 // against 6.6 at 64 columns and 33 against 24 at 256.
+template<typename T>
 inline bool sweep_tensor_cores(bool trans_a, int max_m, int max_n, int max_k) {
-    if (!std::is_same<DataType, double>::value) return false;
+    if (!std::is_same<T, double>::value) return false;
     return trans_a || max_n >= 25 || (max_m > 64 && max_k > 32);
 }
 
@@ -587,7 +606,11 @@ constexpr int kTcNarrowCols = 32;
 // Record the sweep of `plan` for nrhs: the same walk as the CPU sweep's
 // levels (the index arithmetic above), but every GEMM kept as offsets, and
 // the order of the GEMMs, zeroings and exchanges kept as a program.
-inline SweepExec& sweep_exec(const BfDevice& bf, SweepPlan& plan, int nrhs) {
+template<typename T>
+inline SweepExec<T>& sweep_exec(const BfDevice<T>& bf, SweepPlan<T>& plan, int nrhs) {
+    using DataType = T;
+    using VecLevel = bf::gpu::VecLevel<T>;
+    using SweepExec = bf::gpu::SweepExec<T>;
     auto found = plan.execs.find(nrhs);
     if (found != plan.execs.end()) return *found->second;
     repack(plan, nrhs);
@@ -624,7 +647,7 @@ inline SweepExec& sweep_exec(const BfDevice& bf, SweepPlan& plan, int nrhs) {
     };
     auto zero_first = [&](int li) {
         if (written[static_cast<size_t>(li)]) return;
-        ex.program.push_back(SweepExec::Step{SweepExec::Op::Zero, li, -1, 0});
+        ex.program.push_back(SweepStep{SweepOp::Zero, li, -1, 0});
         written[static_cast<size_t>(li)] = 1;
     };
     // the items since `first` as one batch writing level li (-1: y)
@@ -645,7 +668,7 @@ inline SweepExec& sweep_exec(const BfDevice& bf, SweepPlan& plan, int nrhs) {
         if (!b.closing) {
             const size_t lu = static_cast<size_t>(li);
             if (written[lu]) {
-                b.beta = DataType(1);
+                b.beta = 1.0;
             } else {
                 // the batch writes every block of the level with a nonzero
                 // height, once each: no zeroing, beta 0
@@ -653,16 +676,16 @@ inline SweepExec& sweep_exec(const BfDevice& bf, SweepPlan& plan, int nrhs) {
                 int64_t blocks = 0;
                 for (int r : v.rows) blocks += r > 0 ? 1 : 0;
                 if (!zeroing && b.count == blocks) {
-                    b.beta = DataType(0);
+                    b.beta = 0.0;
                     written[lu] = 1;
                 } else {
                     zero_first(li);
-                    b.beta = DataType(1);
+                    b.beta = 1.0;
                 }
             }
         }
         ex.flops += b.flops;
-        ex.program.push_back(SweepExec::Step{SweepExec::Op::Launch, static_cast<int>(ex.batches.size()), -1, 0});
+        ex.program.push_back(SweepStep{SweepOp::Launch, static_cast<int>(ex.batches.size()), -1, 0});
         ex.batches.push_back(b);
     };
 
@@ -787,7 +810,7 @@ inline SweepExec& sweep_exec(const BfDevice& bf, SweepPlan& plan, int nrhs) {
         const detail::LevelForm f = detail::form_of(bf, forward, level);
         const int li = level_of(&out_level_of(f, level));
         zero_first(li);  // a rank with no product of its own at this level
-        ex.program.push_back(SweepExec::Step{SweepExec::Op::Exchange, level, li, tag});
+        ex.program.push_back(SweepStep{SweepOp::Exchange, level, li, tag});
     };
 
     // ---- the first half: the leaf product, then its kernel levels, each
@@ -803,7 +826,7 @@ inline SweepExec& sweep_exec(const BfDevice& bf, SweepPlan& plan, int nrhs) {
                 // the group's sum, over the rank's part of the leaf
                 const int li = level_of(&out_level_of(detail::form_of(bf, forward, level), level));
                 zero_first(li);
-                ex.program.push_back(SweepExec::Step{SweepExec::Op::Group, plan.open_group, li, 0});
+                ex.program.push_back(SweepStep{SweepOp::Group, plan.open_group, li, 0});
             }
         } else {
             run_level(level);
@@ -822,7 +845,7 @@ inline SweepExec& sweep_exec(const BfDevice& bf, SweepPlan& plan, int nrhs) {
         zero_first(src);
         const int dst = level_of(&mid_dst);
         zero_first(dst);  // the arrivals add into it
-        ex.program.push_back(SweepExec::Step{SweepExec::Op::Midpoint, 0, -1, 200});
+        ex.program.push_back(SweepStep{SweepOp::Midpoint, 0, -1, 200});
     } else if (plan.mid_src.elements > 0 && plan.mid_level >= 0) {
         // one rank: the orderings coincide, so the level is already in place
         const int src = level_index(&plan.mid_src);
@@ -832,7 +855,7 @@ inline SweepExec& sweep_exec(const BfDevice& bf, SweepPlan& plan, int nrhs) {
         } else if (src >= 0 && mid_dst.elements == plan.mid_src.elements) {
             const int dst = level_of(&mid_dst);
             written[static_cast<size_t>(dst)] = 1;
-            ex.program.push_back(SweepExec::Step{SweepExec::Op::Copy, dst, src, 0});
+            ex.program.push_back(SweepStep{SweepOp::Copy, dst, src, 0});
         }
     }
 
@@ -846,7 +869,7 @@ inline SweepExec& sweep_exec(const BfDevice& bf, SweepPlan& plan, int nrhs) {
                 // product of theirs writes
                 const int li = level_of(&plan.vec[static_cast<size_t>(L) + 1]);
                 zero_first(li);
-                ex.program.push_back(SweepExec::Step{SweepExec::Op::Group, plan.close_group, li, 0});
+                ex.program.push_back(SweepStep{SweepOp::Group, plan.close_group, li, 0});
             }
             closing_product(level);
             break;
@@ -863,8 +886,8 @@ inline SweepExec& sweep_exec(const BfDevice& bf, SweepPlan& plan, int nrhs) {
     for (SweepBatch& b : ex.batches) {
         b.tc_first = static_cast<int>(tiles.size());
         b.tc32 = b.tc48 = b.tc64 = 0;
-        if (!tc || !sweep_tensor_cores(b.trans_a, b.max_m, b.max_n, b.max_k)) continue;
-        if (!b.closing && sweep_narrow_kind(b.trans_a, b.max_m, b.max_n) != 0) continue;
+        if (!tc || !sweep_tensor_cores<T>(b.trans_a, b.max_m, b.max_n, b.max_k)) continue;
+        if (!b.closing && narrow_kind<T>(b.trans_a, b.max_m, b.max_n) != 0) continue;
         std::vector<int2> t32, t48, t64;
         for (int i = 0; i < b.count; ++i) {
             const SweepItem& it = items[static_cast<size_t>(b.first + i)];
@@ -915,7 +938,7 @@ inline SweepExec& sweep_exec(const BfDevice& bf, SweepPlan& plan, int nrhs) {
     signed char* hcbuf = reinterpret_cast<signed char*>(image.data() + o_cbuf);
     for (size_t i = 0; i < n; ++i) {
         const SweepItem& it = items[i];
-        ha[i] = it.a != nullptr ? it.a : bf.values + it.a_off;
+        ha[i] = it.a != nullptr ? static_cast<const DataType*>(it.a) : bf.values + it.a_off;
         hs[0 * (n + 1) + i] = it.m;
         hs[1 * (n + 1) + i] = it.n;
         hs[2 * (n + 1) + i] = it.k;
@@ -956,16 +979,20 @@ inline SweepExec& sweep_exec(const BfDevice& bf, SweepPlan& plan, int nrhs) {
 
 // One batch of a replay: a narrow kernel for few columns, the tensor cores
 // for many, else MAGMA - all three sum every element in the same order.
-inline void run_batch(const SweepExec& ex, const SweepBatch& b, DataType alpha, DataType beta,
-                      cudaStream_t stream) {
+template<typename T>
+inline void run_batch(const SweepExec<T>& ex, const SweepBatch& b, T alpha, T beta, cudaStream_t stream) {
+    using DataType = T;
     const DataType al = b.closing ? alpha : DataType(1);
-    const DataType be = b.closing ? beta : b.beta;
+    const DataType be = b.closing ? beta : DataType(b.beta);
     const size_t f = static_cast<size_t>(b.first);
-    if (al == DataType(1) && (be == DataType(0) || be == DataType(1)) &&
-        sweep_narrow_kind(b.trans_a, b.max_m, b.max_n) != 0) {
-        launch_sweep_narrow(b.trans_a, b.count, ex.d_m + f, ex.d_n + f, ex.d_k + f, al, ex.d_a + f, ex.d_lda + f,
-                            ex.d_b + f, ex.d_ldb + f, be, ex.d_c + f, ex.d_ldc + f, b.max_m, b.max_n, stream);
-        return;
+    if constexpr (std::is_same<DataType, double>::value) {
+        if (al == DataType(1) && (be == DataType(0) || be == DataType(1)) &&
+            sweep_narrow_kind(b.trans_a, b.max_m, b.max_n) != 0) {
+            launch_sweep_narrow(b.trans_a, b.count, ex.d_m + f, ex.d_n + f, ex.d_k + f, al, ex.d_a + f,
+                                ex.d_lda + f, ex.d_b + f, ex.d_ldb + f, be, ex.d_c + f, ex.d_ldc + f, b.max_m,
+                                b.max_n, stream);
+            return;
+        }
     }
     if (b.tc32 + b.tc48 + b.tc64 > 0) {
         if constexpr (std::is_same<DataType, double>::value) {
@@ -993,8 +1020,12 @@ namespace detail {
 
 // A replay of ex: its two buffers from the arena, the kernel that turns the
 // GEMMs' offsets into pointers, then the steps.
-inline void replay(SweepPlan& plan, SweepExec& ex, int nrhs, const DataType* vin, int ldi, DataType* vout, int ldo,
-                   DataType alpha, DataType beta, DataType* buf[3], cudaStream_t stream) {
+template<typename T>
+inline void replay(SweepPlan<T>& plan, SweepExec<T>& ex, int nrhs, const T* vin, int ldi, T* vout, int ldo, T alpha,
+                   T beta, T* buf[3], cudaStream_t stream) {
+    using DataType = T;
+    using VecLevel = bf::gpu::VecLevel<T>;
+    using SweepExec = bf::gpu::SweepExec<T>;
     auto& heap = fmm::gpu::DeviceHeap::instance();
     heap.ensure_initialized();
     buf[0] = buf[1] = buf[2] = nullptr;
@@ -1007,12 +1038,12 @@ inline void replay(SweepPlan& plan, SweepExec& ex, int nrhs, const DataType* vin
     launch_sweep_patch(ex.count, ex.d_boff, ex.d_coff, ex.d_bbuf, ex.d_cbuf, vin, buf[1], buf[2], vout, ldi, ldo,
                        ex.d_b, ex.d_c, ex.d_ldb, ex.d_ldc, stream);
 
-    for (const SweepExec::Step& st : ex.program) {
+    for (const SweepStep& st : ex.program) {
         switch (st.op) {
-            case SweepExec::Op::Launch:
+            case SweepOp::Launch:
                 run_batch(ex, ex.batches[static_cast<size_t>(st.arg)], alpha, beta, stream);
                 break;
-            case SweepExec::Op::Zero: {
+            case SweepOp::Zero: {
                 const VecLevel& v = *ex.levels[static_cast<size_t>(st.arg)];
                 if (v.elements > 0) {
                     fmm::gpu::check_cuda(cudaMemsetAsync(v.data, 0, static_cast<size_t>(v.elements) * sizeof(DataType),
@@ -1020,23 +1051,23 @@ inline void replay(SweepPlan& plan, SweepExec& ex, int nrhs, const DataType* vin
                 }
                 break;
             }
-            case SweepExec::Op::Exchange: {
+            case SweepOp::Exchange: {
                 VecLevel& v = *ex.levels[static_cast<size_t>(st.level)];
                 exchange_level(plan.pair[static_cast<size_t>(st.arg)], v, v, nrhs, st.tag, stream);
                 break;
             }
-            case SweepExec::Op::Midpoint:
+            case SweepOp::Midpoint:
                 exchange_level(plan.mid, plan.mid_src, plan.vec[static_cast<size_t>(plan.mid_level)], nrhs, st.tag,
                                stream);
                 break;
-            case SweepExec::Op::Copy: {
+            case SweepOp::Copy: {
                 const VecLevel& dst = *ex.levels[static_cast<size_t>(st.arg)];
                 const VecLevel& src = *ex.levels[static_cast<size_t>(st.level)];
                 fmm::gpu::check_cuda(cudaMemcpyAsync(dst.data, src.data, static_cast<size_t>(dst.elements) * sizeof(DataType),
                                                      cudaMemcpyDeviceToDevice, stream), "bf sweep midpoint");
                 break;
             }
-            case SweepExec::Op::Group: {
+            case SweepOp::Group: {
                 const GroupPlan& g = plan.groups[static_cast<size_t>(st.arg)];
                 VecLevel& v = *ex.levels[static_cast<size_t>(st.level)];
                 group_level(g, v.data + v.offset[g.block], static_cast<int64_t>(v.rows[g.block]) * nrhs, stream);
@@ -1055,17 +1086,19 @@ inline void replay(SweepPlan& plan, SweepExec& ex, int nrhs, const DataType* vin
 //
 // The caller's alpha and beta belong to the closing product alone.  The
 // stream must be the backend's (fmm::gpu::Context), on which MAGMA runs.
-inline double sweep(const BfDevice& bf, SweepPlan& plan, int nrhs, const DataType* vin, int ldi,
-                    DataType* vout, int ldo, DataType alpha, DataType beta, SweepScratch& /*unused*/,
-                    cudaStream_t stream = nullptr) {
+template<typename T>
+inline double sweep(const BfDevice<T>& bf, SweepPlan<T>& plan, int nrhs, const T* vin, int ldi, T* vout, int ldo,
+                    T alpha, T beta, SweepScratch<T>& /*unused*/, cudaStream_t stream = nullptr) {
+    using DataType = T;
+    using VecLevel = bf::gpu::VecLevel<T>;
     if (!plan.built || plan.vec.empty() || plan.stop >= 0) {
         throw std::invalid_argument("bf::gpu::sweep: the plan is not built, or is a partial one");
     }
     if (stream == nullptr) stream = fmm::gpu::Context::instance().stream();
-    SweepExec& ex = sweep_exec(bf, plan, nrhs);
+    SweepExec<T>& ex = sweep_exec(bf, plan, nrhs);
     repack(plan, nrhs);  // the levels' offsets, which the exchanges read
     DataType* buf[3];
-    detail::replay(plan, ex, nrhs, vin, ldi, vout, ldo, alpha, beta, buf, stream);
+    detail::replay<T>(plan, ex, nrhs, vin, ldi, vout, ldo, alpha, beta, buf, stream);
 
     // the buffers go back with the work still queued: whatever reuses them
     // runs after it, on the same stream
@@ -1082,16 +1115,19 @@ inline double sweep(const BfDevice& bf, SweepPlan& plan, int nrhs, const DataTyp
 // plan.vec[plan.result], whose data is a buffer of the arena the caller gives
 // back (DeviceHeap::free) once the work that reads it is queued.  flops: what
 // the sweep did.
-inline VecLevel& sweep_partial(const BfDevice& bf, SweepPlan& plan, int nrhs, const DataType* vin, int ldi,
-                               double* flops = nullptr, cudaStream_t stream = nullptr) {
+template<typename T>
+inline VecLevel<T>& sweep_partial(const BfDevice<T>& bf, SweepPlan<T>& plan, int nrhs, const T* vin, int ldi,
+                                  double* flops = nullptr, cudaStream_t stream = nullptr) {
+    using DataType = T;
+    using VecLevel = bf::gpu::VecLevel<T>;
     if (!plan.built || plan.vec.empty() || plan.stop < 0) {
         throw std::invalid_argument("bf::gpu::sweep_partial: the plan is not built, or is a full one");
     }
     if (stream == nullptr) stream = fmm::gpu::Context::instance().stream();
-    SweepExec& ex = sweep_exec(bf, plan, nrhs);
+    SweepExec<T>& ex = sweep_exec(bf, plan, nrhs);
     repack(plan, nrhs);
     DataType* buf[3];
-    detail::replay(plan, ex, nrhs, vin, ldi, nullptr, 0, DataType(1), DataType(0), buf, stream);
+    detail::replay<T>(plan, ex, nrhs, vin, ldi, nullptr, 0, DataType(1), DataType(0), buf, stream);
     VecLevel& out = plan.vec[static_cast<size_t>(plan.result)];
     DataType* kept = out.elements > 0 ? out.data : nullptr;
     if (out.elements > 0 && kept == nullptr) {

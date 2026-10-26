@@ -30,18 +30,18 @@ namespace bf {
 namespace gpu {
 
 // One level's vector blocks.  `rows[i*nc + j]` is a block's height and
-// `row_offset[i*nc + j]` where it starts in `data`, in ROWS - the element
+// `row_offset[i*nc + j]` where it starts in the data, in ROWS - the element
 // offset is that times nrhs.  Keeping it in rows is what lets an exchange
 // plan be built once and reused for any nrhs; `offset` is the same thing in
 // elements, for the host-side GEMM setup.  A height of 0 marks a block this
-// rank does not hold.
-struct VecLevel {
+// rank does not hold.  The grid alone, whatever the scalar: what the
+// exchanges are planned from.
+struct VecGrid {
     int nr = 0, nc = 0;
     int idx_r = 1, idx_c = 1, inc_r = 1, inc_c = 1;
     std::vector<int> rows;
     std::vector<int64_t> row_offset;
     std::vector<int64_t> offset;
-    DataType* data = nullptr;     // transient, from the arena
     int64_t elements = 0;
     int64_t row_total = 0;        // elements / nrhs
     int nrhs = 0;
@@ -71,6 +71,13 @@ struct VecLevel {
         elements = at * nrhs;
         return elements;
     }
+};
+
+// The grid and its data.
+template<typename T>
+struct VecLevel : VecGrid {
+    using DataType = T;
+    DataType* data = nullptr;     // transient, from the arena
 };
 
 }  // namespace gpu

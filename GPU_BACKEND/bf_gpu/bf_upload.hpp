@@ -16,7 +16,8 @@
 namespace bf {
 namespace gpu {
 
-inline void release(BfDevice& bf) {
+template<typename T>
+inline void release(BfDevice<T>& bf) {
     if (bf.values != nullptr) {
         fmm::gpu::DeviceHeap::instance().free(bf.values);
         bf.values = nullptr;
@@ -26,18 +27,20 @@ inline void release(BfDevice& bf) {
     bf.levels.clear();
 }
 
+template<typename T>
 inline bool upload(const std::vector<LevelDesc>& level_rows,
-                   const std::vector<std::vector<const DataType*>>& host_ptrs,
+                   const std::vector<std::vector<const T*>>& host_ptrs,
                    const std::vector<std::vector<std::pair<int, int>>>& host_shapes,
                    int level_butterfly, int level_half,
-                   int M, int N, int M_loc, int N_loc, BfDevice& out) {
+                   int M, int N, int M_loc, int N_loc, BfDevice<T>& out) {
+    using DataType = T;
     const size_t nlevels = level_rows.size();
     if (host_ptrs.size() != nlevels || host_shapes.size() != nlevels) {
         throw std::invalid_argument("bf::gpu::upload: a level is missing its blocks");
     }
 
     // ---- lay the blocks out, tightly packed, level by level
-    BfDevice next;
+    BfDevice<T> next;
     next.level_butterfly = level_butterfly;
     next.level_half = level_half;
     next.M = M; next.N = N; next.M_loc = M_loc; next.N_loc = N_loc;
@@ -105,8 +108,10 @@ inline bool upload(const std::vector<LevelDesc>& level_rows,
     return true;
 }
 
-inline void download(const BfDevice& bf,
-                     const std::vector<std::vector<DataType*>>& host_ptrs) {
+template<typename T>
+inline void download(const BfDevice<T>& bf,
+                     const std::vector<std::vector<T*>>& host_ptrs) {
+    using DataType = T;
     if (!bf.resident() || bf.elements == 0) return;
     std::vector<DataType> stage(static_cast<size_t>(bf.elements));
     fmm::gpu::check_cuda(cudaMemcpy(stage.data(), bf.values,

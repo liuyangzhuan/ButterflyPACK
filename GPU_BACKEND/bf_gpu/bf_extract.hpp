@@ -88,12 +88,15 @@ struct ExtractCopy {
     int rows = 0;
 };
 
-void launch_extract_gather(const ExtractGather* items, int count, const int* idx, const DataType* values,
-                           DataType* dst, cudaStream_t stream);
-void launch_extract_copies(const ExtractCopy* items, int count, const DataType* src, DataType* dst,
+// (each defined for double and fmm::gpu::dcomplex in bf_extract.cu)
+template<typename T>
+void launch_extract_gather(const ExtractGather* items, int count, const int* idx, const T* values, T* dst,
                            cudaStream_t stream);
-void launch_extract_scatter(const ExtractScatter* items, int count, const int* idx, const DataType* src,
-                            DataType* dst, cudaStream_t stream);
+template<typename T>
+void launch_extract_copies(const ExtractCopy* items, int count, const T* src, T* dst, cudaStream_t stream);
+template<typename T>
+void launch_extract_scatter(const ExtractScatter* items, int count, const int* idx, const T* src, T* dst,
+                            cudaStream_t stream);
 
 // The leaves of a resident butterfly on one process: which leaf each row
 // and column is in and where each leaf starts.  Made at the first extraction
@@ -125,7 +128,8 @@ struct Run {
 
 }  // namespace detail
 
-inline void prepare_leaves(const BfDevice& bf, ExtractLeaves& lv) {
+template<typename T>
+inline void prepare_leaves(const BfDevice<T>& bf, ExtractLeaves& lv) {
     if (lv.ready) return;
     const int L = bf.level_butterfly;
     const int nleaf = 1 << L;
@@ -151,7 +155,9 @@ inline void prepare_leaves(const BfDevice& bf, ExtractLeaves& lv) {
 }
 
 // One stage's GEMMs, in the arrays MAGMA's variable-size batch reads.
+template<typename T>
 struct ExtractStage {
+    using DataType = T;
     std::vector<magma_int_t> m, n, k, lda, ldb, ldc;
     std::vector<const DataType*> a, b;
     std::vector<DataType*> c;
@@ -171,9 +177,12 @@ struct ExtractStage {
 //
 // The planning is per intersection and runs in parallel over them: every
 // list below is flat, laid out by a counting pass and filled by a second.
-inline bool extract(const BfDevice& bf, ExtractLeaves& leaves, int count, const int* rowidx, const int* colidx,
-                    const int* rows, const int* cols, DataType* out, ExtractProfile& prof,
+template<typename T>
+inline bool extract(const BfDevice<T>& bf, ExtractLeaves& leaves, int count, const int* rowidx, const int* colidx,
+                    const int* rows, const int* cols, T* out, ExtractProfile& prof,
                     fmm::gpu::MetaBuilder& meta, fmm::gpu::DeviceBuffer& meta_device) {
+    using DataType = T;
+    using ExtractStage = bf::gpu::ExtractStage<T>;
     using clock = std::chrono::steady_clock;
     using detail::Run;
     const auto t0 = clock::now();
@@ -705,8 +714,11 @@ inline void child_runs(const Run* r, int64_t n, int parent, int64_t& lo, int64_t
 // nloc[k] x nc[k], column major, stacked in order.  0: done; 1: declined on
 // every rank (leaves not split among the ranks in consecutive runs, no room
 // on some rank).  Collective over the block's communicator.
-inline int extract_dist(const BfDevice& bf, MPI_Comm comm, const ExtractRequest& q, DataType* out,
-                        ExtractProfile& prof, fmm::gpu::MetaBuilder& meta, fmm::gpu::DeviceBuffer& meta_device) {
+template<typename T>
+inline int extract_dist(const BfDevice<T>& bf, MPI_Comm comm, const ExtractRequest& q, T* out, ExtractProfile& prof,
+                        fmm::gpu::MetaBuilder& meta, fmm::gpu::DeviceBuffer& meta_device) {
+    using DataType = T;
+    using ExtractStage = bf::gpu::ExtractStage<T>;
     using clock = std::chrono::steady_clock;
     using detail::Run;
     const auto t0 = clock::now();

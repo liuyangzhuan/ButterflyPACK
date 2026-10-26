@@ -44,6 +44,7 @@ __host__ __device__ __forceinline__ int64_t slot_of(const ExchangeRecord& r, con
 // One block per record: thread 0 writes the header, the block copies the
 // values.  A level's block is contiguous (rows x nrhs, lda = rows), so the
 // copy is flat.
+template<typename DataType>
 __global__ void __launch_bounds__(kThreads) pack_kernel(const DataType* level, const ExchangeRecord* recs,
                                                         const int64_t* displ, int nrhs, DataType* buf) {
     const ExchangeRecord r = recs[blockIdx.x];
@@ -61,6 +62,7 @@ __global__ void __launch_bounds__(kThreads) pack_kernel(const DataType* level, c
 
 // The mirror, adding into the target - the CPU accumulates too, and a rank
 // may already hold its own contribution to the block.
+template<typename DataType>
 __global__ void __launch_bounds__(kThreads) unpack_kernel(DataType* level, const ExchangeRecord* recs,
                                                           const int64_t* displ, int nrhs, const DataType* buf) {
     const ExchangeRecord r = recs[blockIdx.x];
@@ -188,8 +190,8 @@ namespace {
 // Build the records and exchange the descriptors.  `dest[b]` is the
 // destination rank of local block b of `src`, or -1 when this rank does not
 // send it, as the Fortran decided.
-ExchangePlan assemble(MPI_Comm comm, int nproc, const std::vector<int>& dest, const VecLevel& src,
-                      VecLevel& dst) {
+ExchangePlan assemble(MPI_Comm comm, int nproc, const std::vector<int>& dest, const VecGrid& src,
+                      VecGrid& dst) {
     ExchangePlan plan;
     plan.comm = comm;
     plan.nproc = nproc;
@@ -325,7 +327,7 @@ ExchangePlan assemble(MPI_Comm comm, int nproc, const std::vector<int>& dest, co
 }  // namespace
 
 ExchangePlan build_plan(const BfBridge& bridge, int level, char mode, char collect,
-                        const VecLevel& level_in, VecLevel& level_out) {
+                        const VecGrid& level_in, VecGrid& level_out) {
     if (bridge.nproc <= 1) {
         ExchangePlan plan;
         plan.comm = bridge.comm;
@@ -339,8 +341,8 @@ ExchangePlan build_plan(const BfBridge& bridge, int level, char mode, char colle
     return assemble(bridge.comm, bridge.nproc, dest, level_in, level_out);
 }
 
-ExchangePlan build_all2all_plan(const BfBridge& bridge, int level, char mode_new, const VecLevel& src,
-                                VecLevel& dst) {
+ExchangePlan build_all2all_plan(const BfBridge& bridge, int level, char mode_new, const VecGrid& src,
+                                VecGrid& dst) {
     if (bridge.nproc <= 1) {
         // one rank: the orderings coincide, so the level is already in place
         dst = src;
@@ -387,6 +389,7 @@ GroupPlan build_group_plan(MPI_Comm comm, bool sum, int vec, size_t block) {
     return g;
 }
 
+template<typename DataType>
 void group_level(const GroupPlan& g, DataType* data, int64_t n, cudaStream_t stream) {
     if (g.nproc <= 1 || n <= 0) return;
     constexpr int kWords = static_cast<int>(sizeof(DataType) / sizeof(double));
@@ -412,6 +415,7 @@ void group_level(const GroupPlan& g, DataType* data, int64_t n, cudaStream_t str
     check_cuda(cudaStreamSynchronize(stream), "bf group stage in");
 }
 
+template<typename DataType>
 void alltoallv_device(MPI_Comm comm, const DataType* send, const int64_t* scount, DataType* recv,
                       const int64_t* rcount, cudaStream_t stream) {
     int nproc = 1, me = 0;
@@ -483,21 +487,24 @@ void alltoallv_device(MPI_Comm comm, const DataType* send, const int64_t* scount
     check_cuda(cudaStreamSynchronize(stream), "bf alltoallv stage in");
 }
 
+template<typename DataType>
 void launch_pack(const DataType* level, const ExchangeRecord* recs, int nrecs, const int64_t* displ, int nrhs,
                  DataType* buf, cudaStream_t stream) {
     if (nrecs <= 0) return;
-    pack_kernel<<<nrecs, kThreads, 0, stream>>>(level, recs, displ, nrhs, buf);
+    pack_kernel<DataType><<<nrecs, kThreads, 0, stream>>>(level, recs, displ, nrhs, buf);
     check_launch("bf exchange pack");
 }
 
+template<typename DataType>
 void launch_unpack(DataType* level, const ExchangeRecord* recs, int nrecs, const int64_t* displ, int nrhs,
                    const DataType* buf, cudaStream_t stream) {
     if (nrecs <= 0) return;
-    unpack_kernel<<<nrecs, kThreads, 0, stream>>>(level, recs, displ, nrhs, buf);
+    unpack_kernel<DataType><<<nrecs, kThreads, 0, stream>>>(level, recs, displ, nrhs, buf);
     check_launch("bf exchange unpack");
 }
 
-void exchange_level(ExchangePlan& plan, const VecLevel& src, VecLevel& dst, int nrhs, int tag,
+template<typename DataType>
+void exchange_level(ExchangePlan& plan, const VecLevel<DataType>& src, VecLevel<DataType>& dst, int nrhs, int tag,
                     cudaStream_t stream) {
     if (plan.empty()) return;
     plan.displacements(nrhs);
@@ -634,6 +641,17 @@ void exchange_level(ExchangePlan& plan, const VecLevel& src, VecLevel& dst, int 
         heap.free(reinterpret_cast<char*>(sdev));
     }
 }
+
+// the double and the double complex libraries
+#define BF_EXCHANGE_INSTANTIATE(T)                                                                                    \
+    template void group_level<T>(const GroupPlan&, T*, int64_t, cudaStream_t);                                        \
+    template void alltoallv_device<T>(MPI_Comm, const T*, const int64_t*, T*, const int64_t*, cudaStream_t);          \
+    template void launch_pack<T>(const T*, const ExchangeRecord*, int, const int64_t*, int, T*, cudaStream_t);        \
+    template void launch_unpack<T>(T*, const ExchangeRecord*, int, const int64_t*, int, const T*, cudaStream_t);      \
+    template void exchange_level<T>(ExchangePlan&, const VecLevel<T>&, VecLevel<T>&, int, int, cudaStream_t);
+BF_EXCHANGE_INSTANTIATE(double)
+BF_EXCHANGE_INSTANTIATE(fmm::gpu::dcomplex)
+#undef BF_EXCHANGE_INSTANTIATE
 
 }  // namespace gpu
 }  // namespace bf

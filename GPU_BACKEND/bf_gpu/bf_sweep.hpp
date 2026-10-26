@@ -39,7 +39,9 @@ namespace bf {
 namespace gpu {
 
 // One entry of a level's batch.
+template<typename T>
 struct GemmItem {
+    using DataType = T;
     const DataType* a;
     const DataType* b;
     DataType* c;
@@ -50,15 +52,17 @@ struct GemmItem {
 // takes one alpha and one beta per call, so a level that accumulates two
 // products into the same C issues twice, beta 0 then beta 1, and only the
 // last level of a sweep carries the caller's alpha.
-inline double issue(std::vector<GemmItem>& items, DataType alpha, DataType beta,
-                    bool trans_a, SweepScratch& s) {
+template<typename T>
+inline double issue(std::vector<GemmItem<T>>& items, T alpha, T beta,
+                    bool trans_a, SweepScratch<T>& s) {
+    using DataType = T;
     if (items.empty()) return 0.0;
     const int64_t batch = static_cast<int64_t>(items.size());
     s.reserve(batch, 0);
     magma_int_t max_m = 0, max_n = 0, max_k = 0;
     double flops = 0.0;
     for (int64_t i = 0; i < batch; ++i) {
-        const GemmItem& it = items[static_cast<size_t>(i)];
+        const GemmItem<T>& it = items[static_cast<size_t>(i)];
         s.h_a[static_cast<size_t>(i)] = it.a;
         s.h_b[static_cast<size_t>(i)] = it.b;
         s.h_c[static_cast<size_t>(i)] = it.c;

@@ -28,6 +28,7 @@ void check_launch(const char* what) {
 
 // One thread block per panel: copy the entries into the matrix the
 // factorization destroys, transposing the panels the 'C' half works on.
+template<typename DataType>
 __global__ void __launch_bounds__(kThreads)
 id_load_kernel(const DataType* entries, const IdPanel* panels, DataType* mat) {
     const IdPanel p = panels[blockIdx.x];
@@ -45,6 +46,7 @@ id_load_kernel(const DataType* entries, const IdPanel* panels, DataType* mat) {
 // X(:, jpvt[k]) = e_k on the skeleton columns and X(:, jpvt[rank+j]) the j-th
 // column of T, which launch_qrcp left in rows 0..rank-1 of columns
 // rank..n-1 of the factorized matrix.
+template<typename DataType>
 __global__ void __launch_bounds__(kThreads)
 id_scatter_kernel(const IdPanel* panels, const DataType* mat, const int* jpvt, const int* rank,
                   DataType* x) {
@@ -71,6 +73,7 @@ id_scatter_kernel(const IdPanel* panels, const DataType* mat, const int* jpvt, c
 // launch_qrcp returns rank 0 for a panel it finds numerically empty; the CPU
 // turns that into rank 1 with a zero X and the first pivot, which is what the
 // level's bookkeeping expects.
+template<typename DataType>
 __global__ void id_fixup_kernel(const IdPanel* panels, int count, int* jpvt, int* rank, DataType* x) {
     const int p = blockIdx.x * blockDim.x + threadIdx.x;
     if (p >= count || rank[p] != 0) return;
@@ -84,7 +87,8 @@ __global__ void id_fixup_kernel(const IdPanel* panels, int count, int* jpvt, int
 
 }  // namespace
 
-bool plan_id_batch(IdBatch& batch) {
+template<typename DataType>
+bool plan_id_batch(IdBatch<DataType>& batch) {
     int64_t mats = 0, jpvts = 0;
     int max_n = 0;
     for (IdPanel& p : batch.panels) {
@@ -164,7 +168,8 @@ bool plan_id_batch(IdBatch& batch) {
     return true;
 }
 
-void release_id_batch(IdBatch& batch) {
+template<typename DataType>
+void release_id_batch(IdBatch<DataType>& batch) {
     DeviceHeap& heap = DeviceHeap::instance();
     for (void* q : {batch.d_work, static_cast<void*>(batch.d_items), static_cast<void*>(batch.d_flag),
                     static_cast<void*>(batch.d_norm), static_cast<void*>(batch.d_rank),
@@ -183,21 +188,24 @@ void release_id_batch(IdBatch& batch) {
     batch.d_panels = nullptr;
 }
 
+template<typename DataType>
 void launch_id_load(const DataType* entries, const IdPanel* panels, int count, DataType* mat,
                     cudaStream_t stream) {
     if (count <= 0) return;
-    id_load_kernel<<<count, kThreads, 0, stream>>>(entries, panels, mat);
+    id_load_kernel<DataType><<<count, kThreads, 0, stream>>>(entries, panels, mat);
     check_launch("bf id load");
 }
 
+template<typename DataType>
 void launch_id_scatter(const IdPanel* panels, int count, const DataType* mat, const int* jpvt,
                        const int* rank, DataType* x, cudaStream_t stream) {
     if (count <= 0) return;
-    id_scatter_kernel<<<count, kThreads, 0, stream>>>(panels, mat, jpvt, rank, x);
+    id_scatter_kernel<DataType><<<count, kThreads, 0, stream>>>(panels, mat, jpvt, rank, x);
     check_launch("bf id scatter");
 }
 
-void run_id_batch(const DataType* entries, IdBatch& batch, double rtol, double atol, cudaStream_t stream) {
+template<typename DataType>
+void run_id_batch(const DataType* entries, IdBatch<DataType>& batch, double rtol, double atol, cudaStream_t stream) {
     const int count = batch.count();
     if (count == 0 || batch.mat_elements == 0) return;
     launch_id_load(entries, batch.d_panels, count, batch.d_mat, stream);
@@ -208,10 +216,21 @@ void run_id_batch(const DataType* entries, IdBatch& batch, double rtol, double a
                                stream), "bf id zero X");
     fmm::gpu::launch_qrcp<DataType>(batch.d_items, count, batch.max_n, rtol, atol, batch.d_work, stream);
     launch_id_scatter(batch.d_panels, count, batch.d_mat, batch.d_jpvt, batch.d_rank, batch.d_x, stream);
-    id_fixup_kernel<<<(count + kThreads - 1) / kThreads, kThreads, 0, stream>>>(
+    id_fixup_kernel<DataType><<<(count + kThreads - 1) / kThreads, kThreads, 0, stream>>>(
         batch.d_panels, count, batch.d_jpvt, batch.d_rank, batch.d_x);
     check_launch("bf id fixup");
 }
+
+// the double and the double complex libraries
+#define BF_ID_INSTANTIATE(T)                                                                                          \
+    template bool plan_id_batch<T>(IdBatch<T>&);                                                                      \
+    template void release_id_batch<T>(IdBatch<T>&);                                                                   \
+    template void launch_id_load<T>(const T*, const IdPanel*, int, T*, cudaStream_t);                                 \
+    template void launch_id_scatter<T>(const IdPanel*, int, const T*, const int*, const int*, T*, cudaStream_t);      \
+    template void run_id_batch<T>(const T*, IdBatch<T>&, double, double, cudaStream_t);
+BF_ID_INSTANTIATE(double)
+BF_ID_INSTANTIATE(fmm::gpu::dcomplex)
+#undef BF_ID_INSTANTIATE
 
 }  // namespace gpu
 }  // namespace bf

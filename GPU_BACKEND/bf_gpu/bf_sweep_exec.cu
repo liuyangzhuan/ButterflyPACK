@@ -18,12 +18,15 @@ namespace gpu {
 namespace {
 
 constexpr int kThreads = 256;
+// the narrow kernels' scalar: they run the double library's batches (a
+// complex batch goes to MAGMA)
+using DataType = double;
 
 // Buffers: 0 the caller's x, 1 and 2 the ping-pong buffers, 3 the caller's y.
+template<typename T>
 __global__ void patch_kernel(int count, const int64_t* b_off, const int64_t* c_off, const signed char* b_buf,
-                             const signed char* c_buf, const DataType* vin, DataType* buf0, DataType* buf1,
-                             DataType* vout, int ldi, int ldo, const DataType** b, DataType** c, int* ldb,
-                             int* ldc) {
+                             const signed char* c_buf, const T* vin, T* buf0, T* buf1, T* vout, int ldi, int ldo,
+                             const T** b, T** c, int* ldb, int* ldc) {
     for (int i = blockIdx.x * kThreads + threadIdx.x; i < count; i += gridDim.x * kThreads) {
         const int bb = b_buf[i], cb = c_buf[i];
         b[i] = (bb == 0 ? vin : (bb == 1 ? buf0 : buf1)) + b_off[i];
@@ -217,13 +220,13 @@ void launch_sweep_narrow(bool trans_a, int count, const int* m, const int* n, co
     }
 }
 
+template<typename T>
 void launch_sweep_patch(int count, const int64_t* b_off, const int64_t* c_off, const signed char* b_buf,
-                        const signed char* c_buf, const DataType* vin, DataType* buf0, DataType* buf1,
-                        DataType* vout, int ldi, int ldo, const DataType** b, DataType** c, int* ldb, int* ldc,
-                        cudaStream_t stream) {
+                        const signed char* c_buf, const T* vin, T* buf0, T* buf1, T* vout, int ldi, int ldo,
+                        const T** b, T** c, int* ldb, int* ldc, cudaStream_t stream) {
     if (count <= 0) return;
     const int blocks = std::min((count + kThreads - 1) / kThreads, 1024);
-    patch_kernel<<<blocks, kThreads, 0, stream>>>(count, b_off, c_off, b_buf, c_buf, vin, buf0, buf1, vout, ldi,
+    patch_kernel<T><<<blocks, kThreads, 0, stream>>>(count, b_off, c_off, b_buf, c_buf, vin, buf0, buf1, vout, ldi,
                                                   ldo, b, c, ldb, ldc);
     const cudaError_t status = cudaGetLastError();
     if (status != cudaSuccess) {
@@ -231,6 +234,14 @@ void launch_sweep_patch(int count, const int64_t* b_off, const int64_t* c_off, c
                                  cudaGetErrorString(status));
     }
 }
+
+// the double and the double complex libraries
+#define BF_PATCH_INSTANTIATE(T)                                                                                       \
+    template void launch_sweep_patch<T>(int, const int64_t*, const int64_t*, const signed char*, const signed char*,  \
+                                        const T*, T*, T*, T*, int, int, const T**, T**, int*, int*, cudaStream_t);
+BF_PATCH_INSTANTIATE(double)
+BF_PATCH_INSTANTIATE(fmm::gpu::dcomplex)
+#undef BF_PATCH_INSTANTIATE
 
 }  // namespace gpu
 }  // namespace bf

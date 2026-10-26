@@ -30,7 +30,9 @@ namespace gpu {
 // because sample_Schur applies the same operators thousands of times (47432
 // inverse calls at Poisson 400^3), and re-allocating per call would cost more
 // than the arithmetic.
+template<typename T>
 struct SweepScratch {
+    using DataType = T;
     DataType* vec[2] = {nullptr, nullptr};   // transient, from the arena
     int64_t vec_elements = 0;
     const DataType** d_a = nullptr;          // batch arrays, device side
@@ -52,9 +54,9 @@ struct SweepScratch {
 // Vout(M_loc, nrhs) = a * op(bf) * Vin(N_loc, nrhs) + b * Vout, all device
 // resident.  `op` is 'N', 'T' or 'C'.  Returns the flops performed, so a
 // caller can account for them the way the CPU path does.
-double matvec(const BfDevice& bf, char op, int nrhs,
-              const DataType* vin, int ldi, DataType* vout, int ldo,
-              DataType alpha, DataType beta, SweepScratch& scratch);
+template<typename T>
+double matvec(const BfDevice<T>& bf, char op, int nrhs, const T* vin, int ldi, T* vout, int ldo, T alpha,
+              T beta, SweepScratch<T>& scratch);
 
 }  // namespace gpu
 }  // namespace bf

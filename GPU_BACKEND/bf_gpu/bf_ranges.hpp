@@ -43,10 +43,10 @@ struct BfBridge {
     // BF_exchange_matvec's rule over a level's whole local grid: dest[b] is
     // the zero-based rank in `comm` that local block b goes to, or -1 when
     // this rank does not send it.
-    std::function<void(int level, char mode, char collect, const VecLevel& src, int* dest)> exchange_dest;
+    std::function<void(int level, char mode, char collect, const VecGrid& src, int* dest)> exchange_dest;
     // BF_all2all_vec_n_ker's rule (kerflag = 0), and the grid it leaves the
     // level in.
-    std::function<void(int level, char mode_new, const VecLevel& src, int* dest)> all2all_dest;
+    std::function<void(int level, char mode_new, const VecGrid& src, int* dest)> all2all_dest;
     std::function<Range2(int level, char mode_new)> all2all_range;
     // The sub-group that owns one block of a level: its rank count, its
     // communicator and whether this rank heads it.  The closing product of
@@ -67,7 +67,8 @@ struct BfBridge {
 // Fill in a resident butterfly's grids from the four range sets the Fortran
 // returned: GetLocalBlockRange in both orderings (levels 0 .. L+1) and the
 // vector grids of each orientation (vector levels 0 .. L+2).
-inline void set_ranges(BfDevice& out, const SweepRanges& kernel_r, const SweepRanges& kernel_c,
+template<typename T>
+inline void set_ranges(BfDevice<T>& out, const SweepRanges& kernel_r, const SweepRanges& kernel_c,
                        const SweepRanges& vec_n, const SweepRanges& vec_t, int nproc, int myid) {
     const int want_k = out.level_butterfly + 2;
     const int want_v = out.level_butterfly + 3;

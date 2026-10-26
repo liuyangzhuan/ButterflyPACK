@@ -83,7 +83,9 @@ struct IdPanel {
 // A level's batch.  `rank` and `jpvt` come back to the host: the next level's
 // sampling and the skeleton exchange need them, and the skeleton index mapping
 // is integer bookkeeping that stays in the Fortran.
+template<typename T>
 struct IdBatch {
+    using DataType = T;
     std::vector<IdPanel> panels;
     IdPanel* d_panels = nullptr;
     DataType* d_mat = nullptr;    // the panels, destroyed by the factorization
@@ -103,18 +105,23 @@ struct IdBatch {
 // Lay the panels out and take the device buffers from the shared arena,
 // filling in each panel's offsets; the caller sets only shape and entry
 // offset.  False when the arena has no room.
-bool plan_id_batch(IdBatch& batch);
-void release_id_batch(IdBatch& batch);
+// (each of these defined for double and fmm::gpu::dcomplex in bf_id.cu)
+template<typename T>
+bool plan_id_batch(IdBatch<T>& batch);
+template<typename T>
+void release_id_batch(IdBatch<T>& batch);
 
 // Load, factorize and build X for a whole level.  `entries` is device
 // resident; `rtol` and `atol` are option%tol_comp and BPACK_SafeUnderflow.
-void run_id_batch(const DataType* entries, IdBatch& batch, double rtol, double atol, cudaStream_t stream);
+template<typename T>
+void run_id_batch(const T* entries, IdBatch<T>& batch, double rtol, double atol, cudaStream_t stream);
 
 // The two glue kernels, separately for the harness.
-void launch_id_load(const DataType* entries, const IdPanel* panels, int count, DataType* mat,
-                    cudaStream_t stream);
-void launch_id_scatter(const IdPanel* panels, int count, const DataType* mat, const int* jpvt,
-                       const int* rank, DataType* x, cudaStream_t stream);
+template<typename T>
+void launch_id_load(const T* entries, const IdPanel* panels, int count, T* mat, cudaStream_t stream);
+template<typename T>
+void launch_id_scatter(const IdPanel* panels, int count, const T* mat, const int* jpvt, const int* rank, T* x,
+                       cudaStream_t stream);
 
 }  // namespace gpu
 }  // namespace bf

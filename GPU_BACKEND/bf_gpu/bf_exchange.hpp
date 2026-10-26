@@ -117,7 +117,7 @@ struct ExchangePlan {
 // them; `level_in`/`level_out` are the vector levels the records leave and
 // enter.  Collective over the block's communicator.
 ExchangePlan build_plan(const BfBridge& bridge, int level, char mode, char collect,
-                        const VecLevel& level_in, VecLevel& level_out);
+                        const VecGrid& level_in, VecGrid& level_out);
 
 // The midpoint redistribution (BF_all2all_vec_n_ker with kerflag = 0), which
 // moves a level between the row-wise and column-wise orderings.  `level` is
@@ -125,8 +125,8 @@ ExchangePlan build_plan(const BfBridge& bridge, int level, char mode, char colle
 // takes them.  `dst` is filled in here, grid and heights both: its grid is
 // the target range, and the height of a block it receives is only known from
 // the arrival, since no product on this rank writes it.  Collective.
-ExchangePlan build_all2all_plan(const BfBridge& bridge, int level, char mode_new, const VecLevel& src,
-                                VecLevel& dst);
+ExchangePlan build_all2all_plan(const BfBridge& bridge, int level, char mode_new, const VecGrid& src,
+                                VecGrid& dst);
 
 void release_plan(ExchangePlan& plan);
 
@@ -160,24 +160,30 @@ GroupPlan build_group_plan(MPI_Comm comm, bool sum, int vec, size_t block);
 // rank p.  Through NCCL on the stream when the group has it (a GPU a rank, on
 // one node or with NCCL's network plugin), else MPI_Alltoallv through pinned
 // host memory.  Collective.
-void alltoallv_device(MPI_Comm comm, const DataType* send, const int64_t* scount, DataType* recv,
-                      const int64_t* rcount, cudaStream_t stream);
+template<typename T>
+void alltoallv_device(MPI_Comm comm, const T* send, const int64_t* scount, T* recv, const int64_t* rcount,
+                      cudaStream_t stream);
 
 // The sum or the broadcast of n elements at data, on the device, ordered on
 // the stream.
-void group_level(const GroupPlan& g, DataType* data, int64_t n, cudaStream_t stream);
+template<typename T>
+void group_level(const GroupPlan& g, T* data, int64_t n, cudaStream_t stream);
 
 // Pack, exchange and accumulate, for `nrhs` right-hand sides.  `src` is the
 // level the records come from and `dst` the one they go into; the CPU passes
 // the same array for both, and so may a caller here.
-void exchange_level(ExchangePlan& plan, const VecLevel& src, VecLevel& dst, int nrhs,
-                    int tag, cudaStream_t stream);
+template<typename T>
+void exchange_level(ExchangePlan& plan, const VecLevel<T>& src, VecLevel<T>& dst, int nrhs, int tag,
+                    cudaStream_t stream);
 
 // Kernels, implemented in bf_exchange.cu.
-void launch_pack(const DataType* level, const ExchangeRecord* recs, int nrecs, const int64_t* displ,
-                 int nrhs, DataType* buf, cudaStream_t stream);
-void launch_unpack(DataType* level, const ExchangeRecord* recs, int nrecs, const int64_t* displ,
-                   int nrhs, const DataType* buf, cudaStream_t stream);
+// (each defined for double and fmm::gpu::dcomplex in bf_exchange.cu)
+template<typename T>
+void launch_pack(const T* level, const ExchangeRecord* recs, int nrecs, const int64_t* displ, int nrhs, T* buf,
+                 cudaStream_t stream);
+template<typename T>
+void launch_unpack(T* level, const ExchangeRecord* recs, int nrecs, const int64_t* displ, int nrhs, const T* buf,
+                   cudaStream_t stream);
 
 }  // namespace gpu
 }  // namespace bf

@@ -70,7 +70,9 @@ namespace gpu {
 
 // A panel of the range finder or of the solve: m0 rows of s0 then m1 of s1,
 // columns col0 .. col0 + ncols, into dst (ld ldd), or its transpose.
+template<typename T>
 struct PanelItem {
+    using DataType = T;
     const DataType* s0 = nullptr;
     int ld0 = 0, m0 = 0;
     const DataType* s1 = nullptr;
@@ -85,7 +87,9 @@ struct PanelItem {
 // rows 0 .. m0 into out0 and m0 .. m into out1, as they are (rows x rank) or
 // transposed (rank x rows).  zero: Q is zero (a panel the host's range finder
 // calls empty or negligible).  q: scratch, m x rank.
+template<typename T>
 struct RangeItem {
+    using DataType = T;
     DataType* a = nullptr;
     const DataType* tau = nullptr;
     DataType* q = nullptr;
@@ -100,7 +104,9 @@ struct RangeItem {
 // jpvt, scalars tau, normalized by *scale) and B (mm x n, ld mm, destroyed);
 // X(:, 0 .. m0)^T into out0 (m0 x r) and X(:, m0 .. n)^T into out1, both
 // zeroed beforehand.
+template<typename T>
 struct SolveItem {
+    using DataType = T;
     DataType* a = nullptr;
     const DataType* tau = nullptr;
     const int* jpvt = nullptr;
@@ -114,19 +120,28 @@ struct SolveItem {
 };
 
 // n elements from src to dst
+template<typename T>
 struct CopyItem {
+    using DataType = T;
     const DataType* src = nullptr;
     DataType* dst = nullptr;
     int64_t n = 0;
 };
 
-void launch_fill_uniform(DataType* x, int64_t ld, int64_t row0, int64_t nrows, int64_t col0, int64_t ncols,
-                         uint64_t seed, int64_t hash_row0, cudaStream_t stream);
-void launch_fill_value(DataType* x, int64_t n, DataType v, cudaStream_t stream);
-void launch_panels(const PanelItem* items, int count, double* amax, cudaStream_t stream);
-void launch_range(const RangeItem* items, int count, cudaStream_t stream);
-void launch_solve(const SolveItem* items, int count, cudaStream_t stream);
-void launch_copies(const CopyItem* items, int count, cudaStream_t stream);
+// (each defined for double and fmm::gpu::dcomplex in bf_randomized.cu)
+template<typename T>
+void launch_fill_uniform(T* x, int64_t ld, int64_t row0, int64_t nrows, int64_t col0, int64_t ncols, uint64_t seed,
+                         int64_t hash_row0, cudaStream_t stream);
+template<typename T>
+void launch_fill_value(T* x, int64_t n, T v, cudaStream_t stream);
+template<typename T>
+void launch_panels(const PanelItem<T>* items, int count, double* amax, cudaStream_t stream);
+template<typename T>
+void launch_range(const RangeItem<T>* items, int count, cudaStream_t stream);
+template<typename T>
+void launch_solve(const SolveItem<T>* items, int count, cudaStream_t stream);
+template<typename T>
+void launch_copies(const CopyItem<T>* items, int count, cudaStream_t stream);
 
 // The pinned host buffers of the constructions, kept for the process (as
 // fmm::gpu::pinned_pool: pinning costs tens of milliseconds, and freeing from
@@ -152,24 +167,29 @@ inline RandomizedHost& randomized_host() {
 // blocks (ld = rows), row-major in b.  On several ranks the grid is this
 // rank's blocks, the global (one-based) index of local block (i, j) being
 // idx_r + i inc_r, idx_c + j inc_c, as the Fortran's descriptors give it.
+template<typename T>
 struct RBlock {
+    using DataType = T;
     DataType* ptr = nullptr;
     int rows = 0, cols = 0;
 };
+template<typename T>
 struct RLevel {
     int nr = 0, nc = 0;
     int idx_r = 1, inc_r = 1, idx_c = 1, inc_c = 1;
-    std::vector<RBlock> b;
+    std::vector<RBlock<T>> b;
     std::vector<char*> owned;
-    RBlock& at(int i, int j) { return b[static_cast<size_t>(i) * nc + j]; }
-    const RBlock& at(int i, int j) const { return b[static_cast<size_t>(i) * nc + j]; }
+    RBlock<T>& at(int i, int j) { return b[static_cast<size_t>(i) * nc + j]; }
+    const RBlock<T>& at(int i, int j) const { return b[static_cast<size_t>(i) * nc + j]; }
 };
 
 // The black box: y = op(A) x, all on the device; op 'N' takes x N x nvec to
 // y M x nvec, 'T' x M x nvec to y N x nvec (ld = rows).  It writes all of y,
 // and is complete on return.
-using BlackBox = std::function<void(char op, int nvec, const DataType* x, DataType* y)>;
+template<typename T>
+using BlackBox = std::function<void(char op, int nvec, const T* x, T* y)>;
 
+template<typename T>
 struct RandomizedConfig {
     int L = 0, level_half = 0;
     int64_t M = 0, N = 0;
@@ -183,7 +203,7 @@ struct RandomizedConfig {
     int nproc = 1;
     MPI_Comm comm = MPI_COMM_NULL;
     int64_t M_loc = 0, N_loc = 0, row0 = 0, col0 = 0;
-    BfDevice layout;
+    BfDevice<T> layout;
     BfBridge bridge;
     int rank0 = 32;
     double rankrate = 1.2;
@@ -203,8 +223,25 @@ struct RandomizedProfile {
     double error = 0;
 };
 
+template<typename T>
 class Randomized {
 public:
+    // the scalar's types, by the names the members use
+    using DataType = T;
+    using PanelItem = bf::gpu::PanelItem<T>;
+    using RangeItem = bf::gpu::RangeItem<T>;
+    using SolveItem = bf::gpu::SolveItem<T>;
+    using CopyItem = bf::gpu::CopyItem<T>;
+    using RBlock = bf::gpu::RBlock<T>;
+    using RLevel = bf::gpu::RLevel<T>;
+    using BlackBox = bf::gpu::BlackBox<T>;
+    using RandomizedConfig = bf::gpu::RandomizedConfig<T>;
+    using BfDevice = bf::gpu::BfDevice<T>;
+    using SweepPlan = bf::gpu::SweepPlan<T>;
+    using VecLevel = bf::gpu::VecLevel<T>;
+    using GemmItem = bf::gpu::GemmItem<T>;
+    using SweepScratch = bf::gpu::SweepScratch<T>;
+
     Randomized(const RandomizedConfig& config, BlackBox blackbox) : c_(config), bb_(std::move(blackbox)) {}
     ~Randomized() { release(); }
     Randomized(const Randomized&) = delete;
@@ -464,10 +501,10 @@ private:
     // byte offsets of several arrays in one allocation
     struct Layout {
         size_t size = 0;
-        template<typename T>
+        template<typename E>
         size_t add(int64_t count) {
             const size_t at = size;
-            size = fmm::gpu::align_up(at + static_cast<size_t>(std::max<int64_t>(count, 1)) * sizeof(T));
+            size = fmm::gpu::align_up(at + static_cast<size_t>(std::max<int64_t>(count, 1)) * sizeof(E));
             return at;
         }
     };
@@ -821,9 +858,9 @@ private:
         // one block of scratch: the norms and ranks first (one copy back)
         const size_t wbytes = fmm::gpu::qrcp_work_bytes<DataType>(count, max_n);
         Layout lay;
-        const size_t o_norm = lay.add<double>(count), o_rank = lay.add<int>(count), o_flag = lay.add<int>(count);
-        const size_t o_mats = lay.add<DataType>(elems), o_jpvt = lay.add<int>(piv), o_tau = lay.add<DataType>(taus);
-        const size_t o_work = lay.add<char>(static_cast<int64_t>(wbytes));
+        const size_t o_norm = lay.template add<double>(count), o_rank = lay.template add<int>(count), o_flag = lay.template add<int>(count);
+        const size_t o_mats = lay.template add<DataType>(elems), o_jpvt = lay.template add<int>(piv), o_tau = lay.template add<DataType>(taus);
+        const size_t o_work = lay.template add<char>(static_cast<int64_t>(wbytes));
         std::vector<char*> own;
         char* base = take_bytes(lay.size, own);
         double* norm = reinterpret_cast<double*>(base + o_norm);
@@ -947,10 +984,10 @@ private:
         }
         const size_t wbytes = fmm::gpu::qrcp_work_bytes<DataType>(count, max_n);
         Layout lay;
-        const size_t o_a = lay.add<DataType>(ae), o_b = lay.add<DataType>(be), o_amax = lay.add<double>(count);
-        const size_t o_jpvt = lay.add<int>(piv), o_rank = lay.add<int>(count), o_flag = lay.add<int>(count);
-        const size_t o_norm = lay.add<double>(count), o_tau = lay.add<DataType>(taus);
-        const size_t o_work = lay.add<char>(static_cast<int64_t>(wbytes));
+        const size_t o_a = lay.template add<DataType>(ae), o_b = lay.template add<DataType>(be), o_amax = lay.template add<double>(count);
+        const size_t o_jpvt = lay.template add<int>(piv), o_rank = lay.template add<int>(count), o_flag = lay.template add<int>(count);
+        const size_t o_norm = lay.template add<double>(count), o_tau = lay.template add<DataType>(taus);
+        const size_t o_work = lay.template add<char>(static_cast<int64_t>(wbytes));
         std::vector<char*> own;
         char* base = take_bytes(lay.size, own);
         DataType* A = reinterpret_cast<DataType*>(base + o_a);
