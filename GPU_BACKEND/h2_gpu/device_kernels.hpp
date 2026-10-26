@@ -41,6 +41,41 @@ struct GatherItemT {
 };
 using GatherItem = GatherItemT<double>;
 
+// out[out_rows[i] * ors + j * ocs] = src[src_rows[i] * rs + j * cs], or += with
+// add (i < m, j < n): rows gathered and scattered in one.  The items of a
+// launch write distinct entries.
+template<typename T>
+struct IndexCopyItemT {
+    T* out;
+    int64_t ors;
+    int64_t ocs;
+    IndexList out_rows;
+    const T* src;
+    int64_t rs;
+    int64_t cs;
+    IndexList src_rows;
+    int m;
+    int n;
+    int add;
+};
+
+// out(i, j) = a(rows[i], cols[j]) of a column-major matrix (leading dimension
+// lda) held as chunks of `chunk` elements, chunk k at pool + slot[k] * chunk
+// (the chunks a gather reads, decompressed: H2_partial's records)
+template<typename T>
+struct ChunkGatherItemT {
+    T* out;
+    int ld;
+    int m;
+    int n;
+    const T* pool;
+    IndexList slot;
+    int64_t chunk;
+    int64_t lda;
+    IndexList rows;
+    IndexList cols;
+};
+
 // out[i * ors + j * ocs] = a(i, j) + b(i, j)
 template<typename T>
 struct AddStoreItemT {
@@ -254,6 +289,12 @@ void launch_gather(const GatherItemT<T>* items, int count, int max_m, int max_n,
 template<typename T>
 void launch_add_store(const AddStoreItemT<T>* items, int count, int max_m, int max_n,
                       cudaStream_t stream);
+template<typename T>
+void launch_index_copy(const IndexCopyItemT<T>* items, int count, int max_m, int max_n, const char* meta,
+                       cudaStream_t stream);
+template<typename T>
+void launch_chunk_gather(const ChunkGatherItemT<T>* items, int count, int max_m, int max_n, const char* meta,
+                         cudaStream_t stream);
 template<typename T>
 void launch_sym_add(const SymAddItemT<T>* items, int count, int max_n, cudaStream_t stream);
 // a := (a + a^T) / 2 of each item's n x n matrix (the symmetric part)

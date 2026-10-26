@@ -61,6 +61,7 @@ struct DriverOptions {
   int inv_mult_check = 0;  // columns of the inv_mult / transposed mult check (bpack_inv_mult_check.hpp); 0: none
   int extract_check = 0;   // intersections of the extraction check of a compression-only H2 (precon 2); 0: none
   int64_t h2_partial = 0;  // H2_partial: the first h2_partial points (the grid's first planes) form F11
+  int h2_partial_extract = 0;  // H2_partial_extract: 0 auto, 1 device, 2 host
   int partial_check = 0;   // 1: the partial solves and Schur complement against dense LAPACK on rank 0 (N <= 20000, distributed64 1)
   int partial_extract_bench = 0;  // > 0: that many rounds of parent-like Schur complement blocks through c_bpack_extractelement
   int logdet_check = 0;    // 1: the logdet and a solve again after another H2 is built (format 7, not precon 2)
@@ -261,6 +262,11 @@ DriverOptions parse_driver_options(int argc, char** argv) {
       options.inv_mult_check = parse_int(value, "inv_mult_check");
     } else if (name == "h2_partial") {
       options.h2_partial = parse_int64(value, "H2_partial");
+    } else if (name == "h2_partial_extract") {
+      options.h2_partial_extract = value == "auto"     ? 0
+                                   : value == "device" ? 1
+                                   : value == "host"   ? 2
+                                                       : parse_int(value, "H2_partial_extract");
     } else if (name == "partial_check") {
       options.partial_check = parse_int(value, "partial_check");
     } else if (name == "partial_extract_bench") {
@@ -399,6 +405,9 @@ DriverOptions parse_driver_options(int argc, char** argv) {
   if (options.h2_ca_pack_shared < 0 || options.h2_ca_pack_shared > 2) {
     throw std::invalid_argument("H2_CA_pack_shared must be auto (0), always (1) or never (2)");
   }
+  if (options.h2_partial_extract < 0 || options.h2_partial_extract > 2) {
+    throw std::invalid_argument("H2_partial_extract must be auto (0), device (1) or host (2)");
+  }
   if (options.h2_ca_solve < 0 || options.h2_ca_solve > 1) {
     throw std::invalid_argument("H2_CA_solve must be replicated (0) or home (1)");
   }
@@ -497,6 +506,9 @@ void print_usage(const char* executable) {
          "                                transposed mult alone)\n"
       << "  --H2_partial <n>   (format=7, H2_unstructured 1, sym 0: eliminate the first n points only;\n"
          "                            the Schur complement on the rest is served by c_bpack_partial_*)\n"
+      << "  --H2_partial_extract <auto|device|host>   (with --H2_partial: where the Schur complement's\n"
+         "                            entries are computed; auto: the device when the records are on it\n"
+         "                            and the call is large enough)\n"
       << "  --partial_extract_bench <R>   (with --H2_partial: R rounds of Schur complement blocks as a\n"
       << "                            parent front would read them through c_bpack_extractelement - near\n"
       << "                            field 64 x 64 blocks and 16 x 4096 panels - timed)\n"
@@ -1441,6 +1453,7 @@ int main(int argc, char** argv) {
           driver_options.h2_ca_owner_serial);
       d_c_bpack_set_I_option(option_handle, "precon", driver_options.precon);
       d_c_bpack_set_I_option(option_handle, "H2_partial", static_cast<int>(driver_options.h2_partial));
+      d_c_bpack_set_I_option(option_handle, "H2_partial_extract", driver_options.h2_partial_extract);
       d_c_bpack_set_I_option(
           option_handle, "verbosity", driver_options.verbosity);
       d_c_bpack_set_I_option(

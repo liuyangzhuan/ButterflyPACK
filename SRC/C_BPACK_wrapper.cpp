@@ -458,6 +458,7 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"h2_id_proxy",     "format-7 H2 proxy mode: 0 none, 1 geometric surface, 2 adaptive row sampling"},
 		{"h2_id_proxy_points", "geometric surface samples when h2_id_proxy=1"},
 		{"h2_partial",      "format-7 H2 (H2_unstructured 1, sym 0): partial factorization - the first h2_partial points in input order (F11) are eliminated, the rest (F22) retained; the object then serves the partial solves and the Schur complement F22 - F21 F11^-1 F12 (c_bpack_partial_*); 0 off"},
+		{"h2_partial_extract", "format-7 H2 partial factorization: where the Schur complement's entries (c_bpack_extractelement) are computed: auto (0, default: the device when the records are on it and the call is large enough), device (1, when the records are on it), host (2)"},
 		{"h2_s_op",         "format-7 H2 IDs: an absolute floor tol_comp*h2_s_op on the rank rule, |R_kk| > max(tol_comp |R_11|, tol_comp h2_s_op); 0 off (default). At most ||A|| for compression-only H2 (precon 2), at most 1/||A^-1|| for the factorization (K + tau^2 I: tau^2)"},
 		{"errfillfull",     "errfillfull: a slow (n^2), thorough error checking is performed after the compression of each block"},
 		{"baca_batch",      "block size in batched ACA when reclr_leaf=4 or 5; adaptive H2 rows per spatial node when h2_id_proxy=2"},
@@ -590,6 +591,8 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"H2_s_op", required_argument, 0, 1004},
 		{"h2_partial", required_argument, 0, 1005},
 		{"H2_partial", required_argument, 0, 1005},
+		{"h2_partial_extract", required_argument, 0, 1006},
+		{"H2_partial_extract", required_argument, 0, 1006},
 		{"H2_use_gpu", required_argument, 0, 59},
 		{"hodlr_use_gpu", required_argument, 0, 60},
 		{"HODLR_use_gpu", required_argument, 0, 60},
@@ -924,6 +927,14 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		std::istringstream iss(optarg);
 		iss >> opt_i;
 		c_bpack_set_I_option(&option0, "H2_partial", opt_i);
+		} break;
+		case 1006: {
+		const std::string v(optarg);
+		if (v == "auto") opt_i = 0;
+		else if (v == "device") opt_i = 1;
+		else if (v == "host") opt_i = 2;
+		else { std::istringstream iss(v); iss >> opt_i; }
+		c_bpack_set_I_option(&option0, "H2_partial_extract", opt_i);
 		} break;
 		case 61: {
 		std::istringstream iss(optarg);
@@ -2591,8 +2602,18 @@ static butterfly::H2<double, H2Data>* h2_of(F2Cptr* bmat) {
 // partial factorization (H2_partial; every caller rank passing the same):
 // the blocks of its Schur complement instead, the indices 1-based F22 ones
 // (unstructured/partial.hpp, extract_partial_blocks).
+// H2_partial_extract (0 auto, 1 device, 2 host): where a partial
+// factorization's Schur complement entries are computed.
+static int partial_extract_of(F2Cptr* option) {
+  double v = 0.0;
+  c_bpack_getoption(option, "H2_partial_extract", &v);
+  const int mode = static_cast<int>(std::llround(v));
+  if (mode < 0 || mode > 2) throw std::invalid_argument("H2_partial_extract must be 0 (auto), 1 (device) or 2 (host)");
+  return mode;
+}
+
 static void h2_extract_elements(
-    F2Cptr* bmat, MPI_Comm caller_comm, bool partial, int* Ninter, int* allrows, int* allcols,
+    F2Cptr* bmat, MPI_Comm caller_comm, bool partial, int partial_extract, int* Ninter, int* allrows, int* allcols,
     C_DT* alldat_loc, int* rowidx, int* colidx, int* pgidx, int* Npmap,
     int* pmaps, const char* caller) {
   using H2Data = typename butterfly::fmm_data<C_DT>::type;
@@ -2602,7 +2623,7 @@ static void h2_extract_elements(
     butterfly::H2<double, H2Data>* h2 = h2_of<H2Data>(bmat);
     butterfly::color_unstructured::extract_partial_blocks(
       h2 != nullptr ? h2->tree.get() : nullptr, caller_comm, *Ninter, allrows, allcols, rowidx, colidx, owner,
-      reinterpret_cast<H2Data*>(alldat_loc));
+      reinterpret_cast<H2Data*>(alldat_loc), partial_extract);
     return;
   }
   butterfly::color_unstructured::extract_compressed_blocks(
@@ -2725,7 +2746,7 @@ void c_bpack_partial_schur_extract(C_DT* out, int const* rows, int* nrows, int c
   std::vector<int64_t> r(rows, rows + std::max(*nrows, 0)), c(cols, cols + std::max(*ncols, 0));
   butterfly::color_unstructured::partial_schur_entries(
     *H2_solver->tree, r.data(), static_cast<int64_t>(r.size()), c.data(), static_cast<int64_t>(c.size()),
-    reinterpret_cast<H2Data*>(out));
+    reinterpret_cast<H2Data*>(out), partial_extract_of(option));
 #else
   format7_requires_mpi("c_bpack_partial_schur_extract");
 #endif
@@ -2772,8 +2793,8 @@ void c_bpack_extractelement(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stat
     // (every rank holds the matrix, so its kind needs no collective)
     const bool partial = h2->build_state == butterfly::H2BuildState::RS_PARTIAL;
     try {
-      h2_extract_elements(bmat, comm, partial, Ninter, allrows, allcols, alldat_loc,
-                          rowidx, colidx, pgidx, Npmap, pmaps, "c_bpack_extractelement");
+      h2_extract_elements(bmat, comm, partial, partial ? partial_extract_of(option) : 0, Ninter, allrows, allcols,
+                          alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps, "c_bpack_extractelement");
     } catch (const std::exception& e) {
       int rank = 0;
       MPI_Comm_rank(comm, &rank);
@@ -2801,6 +2822,7 @@ void c_bpack_extractelement_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cpt
   // and whether it is a partial factorization, in the same reduction
   using H2Data = typename butterfly::fmm_data<C_DT>::type;
   int kind[2] = {-1, 0};
+  int partial_extract = 0;  // (read where the matrix is: only its ranks compute)
   if (option != nullptr && *option != nullptr) {
     double tmp = 0.0;
     c_bpack_getoption(option, "format", &tmp);
@@ -2808,13 +2830,14 @@ void c_bpack_extractelement_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cpt
     if (kind[0] == 7) {
       butterfly::H2<double, H2Data>* h2 = h2_of<H2Data>(bmat);
       kind[1] = h2 != nullptr && h2->build_state == butterfly::H2BuildState::RS_PARTIAL ? 1 : 0;
+      if (kind[1] != 0) partial_extract = partial_extract_of(option);
     }
   }
   MPI_Allreduce(MPI_IN_PLACE, kind, 2, MPI_INT, MPI_MAX, caller_comm);
   const int format = kind[0];
   if (format == 7) {
     try {
-      h2_extract_elements(bmat, caller_comm, kind[1] != 0, Ninter, allrows, allcols, alldat_loc,
+      h2_extract_elements(bmat, caller_comm, kind[1] != 0, partial_extract, Ninter, allrows, allcols, alldat_loc,
                           rowidx, colidx, pgidx, Npmap, pmaps, "c_bpack_extractelement_bridge");
     } catch (const std::exception& e) {
       int rank = 0;

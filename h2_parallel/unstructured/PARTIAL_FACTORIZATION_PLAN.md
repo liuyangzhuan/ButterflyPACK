@@ -533,6 +533,35 @@ point set and on a plain cube split, dense checks at small N.
     decompression of all 31.6 GB each product); raw records (31.7 GB) do not
     fit a 40 GB card there and the host product runs.  The host copies stay
     (the CB entries read them until G3); T22 stays on the host (the passes).
-  - **G3:** the CB entries on the device: the host plans the block pairs, the
-    device decompresses the chunks they read, gathers, multiplies (batched)
-    and scatter-adds.
+  - **G3 done 2026-10-26 (uncommitted):** the CB entries on the device, with the
+    host extraction kept selectable: solver option `H2_partial_extract`
+    (0 auto, the default: device when the records are resident and the
+    call is large enough, else host; 1 device when resident; 2 host; the
+    drivers take auto/device/host).  The chain blocks live on the device for
+    the whole call (the leaves' identity blocks, the T22 steps, the merges,
+    the pair terms, the root pairs); the host plans the index lists, keeps
+    the exchanges (only the exchanged blocks come down and go up) and the
+    sums into the output.  Compressed records: only the chunks a call
+    touches are decompressed (about 6% of them on the bench), into a pool
+    read through a chunk table.  T22 joins the resident data.  Moving the
+    pair terms alone would leave the T22 steps and the merges (0.16 s of a
+    0.33 s round) on the host and upload the blocks every level.
+    Built as partial_schur_blocks_device (partial.hpp) over the shared
+    request setup (partial_leaf_index, partial_cb_side) and h2_gpu/
+    partial_device.hpp's PartialDeviceWork and partial_device_pairs (a group
+    of pairs' terms: one metadata image, one batched decompression of the
+    chunks they read, gathers, GEMM rounds by term kind, one download); new
+    kernels index_copy and chunk_gather (device_kernels.cu).  Transfers go
+    through the two pinned staging buffers in 64 MB pieces (a growing pinned
+    buffer cost 0.15 s a call on the rank receiving most).  BPACK_CHECK=solve:
+    device vs host 3e-17 .. 3e-16, 1/3/8 ranks, compressed and not; dense
+    checks unchanged; extractelement still equals the single-block call.
+    64^3 bench: one GPU, compressed records 0.434 -> 0.099 s (5.4 -> 23.7 M
+    entries/s); 4 ranks 0.285 -> 0.256 (raw), 0.371 -> 0.262 (compressed),
+    left: the level-2 exchanges (about 100 MB a rank packed on the host, then
+    100 MB to rank 0), a GPU-to-GPU exchange's job.  Raw records at 64^3 do
+    not fit one card: the host runs.  Small calls lose on the device (20^3,
+    4 small blocks: 4.1 ms against 2.5 ms): auto takes the device from 2^16
+    entries a call (kPartialExtractDeviceEntries, uncalibrated).  Next: the
+    records kept on the device from the factorization (no host copies), once
+    STRUMPACK's call sizes are known.

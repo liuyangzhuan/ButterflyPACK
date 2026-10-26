@@ -65,6 +65,7 @@ struct PartialDeviceBox {
     int64_t bi = 0;                // its local index at the level
     int r = 0, kp = 0, total = 0;  // R22, S' (after the step), X_RN's columns
     PartialDeviceRecord rr, rs, sr, rn;
+    PartialDeviceRecord t22;              // T22 (kp x r, raw: the CB entries' chain steps)
     std::vector<PartialDeviceRecord> nr;  // per one-hop slot (rows 0: none)
     int64_t pw_off = 0, rn_off = 0, out_off = 0;
     std::vector<int64_t> t_off;           // per one-hop slot, t_q's place after gR and gS
@@ -274,7 +275,7 @@ bool partial_device_ready(ParallelTree<CoordType, DataType>* tree, int verbosity
                 return m.rows == rows && m.cols == cols && (m.compressed() || m.lda == rows);
             };
             bool ok = shape(f.X_RR, B.r, B.r) && shape(f.X_RS, B.r, B.kp) && shape(f.X_SR, B.kp, B.r) &&
-                      shape(f.X_RN, B.r, B.total);
+                      shape(f.X_RN, B.r, B.total) && shape(f.T, B.kp, B.r) && !f.T.compressed();
             int64_t tcols = 0;
             B.nr.resize(nslots);
             B.t_off.assign(nslots, 0);
@@ -317,6 +318,13 @@ bool partial_device_ready(ParallelTree<CoordType, DataType>* tree, int verbosity
             add(B.sr, f.X_SR);
             add(B.rn, f.X_RN);
             for (size_t q = 0; q < B.nr.size(); ++q) add(B.nr[q], f.X_NR[q]);
+            // (T22, raw, is never decompressed: outside the box's scratch)
+            B.t22.rows = f.T.rows;
+            B.t22.cols = f.T.cols;
+            if (f.T.rows * f.T.cols > 0) {
+                record_bytes += align_up(static_cast<size_t>(f.T.rows * f.T.cols) * D);
+                placed.push_back(Placed{&B.t22, &f.T});
+            }
             box_raw.push_back(raw);
             largest_box_raw = std::max(largest_box_raw, raw);
             level_raw += raw;
@@ -723,6 +731,387 @@ void partial_device_root(const DataType* v, int64_t ncol, DataType* g) {
     check_cuda(cudaStreamSynchronize(stream), "partial CB root");
     heap.free(d);
     std::memcpy(g, ho, bytes);
+}
+
+// ---------------------------------------------------------------------------
+// The CB entries on the device (unstructured/partial.hpp
+// partial_schur_blocks_device): transient device memory, transfers through
+// the store's pinned buffers, and the pair terms' executor.
+// ---------------------------------------------------------------------------
+class PartialDeviceWork {
+public:
+    PartialDeviceWork() : st_(partial_device_store()), heap_(DeviceHeap::instance()) {
+        Context& ctx = Context::instance();
+        ctx.activate();
+        stream_ = ctx.stream();
+        queue_ = ctx.queue();
+        for (cudaEvent_t& e : staged_) check_cuda(cudaEventCreateWithFlags(&e, cudaEventDisableTiming), "cudaEventCreate");
+    }
+    ~PartialDeviceWork() {
+        cudaStreamSynchronize(stream_);
+        for (char* p : held_) heap_.free(p);
+        for (cudaEvent_t e : staged_) cudaEventDestroy(e);
+    }
+    PartialDeviceWork(const PartialDeviceWork&) = delete;
+    PartialDeviceWork& operator=(const PartialDeviceWork&) = delete;
+
+    // transient device memory, freed by release() or at the end (the stream
+    // keeps a later user of the same bytes behind the earlier kernels)
+    char* alloc(size_t bytes) {
+        char* p = heap_.alloc(std::max<size_t>(align_up(bytes), 256));
+        held_.push_back(p);
+        return p;
+    }
+    void release(char* p) {
+        if (p == nullptr) return;
+        auto it = std::find(held_.begin(), held_.end(), p);
+        if (it != held_.end()) held_.erase(it);
+        heap_.free(p);
+    }
+    void zero(void* p, size_t bytes) {
+        if (bytes > 0) check_cuda(cudaMemsetAsync(p, 0, bytes, stream_), "partial CB zero");
+    }
+    // (host copies through the pinned buffers by all threads)
+    static void copy(void* dst, const void* src, size_t bytes) {
+        constexpr size_t kPiece = size_t{4} << 20;
+        const int64_t n = static_cast<int64_t>((bytes + kPiece - 1) / kPiece);
+#pragma omp parallel for schedule(static) if (n > 1)
+        for (int64_t i = 0; i < n; ++i) {
+            const size_t a = static_cast<size_t>(i) * kPiece;
+            std::memcpy(static_cast<char*>(dst) + a, static_cast<const char*>(src) + a, std::min(kPiece, bytes - a));
+        }
+    }
+    // Transfers through the backend's two pinned staging buffers, a piece of
+    // kStage bytes at a time (they stay at their size: growing a pinned
+    // buffer costs about a second per GB)
+    void upload(void* dst, const void* src, size_t bytes) {
+        for (size_t at = 0, k = 0; at < bytes; at += kStage, ++k) {
+            const size_t n = std::min(kStage, bytes - at);
+            const int turn = static_cast<int>(k & 1);
+            if (k >= 2) check_cuda(cudaEventSynchronize(staged_[turn]), "partial CB upload");
+            char* h = static_cast<char*>(pinned_pool().staging[turn].reserve(kStage));
+            copy(h, static_cast<const char*>(src) + at, n);
+            check_cuda(cudaMemcpyAsync(static_cast<char*>(dst) + at, h, n, cudaMemcpyHostToDevice, stream_), "partial CB upload");
+            check_cuda(cudaEventRecord(staged_[turn], stream_), "cudaEventRecord");
+        }
+        check_cuda(cudaStreamSynchronize(stream_), "partial CB upload");
+    }
+    void download(void* dst, const void* src, size_t bytes) {
+        for (size_t at = 0, k = 0; at < bytes; at += kStage, ++k) {
+            const size_t n = std::min(kStage, bytes - at);
+            char* h = static_cast<char*>(pinned_pool().staging[k & 1].reserve(kStage));
+            check_cuda(cudaMemcpyAsync(h, static_cast<const char*>(src) + at, n, cudaMemcpyDeviceToHost, stream_),
+                       "partial CB download");
+            check_cuda(cudaStreamSynchronize(stream_), "partial CB download");
+            copy(static_cast<char*>(dst) + at, h, n);
+        }
+    }
+    MetaBuilder& meta() {
+        st_.meta.clear();
+        return st_.meta;
+    }
+    char* upload_meta() { return st_.meta.upload(st_.meta_device, stream_); }
+    void sync() { check_cuda(cudaStreamSynchronize(stream_), "partial CB"); }
+    cudaStream_t stream() const { return stream_; }
+    magma_queue_t queue() const { return queue_; }
+    PartialDeviceStore& store() { return st_; }
+    // what a group of terms may take
+    size_t budget() const {
+        const size_t free = heap_.capacity() > heap_.used() ? heap_.capacity() - heap_.used() : 0;
+        return std::max<size_t>(size_t{64} << 20, std::min<size_t>(size_t{2} << 30, free / 4));
+    }
+
+private:
+    static constexpr size_t kStage = size_t{64} << 20;
+    cudaEvent_t staged_[2] = {nullptr, nullptr};
+    PartialDeviceStore& st_;
+    DeviceHeap& heap_;
+    cudaStream_t stream_ = nullptr;
+    magma_queue_t queue_ = nullptr;
+    std::vector<char*> held_;
+};
+
+// An operand of a term: a block's values on the device (ld rows), all of
+// them, or rows of them gathered (a block's list, or the term's own)
+template<typename DataType>
+struct PartialTermOperand {
+    const DataType* dev = nullptr;
+    int64_t ld = 0;
+    bool gathered = false;
+    const std::vector<int64_t>* rows_ext = nullptr;
+    std::vector<int64_t> rows_own;
+    const std::vector<int64_t>& rows() const { return rows_ext != nullptr ? *rows_ext : rows_own; }
+};
+
+// A term G (ni x nj) += A^T X B of a pair, X (k1 x k2) = rec(rows, cols),
+// A (k1 x ni), B (k2 x nj), in the cheaper order.  kind: its round (a pair
+// has one term of a kind at most; the rounds run in kind order, which is the
+// host's order of a pair's terms).  rec null: X from `raw` (the root block,
+// leading dimension ld).
+template<typename DataType>
+struct PartialTerm {
+    int kind = 0;
+    const PartialDeviceRecord* rec = nullptr;
+    const DataType* raw = nullptr;
+    int64_t ld = 0;
+    // X's rows and columns in the record: a block's lists, or the term's own
+    const std::vector<int64_t>* rows_ext = nullptr;
+    const std::vector<int64_t>* cols_ext = nullptr;
+    std::vector<int64_t> rows_own, cols_own;
+    PartialTermOperand<DataType> a, b;
+    int k1 = 0, k2 = 0;
+    const std::vector<int64_t>& rows() const { return rows_ext != nullptr ? *rows_ext : rows_own; }
+    const std::vector<int64_t>& cols() const { return cols_ext != nullptr ? *cols_ext : cols_own; }
+};
+
+template<typename DataType>
+struct PartialPair {
+    int ni = 0, nj = 0;
+    std::vector<PartialTerm<DataType>> terms;
+};
+
+constexpr int kPartialTermKinds = 6;  // RR, RS, SR, RN, NR, the root
+
+// The chunks of compressed records a term reads (record -> sorted chunk indices)
+template<typename DataType>
+void partial_term_chunks(const PartialTerm<DataType>& t, std::vector<int64_t>& chunks) {
+    chunks.clear();
+    if (t.rec == nullptr || !t.rec->compressed() || t.rows().empty() || t.cols().empty()) return;
+    const int64_t E = static_cast<int64_t>(std::max<size_t>(1, kRecordChunkBytes / sizeof(DataType)));
+    const auto mm = std::minmax_element(t.rows().begin(), t.rows().end());
+    for (int64_t c : t.cols()) {
+        const int64_t lo = (*mm.first + c * t.ld) / E, hi = (*mm.second + c * t.ld) / E;
+        for (int64_t k = lo; k <= hi; ++k) chunks.push_back(k);
+    }
+    std::sort(chunks.begin(), chunks.end());
+    chunks.erase(std::unique(chunks.begin(), chunks.end()), chunks.end());
+}
+
+// Device bytes a pair takes in a group (X, gathered operands, products, G)
+template<typename DataType>
+size_t partial_pair_bytes(const PartialPair<DataType>& p) {
+    size_t e = static_cast<size_t>(p.ni) * static_cast<size_t>(p.nj);
+    for (const auto& t : p.terms) {
+        e += static_cast<size_t>(t.k1) * static_cast<size_t>(t.k2);
+        if (t.a.gathered) e += static_cast<size_t>(t.k1) * static_cast<size_t>(p.ni);
+        if (t.b.gathered) e += static_cast<size_t>(t.k2) * static_cast<size_t>(p.nj);
+        e += std::max(static_cast<size_t>(t.k1) * static_cast<size_t>(p.nj), static_cast<size_t>(p.ni) * static_cast<size_t>(t.k2));
+    }
+    return e * sizeof(DataType) + 256 * (4 + 3 * p.terms.size());
+}
+
+// The G (ni x nj, column major, end to end in pair order) of a group of
+// pairs, into g (host).
+template<typename DataType>
+void partial_device_pairs(PartialDeviceWork& work, const std::vector<const PartialPair<DataType>*>& pairs, DataType* g) {
+    using S = typename DeviceScalar<DataType>::type;
+    const size_t D = sizeof(DataType);
+    if (pairs.empty()) return;
+    // ---- the layout: G of every pair, then per term its X, gathered operands and product
+    struct Place { size_t x = 0, a = 0, b = 0, tmp = 0; bool xb = true; };
+    std::vector<size_t> g_off(pairs.size() + 1, 0);
+    std::vector<std::vector<Place>> place(pairs.size());
+    size_t at = 0;
+    for (size_t q = 0; q < pairs.size(); ++q) {
+        g_off[q] = at;
+        at += align_up(static_cast<size_t>(pairs[q]->ni) * static_cast<size_t>(pairs[q]->nj) * D);
+    }
+    const size_t g_bytes = at;
+    for (size_t q = 0; q < pairs.size(); ++q) {
+        const auto& P = *pairs[q];
+        place[q].resize(P.terms.size());
+        for (size_t t = 0; t < P.terms.size(); ++t) {
+            const auto& T = P.terms[t];
+            Place& pl = place[q][t];
+            const double k1 = T.k1, k2 = T.k2, ni = P.ni, nj = P.nj;
+            pl.xb = k1 * nj * (k2 + ni) <= ni * k2 * (k1 + nj);
+            pl.x = at;
+            at += align_up(static_cast<size_t>(T.k1) * static_cast<size_t>(T.k2) * D);
+            if (T.a.gathered) {
+                pl.a = at;
+                at += align_up(static_cast<size_t>(T.k1) * static_cast<size_t>(P.ni) * D);
+            }
+            if (T.b.gathered) {
+                pl.b = at;
+                at += align_up(static_cast<size_t>(T.k2) * static_cast<size_t>(P.nj) * D);
+            }
+            pl.tmp = at;
+            at += align_up((pl.xb ? static_cast<size_t>(T.k1) * static_cast<size_t>(P.nj)
+                                  : static_cast<size_t>(P.ni) * static_cast<size_t>(T.k2)) * D);
+        }
+    }
+    char* d = work.alloc(at);
+    work.zero(d, g_bytes);
+    // ---- the compressed records' chunks the group reads, into the store's scratch
+    PartialDeviceStore& st = work.store();
+    const int64_t E = static_cast<int64_t>(std::max<size_t>(1, kRecordChunkBytes / D));
+    std::unordered_map<const PartialDeviceRecord*, std::vector<int>> slots;  // record -> chunk -> slot
+    std::vector<const void*> srcs;
+    std::vector<void*> dsts;
+    std::vector<int64_t> chunks;
+    const size_t pool_slots = st.scratch_bytes / static_cast<size_t>(E * static_cast<int64_t>(D));
+    for (const auto* P : pairs) {
+        for (const auto& T : P->terms) {
+            partial_term_chunks(T, chunks);
+            if (chunks.empty()) continue;
+            auto& sl = slots[T.rec];
+            if (sl.empty()) sl.assign(T.rec->chunk_off.size(), -1);
+            for (int64_t k : chunks) {
+                if (sl[static_cast<size_t>(k)] >= 0) continue;
+                if (srcs.size() >= pool_slots) throw std::logic_error("GPU partial CB entries: a group's chunks exceed the scratch");
+                sl[static_cast<size_t>(k)] = static_cast<int>(srcs.size());
+                srcs.push_back(T.rec->dev + T.rec->chunk_off[static_cast<size_t>(k)]);
+                dsts.push_back(st.scratch + srcs.size() * static_cast<size_t>(E) * D - static_cast<size_t>(E) * D);
+            }
+        }
+    }
+    // ---- the metadata: lists, slot tables, gathers, the decompression's pointers, the GEMM batches
+    MetaBuilder& meta = work.meta();
+    std::unordered_map<const void*, size_t> list_at;
+    auto list = [&](const std::vector<int64_t>* v) -> IndexList {
+        auto it = list_at.find(v);
+        if (it == list_at.end()) {
+            std::vector<int> ints(v->begin(), v->end());
+            it = list_at.emplace(v, meta.append(ints)).first;
+        }
+        IndexList l;
+        l.offset = static_cast<int64_t>(it->second);
+        return l;
+    };
+    std::unordered_map<const PartialDeviceRecord*, size_t> slot_at;
+    for (const auto& [rec, sl] : slots) slot_at.emplace(rec, meta.append(sl));
+    std::vector<GatherItemT<S>> gathers;
+    std::vector<ChunkGatherItemT<S>> chunked;
+    int gm = 0, gn = 0, cm = 0, cn = 0;
+    std::vector<VBatch<DataType>> batches(4 * kPartialTermKinds);  // per kind: X B, A^T X; A^T tmp, tmp B
+    for (size_t q = 0; q < pairs.size(); ++q) {
+        const auto& P = *pairs[q];
+        DataType* G = reinterpret_cast<DataType*>(d + g_off[q]);
+        for (size_t t = 0; t < P.terms.size(); ++t) {
+            const auto& T = P.terms[t];
+            const Place& pl = place[q][t];
+            DataType* X = reinterpret_cast<DataType*>(d + pl.x);
+            if (T.rec != nullptr && T.rec->compressed()) {
+                ChunkGatherItemT<S> it{};
+                it.out = reinterpret_cast<S*>(X);
+                it.ld = T.k1;
+                it.m = T.k1;
+                it.n = T.k2;
+                it.pool = reinterpret_cast<const S*>(st.scratch);
+                it.slot.offset = static_cast<int64_t>(slot_at.at(T.rec));
+                it.chunk = E;
+                it.lda = T.ld;
+                it.rows = list(&T.rows());
+                it.cols = list(&T.cols());
+                chunked.push_back(it);
+                cm = std::max(cm, T.k1);
+                cn = std::max(cn, T.k2);
+            } else {
+                GatherItemT<S> it{};
+                it.out = reinterpret_cast<S*>(X);
+                it.ld = T.k1;
+                it.m = T.k1;
+                it.n = T.k2;
+                it.src = reinterpret_cast<const S*>(T.rec != nullptr ? reinterpret_cast<const DataType*>(T.rec->dev) : T.raw);
+                it.rs = 1;
+                it.cs = T.ld;
+                it.rows = list(&T.rows());
+                it.cols = list(&T.cols());
+                gathers.push_back(it);
+                gm = std::max(gm, T.k1);
+                gn = std::max(gn, T.k2);
+            }
+            const DataType* A = T.a.dev;
+            int64_t lda = T.a.ld;
+            if (T.a.gathered) {  // A's rows gathered
+                GatherItemT<S> it{};
+                it.out = reinterpret_cast<S*>(d + pl.a);
+                it.ld = T.k1;
+                it.m = T.k1;
+                it.n = P.ni;
+                it.src = reinterpret_cast<const S*>(T.a.dev);
+                it.rs = 1;
+                it.cs = T.a.ld;
+                it.rows = list(&T.a.rows());
+                gathers.push_back(it);
+                gm = std::max(gm, T.k1);
+                gn = std::max(gn, P.ni);
+                A = reinterpret_cast<const DataType*>(d + pl.a);
+                lda = T.k1;
+            }
+            const DataType* B = T.b.dev;
+            int64_t ldb = T.b.ld;
+            if (T.b.gathered) {
+                GatherItemT<S> it{};
+                it.out = reinterpret_cast<S*>(d + pl.b);
+                it.ld = T.k2;
+                it.m = T.k2;
+                it.n = P.nj;
+                it.src = reinterpret_cast<const S*>(T.b.dev);
+                it.rs = 1;
+                it.cs = T.b.ld;
+                it.rows = list(&T.b.rows());
+                gathers.push_back(it);
+                gm = std::max(gm, T.k2);
+                gn = std::max(gn, P.nj);
+                B = reinterpret_cast<const DataType*>(d + pl.b);
+                ldb = T.k2;
+            }
+            DataType* tmp = reinterpret_cast<DataType*>(d + pl.tmp);
+            const magma_int_t k1 = T.k1, k2 = T.k2, ni = P.ni, nj = P.nj;
+            auto& b = batches;
+            const size_t base = static_cast<size_t>(4 * T.kind);
+            if (pl.xb) {  // tmp = X B; G += A^T tmp
+                b[base].entries.push_back({X, B, tmp, k1, nj, k2, k1, static_cast<magma_int_t>(ldb), k1});
+                b[base + 2].entries.push_back({A, tmp, G, ni, nj, k1, static_cast<magma_int_t>(lda), k1, ni});
+            } else {      // tmp = A^T X; G += tmp B
+                b[base + 1].entries.push_back({A, X, tmp, ni, k2, k1, static_cast<magma_int_t>(lda), k1, ni});
+                b[base + 3].entries.push_back({tmp, B, G, ni, nj, k2, ni, static_cast<magma_int_t>(ldb), ni});
+            }
+        }
+    }
+    const size_t gathers_off = meta.append(gathers), chunked_off = meta.append(chunked);
+    const size_t srcs_off = meta.append(srcs), dsts_off = meta.append(dsts);
+    for (auto& b : batches) b.stage(meta);
+    char* md = work.upload_meta();
+    cudaStream_t stream = work.stream();
+    launch_gather(reinterpret_cast<const GatherItemT<S>*>(md + gathers_off), static_cast<int>(gathers.size()), gm, gn, md, stream);
+    if (!srcs.empty()) {
+#ifdef H2_HAVE_NVCOMP
+        const void** d_srcs = reinterpret_cast<const void**>(md + srcs_off);
+        void** d_dsts = reinterpret_cast<void**>(md + dsts_off);
+        bitcompHandle_t plan{};
+        if (bitcompCreateBatchPlanFromCompressedData(&plan, d_srcs, srcs.size(), nullptr, stream) != BITCOMP_SUCCESS) {
+            throw std::runtime_error("GPU partial CB entries: a decompression plan");
+        }
+        bitcompSetStream(plan, stream);
+        const bitcompResult_t r = bitcompBatchUncompress(plan, d_srcs, d_dsts);
+        bitcompDestroyPlan(plan);
+        if (r != BITCOMP_SUCCESS) throw std::runtime_error("GPU partial CB entries: decompressing records failed");
+#else
+        throw std::logic_error("GPU partial CB entries: compressed records without a compressor");
+#endif
+    }
+    launch_chunk_gather(reinterpret_cast<const ChunkGatherItemT<S>*>(md + chunked_off), static_cast<int>(chunked.size()), cm, cn,
+                        md, stream);
+    magma_queue_t queue = work.queue();
+    for (int k = 0; k < kPartialTermKinds; ++k) {
+        const size_t base = static_cast<size_t>(4 * k);
+        if (batches[base].count() > 0) batches[base].gemm(md, MagmaNoTrans, MagmaNoTrans, DataType(1), DataType(0), queue);
+        if (batches[base + 1].count() > 0) batches[base + 1].gemm(md, MagmaTrans, MagmaNoTrans, DataType(1), DataType(0), queue);
+        if (batches[base + 2].count() > 0) batches[base + 2].gemm(md, MagmaTrans, MagmaNoTrans, DataType(1), DataType(1), queue);
+        if (batches[base + 3].count() > 0) batches[base + 3].gemm(md, MagmaNoTrans, MagmaNoTrans, DataType(1), DataType(1), queue);
+    }
+    // G of the pairs, end to end
+    std::vector<DataType> all(g_bytes / D);
+    work.download(all.data(), d, g_bytes);
+    size_t o = 0;
+    for (size_t q = 0; q < pairs.size(); ++q) {
+        const size_t n = static_cast<size_t>(pairs[q]->ni) * static_cast<size_t>(pairs[q]->nj);
+        std::copy_n(all.data() + g_off[q] / D, n, g + o);
+        o += n;
+    }
+    work.release(d);
 }
 
 // c_bpack_partial_schur_release: the device copies go with the host's.
