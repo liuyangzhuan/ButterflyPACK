@@ -22,7 +22,8 @@
 # 2.9 GB, some blocks a GPU are solved on the host; 80^3 blocks at 1e-3 keep 42.5 GB each and need one 80 GB GPU
 # each (-C gpu&hbm80g, NS=640 BDIAG_LEVEL=9 on 128 nodes).
 #
-# Environment: NS, BDIAG_LEVEL, CASES, BDIAG_TOL (bdiag_tol_rand), N_ITER, TOL_ITERSOL, ITER_SOLVER (2 GMRES, 1 TFQMR),
+# Environment: NS, BDIAG_LEVEL, CASES, BDIAG_TOL (bdiag_tol_rand), TOL_COMP (the tensor's compression tolerance,
+# default 1e-2; it also names the field slice files), N_ITER, TOL_ITERSOL, ITER_SOLVER (2 GMRES, 1 TFQMR),
 # GMRES_RESTART, IVELO (9: linear velocity profile), IVELO9_GRAD_SCALE (factor on its gradient; passed only when set),
 # H2_COMPRESS (H2_compress_factors), BDIAG_OVERLAP (restricted additive Schwarz), HODLR_GPU, BDIAG_KNN, EXTRA_ARGS,
 # CHECK (BPACK_CHECK), HEAP_FRACTION (BPACK_GPU_HEAP_FRACTION), BUDGET_MB (BPACK_MD_SLOT_BUDGET_MB), TAG,
@@ -82,7 +83,7 @@ COMMON="--ivelo ${IVELO:-9} ${IVELO9_GRAD_SCALE:+--ivelo9_grad_scale ${IVELO9_GR
  --x0max ${X0} --y0max ${X0} --z0max ${X0} --L ${X0} --H ${X0} --W ${X0} --vs 1 --shape 4 --knn 0 --lrlevel 5 --nbundle 8 \
  --n_iter ${N_ITER} --format 6 --iter_solver ${ITER_SOLVER:-2} --gmres_restart ${GMRES_RESTART:-200} --baca_batch 8 --knn_near_para 20.0 --elem_extract 0 --near_para 2.1d0 \
  --use_zfp 1 --use_qtt 0 --xyzsort 1 --use_fft_circulant 1 --nmin_leaf 32 --sample_para_outer 0.8 --sample_para 0.8 \
- --rmax 4 --rankrate 2.0 --itermax 1 --tol_comp 1e-2 --tol_rand 1e-5 --tol_Rdetect 0.3e-5 --fastsample_tensor 2 \
+ --rmax 4 --rankrate 2.0 --itermax 1 --tol_comp ${TOL_COMP:-1e-2} --tol_rand 1e-5 --tol_Rdetect 0.3e-5 --fastsample_tensor 2 \
  --verbosity 1 --bdiag_level ${BDIAG_LEVEL} --bdiag_lrlevel 0 --bdiag_tol_rand ${BDIAG_TOL} --tol_itersol ${TOL_ITERSOL} --precon 2 ${EXTRA_ARGS:-}"
 H2OPTS="--H2_use_gpu 2 --H2_XRR_factor 1 --h2_use_sketch 2 --h2_lazy_schur 2 --CA_level 10000 --H2_compress_factors ${H2_COMPRESS:-0}"
 for c in $CASES; do

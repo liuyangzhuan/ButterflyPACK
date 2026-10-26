@@ -18,7 +18,8 @@
 # Measured (2026-10-24, the line above): 291 s, tensor construction 18 s, H2 block setup 177 s (16 blocks of 40^3
 # a rank), matvec 5.3 s, preconditioner application 2.5 s, 47.8 GB a rank.
 #
-# Environment: NS, BDIAG_LEVEL, BDIAG_TOL (H2 block tolerance, bdiag_tol_rand), N_ITER, TOL_ITERSOL, ITER_SOLVER
+# Environment: NS, BDIAG_LEVEL, BDIAG_TOL (H2 block tolerance, bdiag_tol_rand), TOL_COMP (the tensor's compression
+# tolerance, default 1e-2; it also names the field slice files), N_ITER, TOL_ITERSOL, ITER_SOLVER
 # (2 GMRES, 1 TFQMR), GMRES_RESTART, IVELO (9: linear velocity profile, 11: random shapes, see EXTRA_ARGS),
 # IVELO9_GRAD_SCALE (factor on the ivelo 9 velocity gradient), CASE (h2 | none: no preconditioner), RPN, BLAS
 # (omp: the OpenMP-threaded OpenBLAS preloaded, 17% faster H2 blocks | seq: the build's sequential one),
@@ -85,7 +86,7 @@ COMMON="--ivelo ${IVELO:-9} --ivelo9_grad_scale ${IVELO9_GRAD_SCALE:-1} --pad_s2
  --x0max ${X0} --y0max ${X0} --z0max ${X0} --L ${X0} --H ${X0} --W ${X0} --vs 1 --shape 4 --knn 0 --lrlevel 5 --nbundle 8 \
  --n_iter ${N_ITER} --format 6 --iter_solver ${ITER_SOLVER:-2} --gmres_restart ${GMRES_RESTART:-200} --baca_batch 8 --knn_near_para 20.0 --elem_extract 0 --near_para 2.1d0 \
  --use_zfp 1 --use_qtt 0 --xyzsort 1 --use_fft_circulant 1 --nmin_leaf 32 --sample_para_outer 0.8 --sample_para 0.8 \
- --rmax 4 --rankrate 2.0 --itermax 1 --tol_comp 1e-2 --tol_rand 1e-5 --tol_Rdetect 0.3e-5 --fastsample_tensor 2 \
+ --rmax 4 --rankrate 2.0 --itermax 1 --tol_comp ${TOL_COMP:-1e-2} --tol_rand 1e-5 --tol_Rdetect 0.3e-5 --fastsample_tensor 2 \
  --verbosity 1 --bdiag_level ${BDIAG_LEVEL} --bdiag_lrlevel 0 --bdiag_tol_rand ${BDIAG_TOL} --tol_itersol ${TOL_ITERSOL} --precon 2 ${EXTRA_ARGS:-}"
 H2OPTS="--H2_use_gpu 0 --H2_XRR_factor 1 --h2_use_sketch 2 --h2_lazy_schur 2 --CA_level 10000"
 CASE=${CASE:-h2}   # h2: H2 diagonal blocks on the CPU; none: no preconditioner
