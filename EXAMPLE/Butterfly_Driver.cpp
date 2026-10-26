@@ -452,6 +452,22 @@ void apply_again(Handles& h, F2Cptr& ptree, char trans, const std::vector<double
   d_c_bf_mult(&trans, x.data(), y.data(), &nin, &nout, &nvec, &h.bf, &h.option, &h.stats, &ptree);
 }
 
+// The largest row or column count of a butterfly's blocks over the ranks: the longest inner
+// dimension any GEMM of its sweep has
+int max_block_dim(Handles& h) {
+  int L = 0, half = 0, M = 0, N = 0, Ml = 0, Nl = 0, nlev = 0, nblk = 0;
+  d_c_bf_get_layout(h.bf, &L, &half, &M, &N, &Ml, &Nl, &nlev, &nblk);
+  std::vector<int> nr(std::max(nlev, 1)), nc(nr.size()), ir(nr.size()), ic(nr.size()), er(nr.size()), ec(nr.size());
+  std::vector<int> rows(std::max(nblk, 1), 0), cols(rows.size(), 0);
+  std::vector<void*> ptr(rows.size());
+  d_c_bf_get_blocks(h.bf, nr.data(), nc.data(), ir.data(), ic.data(), er.data(), ec.data(), rows.data(), cols.data(),
+                    ptr.data());
+  int d = 0;
+  for (int b = 0; b < nblk; ++b) d = std::max({d, rows[b], cols[b]});
+  MPI_Allreduce(MPI_IN_PLACE, &d, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
+  return d;
+}
+
 void print_layout(int myid, const char* name, Handles& h) {
   int L = 0, half = 0, M = 0, N = 0, Ml = 0, Nl = 0, nlev = 0, nblk = 0;
   d_c_bf_get_layout(h.bf, &L, &half, &M, &N, &Ml, &Nl, &nlev, &nblk);
@@ -657,8 +673,10 @@ int main(int argc, char* argv[]) {
     }
 
     // ---- BF1's matvec: on the GPU, first against the host's.  Every device kernel sums in k
-    // order, as OpenBLAS does at an even column count: there the two must agree to the bit.  At an
-    // odd count OpenBLAS changes order on blocks of real rank, so there only to rounding.
+    // order, as OpenBLAS does at an even column count and an inner dimension up to 256: there the
+    // two must agree to the bit.  At an odd count OpenBLAS changes order on blocks of real rank,
+    // and past 256 it splits k into blocks (a low-rank block's are the whole M and N), so there
+    // only to rounding.
     if (gpu > 0) {
       std::vector<double> xn = random_vector(static_cast<size_t>(Nl) * opt.nvec, 555u + myid);
       std::vector<double> xt = random_vector(static_cast<size_t>(Ml) * opt.nvec, 666u + myid);
@@ -671,11 +689,12 @@ int main(int argc, char* argv[]) {
       use_host(bf1.option, false, gpu, h2_gpu);
       const double rn = relative_difference(yn_cpu, yn_gpu, static_cast<size_t>(Ml) * opt.nvec);
       const double rt = relative_difference(yt_cpu, yt_gpu, static_cast<size_t>(Nl) * opt.nvec);
-      const bool exact = opt.nvec % 2 == 0;
+      const int kmax = max_block_dim(bf1);
+      const bool exact = opt.nvec % 2 == 0 && kmax <= 256;
       const bool pass = exact ? (rn == 0.0 && rt == 0.0) : (rn < 1e-13 && rt < 1e-13);
       if (myid == 0) {
-        std::cout << "BFTEST check bf=1 mult gpu_vs_cpu rel_N=" << rn << " rel_T=" << rt << " expect="
-                  << (exact ? "exact" : "1e-13") << " " << (pass ? "PASS" : "FAIL") << std::endl;
+        std::cout << "BFTEST check bf=1 mult gpu_vs_cpu rel_N=" << rn << " rel_T=" << rt << " kmax=" << kmax
+                  << " expect=" << (exact ? "exact" : "1e-13") << " " << (pass ? "PASS" : "FAIL") << std::endl;
       }
     }
     for (int nrhs : opt.mult_nrhs) {

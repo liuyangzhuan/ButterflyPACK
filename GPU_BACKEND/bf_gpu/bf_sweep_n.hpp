@@ -187,6 +187,7 @@ inline void set_grid(VecLevel& v, const SweepRanges& r, int l) {
 // by buffer and element offset.  Buffers: 0 the caller's x, 1 and 2 the two
 // the vector levels take turns in, 3 the caller's y.
 struct SweepItem {
+    const DataType* a = nullptr;  // the factor block itself, when it lives outside the factors' block
     int64_t a_off = 0, b_off = 0, c_off = 0;
     int b_buf = 0, c_buf = 0;
     int m = 0, n = 0, k = 0, lda = 0, ldb = 0, ldc = 0;
@@ -209,12 +210,13 @@ struct SweepBatch {
 // The recorded sweep: the steps in order, the batches, which buffer each
 // vector level lives in, and the GEMMs' arrays on the device.
 struct SweepExec {
-    enum class Op { Launch, Zero, Exchange, Midpoint, Copy };
+    enum class Op { Launch, Zero, Exchange, Midpoint, Copy, Group };
     struct Step {
         Op op = Op::Launch;
         int arg = 0;     // Launch: the batch; Zero, Copy: the level written (index into levels);
-                         // Exchange: the sweep level whose pair exchange this is
-        int level = -1;  // Exchange: the level exchanged; Copy: the level copied from
+                         // Exchange: the sweep level whose pair exchange this is; Group: the
+                         // plan's group
+        int level = -1;  // Exchange, Group: the level exchanged; Copy: the level copied from
         int tag = 0;
     };
     int nrhs = 0;
@@ -278,6 +280,13 @@ struct SweepPlan {
     int mid_level = -1;
     std::vector<ExchangePlan> pair;   // the exchange after sweep level l
     ExchangePlan mid;                 // the midpoint redistribution
+    // a leaf several ranks share: the sum after the opening factor and the
+    // broadcast before the closing one (bf_exchange.hpp), -1 for none
+    std::vector<GroupPlan> groups;
+    int open_group = -1, close_group = -1;
+    // a partial plan (build_sweep_plan's stop): its last level, and the
+    // vector level it leaves its result in
+    int stop = -1, result = -1;
     bool built = false;
     // the sweep recorded for each nrhs a caller has used (sweep_exec)
     std::map<int, std::unique_ptr<SweepExec>> execs;
@@ -312,6 +321,9 @@ struct SweepPlan {
         release_plan(mid);
         pair.clear();
         vec.clear();
+        groups.clear();
+        open_group = close_group = -1;
+        stop = result = -1;
         built = false;
         chara = 0;
         nrhs = 0;
@@ -330,10 +342,17 @@ struct SweepPlan {
 // every kernel in a row shares its row count, so a shortcut works there, but
 // not with strided ownership.
 //
+// `stop`, a level of the first half, asks for BF_block_MVP_partial's sweep
+// instead: the leaf product and the first half's levels up to `stop`, each
+// with its pair-wise broadcast, or with the midpoint redistribution when
+// `stop` ends the half.  The construction from matvecs sweeps its half-built
+// butterfly so, and the levels past `stop` need not exist yet.  The result is
+// plan.vec[plan.result].
+//
 // Collective over the block's communicator.  Called once per butterfly block
 // and orientation; a later matvec with a different nrhs only re-packs.
 inline void build_sweep_plan(const BfBridge& bridge, const BfDevice& bf, char chara, int nrhs,
-                             SweepPlan& plan) {
+                             SweepPlan& plan, int stop = -1) {
     if (!bridge.usable()) {
         throw std::invalid_argument("bf::gpu::build_sweep_plan: the bridge is missing a rule");
     }
@@ -343,6 +362,7 @@ inline void build_sweep_plan(const BfBridge& bridge, const BfDevice& bf, char ch
     plan.release();
     plan.chara = forward ? 'N' : 'T';
     plan.nrhs = nrhs;
+    plan.stop = stop;
 
     const SweepRanges& vr = forward ? bf.vec_n : bf.vec_t;
     plan.vec.assign(static_cast<size_t>(L) + 3, VecLevel());
@@ -354,20 +374,32 @@ inline void build_sweep_plan(const BfBridge& bridge, const BfDevice& bf, char ch
     // the last level of the first half writes the midpoint level in the
     // ordering it is produced in, not the one the second half reads
     const int boundary = forward ? lh : lh + 1;
+    if (stop >= 0 && (forward ? stop > boundary : (stop < boundary || stop > L + 1))) {
+        throw std::invalid_argument("bf::gpu::build_sweep_plan: stop " + std::to_string(stop) +
+                                    " is not in the first half");
+    }
+    const bool full = stop < 0;
+    // the first half's levels the plan covers
+    auto covered = [&](int level) { return full || (forward ? level <= stop : level >= stop); };
     auto out_level_of = [&](const detail::LevelForm& f, int level) -> VecLevel& {
         if (f.below && level == boundary) return plan.mid_src;
         return plan.vec[static_cast<size_t>(f.out_level)];
     };
+    auto vec_index = [&](const VecLevel& v) {
+        return &v == &plan.mid_src ? -1 : static_cast<int>(&v - plan.vec.data());
+    };
 
-    // ---- the leaf product: V^T forward, U^T transposed, into vector level 1
+    // ---- the leaf product: V^T forward, U^T transposed, into vector level 1.
+    // A block of no local rows still has its height: on a leaf several ranks
+    // share, the rank's zeros go into the group's sum.
+    const int leaf_level = forward ? 0 : L + 1;
     {
-        const int leaf_level = forward ? 0 : L + 1;
         const detail::LevelForm f = detail::form_of(bf, forward, leaf_level);
         VecLevel& out = out_level_of(f, leaf_level);
         const LevelDesc& leaf = bf.level(leaf_level);
         for (int b = 0; b < leaf.nr * leaf.nc; ++b) {
             const BlockDesc& d = bf.blocks[static_cast<size_t>(leaf.first + b)];
-            if (d.rows == 0) continue;
+            if (d.cols == 0) continue;
             const int index_i = forward ? 1 : b * leaf.inc_r + leaf.idx_r;
             const int index_j = forward ? b * leaf.inc_c + leaf.idx_c : 1;
             const int il = detail::local_of(index_i, out.idx_r, out.inc_r, out.nr, "leaf output row");
@@ -401,45 +433,86 @@ inline void build_sweep_plan(const BfBridge& bridge, const BfDevice& bf, char ch
     };
     for (int step = 1; step <= L; ++step) {
         const int level = forward ? step : L - step + 1;
-        if (!detail::form_of(bf, forward, level).below) continue;
+        if (!detail::form_of(bf, forward, level).below || !covered(level)) continue;
         size_level(level);
     }
     for (VecLevel& v : plan.vec) v.pack(nrhs);
     plan.mid_src.pack(nrhs);
 
-    // ---- the midpoint redistribution, which also sizes its target
-    plan.mid = build_all2all_plan(bridge, boundary, forward ? 'C' : 'R', plan.mid_src,
-                                  plan.vec[static_cast<size_t>(plan.mid_level)]);
-
-    // ---- the kernel levels of the second half, now that the midpoint grid
-    // is known
-    for (int step = 1; step <= L; ++step) {
-        const int level = forward ? step : L - step + 1;
-        if (detail::form_of(bf, forward, level).below) continue;
-        size_level(level);
-    }
-    for (int l = 0; l <= L + 2; ++l) {
-        if (l != plan.mid_level) plan.vec[static_cast<size_t>(l)].pack(nrhs);
-    }
-
-    // ---- the closing product's sub-group.  When it spans more than one
-    // rank the factor has a single local block and the vector block it
-    // multiplies lives only on the head, which the CPU broadcasts before
-    // applying it.  That broadcast is not mirrored yet, and without it the
-    // non-head ranks would contribute zeros rather than fail, so the case is
-    // refused instead of answered wrongly.
+    // ---- a leaf several ranks share: the sum of the opening product over
+    // the leaf's group.  Such a rank holds the one leaf.
     if (bf.nproc > 1) {
-        const int close_level = forward ? L + 1 : 0;
-        const SweepRanges& g = forward ? bf.kernel_c : bf.kernel_r;
-        const size_t cu = static_cast<size_t>(close_level);
-        if (g.nr[cu] > 0 && g.nc[cu] > 0) {
-            const BfBridge::Group grp = bridge.block_group(close_level, g.idx_r[cu], g.idx_c[cu],
-                                                           forward ? 'C' : 'R');
+        const LevelDesc& leaf = bf.level(leaf_level);
+        if (leaf.nr * leaf.nc == 1) {
+            const int index_i = forward ? 1 : leaf.idx_r, index_j = forward ? leaf.idx_c : 1;
+            const BfBridge::Group grp = bridge.block_group(leaf_level, index_i, index_j, forward ? 'R' : 'C');
             if (grp.nproc > 1) {
-                throw std::runtime_error(
-                    "bf::gpu::build_sweep_plan: the closing factor's sub-group spans " +
-                    std::to_string(grp.nproc) +
-                    " ranks, which needs the broadcast the CPU sweep does there and this does not yet");
+                const VecLevel& out = out_level_of(detail::form_of(bf, forward, leaf_level), leaf_level);
+                const size_t b = static_cast<size_t>(out.row_local(index_i)) * out.nc + out.col_local(index_j);
+                plan.open_group = static_cast<int>(plan.groups.size());
+                plan.groups.push_back(build_group_plan(grp.comm, true, vec_index(out), b));
+            }
+        }
+    }
+
+    // ---- the midpoint redistribution, which also sizes its target
+    if (full || stop == boundary) {
+        plan.mid = build_all2all_plan(bridge, boundary, forward ? 'C' : 'R', plan.mid_src,
+                                      plan.vec[static_cast<size_t>(plan.mid_level)]);
+    }
+
+    if (full) {
+        // ---- the kernel levels of the second half, now that the midpoint
+        // grid is known
+        for (int step = 1; step <= L; ++step) {
+            const int level = forward ? step : L - step + 1;
+            if (detail::form_of(bf, forward, level).below) continue;
+            size_level(level);
+        }
+        for (int l = 0; l <= L + 2; ++l) {
+            if (l != plan.mid_level) plan.vec[static_cast<size_t>(l)].pack(nrhs);
+        }
+
+        // ---- the closing factor's group.  When it spans more than one rank
+        // the factor has a single local block, and the vector block it
+        // multiplies is on the group's head alone, which broadcasts it.  The
+        // other ranks size the block by the factor, since no product of
+        // theirs writes it.
+        if (bf.nproc > 1) {
+            const int close_level = forward ? L + 1 : 0;
+            const LevelDesc& d = bf.level(close_level);
+            if (d.nr * d.nc == 1) {
+                const int index_i = forward ? d.idx_r : 1, index_j = forward ? 1 : d.idx_c;
+                const BfBridge::Group grp = bridge.block_group(close_level, index_i, index_j, forward ? 'C' : 'R');
+                if (grp.nproc > 1) {
+                    VecLevel& in = plan.vec[static_cast<size_t>(L) + 1];
+                    const size_t b = static_cast<size_t>(in.row_local(index_i)) * in.nc + in.col_local(index_j);
+                    const int h = bf.blocks[static_cast<size_t>(d.first)].cols;
+                    if (in.rows[b] == 0) {
+                        in.rows[b] = h;
+                        in.pack(nrhs);
+                        if (L + 1 == plan.mid_level) {
+                            // the redistribution delivered nothing into this
+                            // block, but may have into others of its level
+                            for (ExchangeRecord& r : plan.mid.recv) {
+                                r.row_offset = in.row_offset[static_cast<size_t>(in.row_local(r.index_i)) * in.nc +
+                                                             in.col_local(r.index_j)];
+                            }
+                            if (!plan.mid.recv.empty()) {
+                                fmm::gpu::check_cuda(cudaMemcpy(plan.mid.d_recv, plan.mid.recv.data(),
+                                                                plan.mid.recv.size() * sizeof(ExchangeRecord),
+                                                                cudaMemcpyHostToDevice),
+                                                     "bf sweep plan: the midpoint's records");
+                            }
+                        }
+                    } else if (in.rows[b] != h) {
+                        throw std::runtime_error("bf::gpu::build_sweep_plan: the closing block has " +
+                                                 std::to_string(in.rows[b]) + " rows against the factor's " +
+                                                 std::to_string(h));
+                    }
+                    plan.close_group = static_cast<int>(plan.groups.size());
+                    plan.groups.push_back(build_group_plan(grp.comm, false, L + 1, b));
+                }
             }
         }
     }
@@ -450,6 +523,7 @@ inline void build_sweep_plan(const BfBridge& bridge, const BfDevice& bf, char ch
         for (int step = 0; step <= L + 1; ++step) {
             const int level = forward ? step : L + 1 - step;
             const detail::LevelForm f = detail::form_of(bf, forward, level);
+            if (!(f.below ? covered(level) : full)) continue;
             // the CPU skips the exchange at the level that ends each half
             const bool ends_half = f.below ? (level == boundary)
                                            : (forward ? level == L + 1 : level == 0);
@@ -458,6 +532,10 @@ inline void build_sweep_plan(const BfBridge& bridge, const BfDevice& bf, char ch
             plan.pair[static_cast<size_t>(level)] =
                 build_plan(bridge, level, mode, f.below ? 'B' : 'R', v, v);
         }
+    }
+    if (!full) {
+        plan.result = stop == boundary ? plan.mid_level
+                                        : detail::form_of(bf, forward, stop).out_level;
     }
     plan.built = true;
 }
@@ -603,7 +681,7 @@ inline SweepExec& sweep_exec(const BfDevice& bf, SweepPlan& plan, int nrhs) {
             const int jl = detail::local_of(index_j, out.idx_c, out.inc_c, out.nc, "leaf output column");
             const size_t ob = static_cast<size_t>(il) * out.nc + jl;
             SweepItem it;
-            it.a_off = d.offset;  it.lda = d.lda;
+            it.a = d.ptr;  it.a_off = d.offset;  it.lda = d.lda;
             it.b_buf = 0;  it.b_off = acc[static_cast<size_t>(b)];  it.ldb = 0;  // x and its ld, per call
             it.c_buf = ex.buffer[static_cast<size_t>(li)];  it.c_off = out.offset[ob];  it.ldc = out.rows[ob];
             it.m = d.cols; it.n = nrhs; it.k = d.rows;   // A^T: (cols x rows)
@@ -651,7 +729,7 @@ inline SweepExec& sweep_exec(const BfDevice& bf, SweepPlan& plan, int nrhs) {
                             throw std::runtime_error("bf::gpu::sweep_exec: a level is read before it is written");
                         }
                         SweepItem it;
-                        it.a_off = k.offset;  it.lda = k.lda;
+                        it.a = k.ptr;  it.a_off = k.offset;  it.lda = k.lda;
                         it.b_buf = ex.buffer[static_cast<size_t>(in_li)];  it.b_off = in.offset[ib];
                         it.ldb = in.rows[ib];
                         it.c_buf = ex.buffer[static_cast<size_t>(li)];  it.c_off = out.offset[ob];
@@ -685,7 +763,7 @@ inline SweepExec& sweep_exec(const BfDevice& bf, SweepPlan& plan, int nrhs) {
             if (in.rows[ib] == 0) continue;
             if (in_li < 0) throw std::runtime_error("bf::gpu::sweep_exec: the closing level is never written");
             SweepItem it;
-            it.a_off = k.offset;  it.lda = k.lda;
+            it.a = k.ptr;  it.a_off = k.offset;  it.lda = k.lda;
             it.b_buf = ex.buffer[static_cast<size_t>(in_li)];  it.b_off = in.offset[ib];  it.ldb = in.rows[ib];
             it.c_buf = 3;  it.c_off = acc[static_cast<size_t>(b)];  it.ldc = 0;  // y and its ld, per call
             it.m = k.rows; it.n = nrhs; it.k = k.cols;
@@ -708,16 +786,29 @@ inline SweepExec& sweep_exec(const BfDevice& bf, SweepPlan& plan, int nrhs) {
     // no exchange - the redistribution follows it instead.
     const int step = forward ? 1 : -1;
     const int first_level = forward ? 0 : L + 1;
+    const bool full = plan.stop < 0;
     for (int level = first_level;; level += step) {
-        if (level == first_level) leaf_product(level);
-        else run_level(level);
+        if (level == first_level) {
+            leaf_product(level);
+            if (plan.open_group >= 0) {
+                // the group's sum, over the rank's part of the leaf
+                const int li = level_of(&out_level_of(detail::form_of(bf, forward, level), level));
+                zero_first(li);
+                ex.program.push_back(SweepExec::Step{SweepExec::Op::Group, plan.open_group, li, 0});
+            }
+        } else {
+            run_level(level);
+        }
         if (level == boundary) break;
         exchange_after(level, 100 + level);
+        if (level == plan.stop) break;
     }
 
     // ---- the midpoint: between the two orderings
     VecLevel& mid_dst = plan.vec[static_cast<size_t>(plan.mid_level)];
-    if (!plan.mid.empty()) {
+    if (!full && plan.stop != boundary) {
+        // a partial plan ending before the midpoint
+    } else if (!plan.mid.empty()) {
         const int src = level_of(&plan.mid_src);
         zero_first(src);
         const int dst = level_of(&mid_dst);
@@ -739,10 +830,19 @@ inline SweepExec& sweep_exec(const BfDevice& bf, SweepPlan& plan, int nrhs) {
     // ---- the second half: its kernel levels, each followed by the pair-wise
     // reduction, then the closing product
     const int last = forward ? L + 1 : 0;
-    for (int level = boundary + step;; level += step) {
-        if (level == last) closing_product(level);
-        else run_level(level);
-        if (level == last) break;
+    for (int level = boundary + step; full; level += step) {
+        if (level == last) {
+            if (plan.close_group >= 0) {
+                // the head's block to the group's other ranks, which no
+                // product of theirs writes
+                const int li = level_of(&plan.vec[static_cast<size_t>(L) + 1]);
+                zero_first(li);
+                ex.program.push_back(SweepExec::Step{SweepExec::Op::Group, plan.close_group, li, 0});
+            }
+            closing_product(level);
+            break;
+        }
+        run_level(level);
         exchange_after(level, 300 + level);
     }
 
@@ -801,7 +901,7 @@ inline SweepExec& sweep_exec(const BfDevice& bf, SweepPlan& plan, int nrhs) {
     signed char* hcbuf = reinterpret_cast<signed char*>(image.data() + o_cbuf);
     for (size_t i = 0; i < n; ++i) {
         const SweepItem& it = items[i];
-        ha[i] = bf.values + it.a_off;
+        ha[i] = it.a != nullptr ? it.a : bf.values + it.a_off;
         hs[0 * (n + 1) + i] = it.m;
         hs[1 * (n + 1) + i] = it.n;
         hs[2 * (n + 1) + i] = it.k;
@@ -872,26 +972,15 @@ inline void run_batch(const SweepExec& ex, const SweepBatch& b, DataType alpha, 
                                       fmm::gpu::Context::instance().queue(), b.max_m, b.max_n, b.max_k);
 }
 
-// The sweep.  Vout = alpha * op(bf) * Vin + beta * Vout for 'N', and
-// Vout = alpha * op(bf)^T * Vin + beta * Vout for 'T' and 'C'; every pointer
-// device resident.  `plan` must have been built for this block and this
-// orientation; the first call for an nrhs records the sweep (sweep_exec).
-//
-// The caller's alpha and beta belong to the closing product alone.  The
-// stream must be the backend's (fmm::gpu::Context), on which MAGMA runs.
-inline double sweep(const BfDevice& bf, SweepPlan& plan, int nrhs, const DataType* vin, int ldi,
-                    DataType* vout, int ldo, DataType alpha, DataType beta, SweepScratch& /*unused*/,
-                    cudaStream_t stream = nullptr) {
-    if (!plan.built || plan.vec.empty()) {
-        throw std::invalid_argument("bf::gpu::sweep: the plan is not built");
-    }
-    if (stream == nullptr) stream = fmm::gpu::Context::instance().stream();
-    SweepExec& ex = sweep_exec(bf, plan, nrhs);
-    repack(plan, nrhs);  // the levels' offsets, which the exchanges read
+namespace detail {
 
+// A replay of ex: its two buffers from the arena, the kernel that turns the
+// GEMMs' offsets into pointers, then the steps.
+inline void replay(SweepPlan& plan, SweepExec& ex, int nrhs, const DataType* vin, int ldi, DataType* vout, int ldo,
+                   DataType alpha, DataType beta, DataType* buf[3], cudaStream_t stream) {
     auto& heap = fmm::gpu::DeviceHeap::instance();
     heap.ensure_initialized();
-    DataType* buf[3] = {nullptr, nullptr, nullptr};
+    buf[0] = buf[1] = buf[2] = nullptr;
     if (ex.buffer_elements > 0) {
         const size_t bytes = static_cast<size_t>(ex.buffer_elements) * sizeof(DataType);
         buf[1] = heap.alloc<DataType>(bytes, fmm::gpu::ResidentKind::Matvec);
@@ -930,16 +1019,75 @@ inline double sweep(const BfDevice& bf, SweepPlan& plan, int nrhs, const DataTyp
                                                      cudaMemcpyDeviceToDevice, stream), "bf sweep midpoint");
                 break;
             }
+            case SweepExec::Op::Group: {
+                const GroupPlan& g = plan.groups[static_cast<size_t>(st.arg)];
+                VecLevel& v = *ex.levels[static_cast<size_t>(st.level)];
+                group_level(g, v.data + v.offset[g.block], static_cast<int64_t>(v.rows[g.block]) * nrhs, stream);
+                break;
+            }
         }
     }
+}
+
+}  // namespace detail
+
+// The sweep.  Vout = alpha * op(bf) * Vin + beta * Vout for 'N', and
+// Vout = alpha * op(bf)^T * Vin + beta * Vout for 'T' and 'C'; every pointer
+// device resident.  `plan` must have been built for this block and this
+// orientation; the first call for an nrhs records the sweep (sweep_exec).
+//
+// The caller's alpha and beta belong to the closing product alone.  The
+// stream must be the backend's (fmm::gpu::Context), on which MAGMA runs.
+inline double sweep(const BfDevice& bf, SweepPlan& plan, int nrhs, const DataType* vin, int ldi,
+                    DataType* vout, int ldo, DataType alpha, DataType beta, SweepScratch& /*unused*/,
+                    cudaStream_t stream = nullptr) {
+    if (!plan.built || plan.vec.empty() || plan.stop >= 0) {
+        throw std::invalid_argument("bf::gpu::sweep: the plan is not built, or is a partial one");
+    }
+    if (stream == nullptr) stream = fmm::gpu::Context::instance().stream();
+    SweepExec& ex = sweep_exec(bf, plan, nrhs);
+    repack(plan, nrhs);  // the levels' offsets, which the exchanges read
+    DataType* buf[3];
+    detail::replay(plan, ex, nrhs, vin, ldi, vout, ldo, alpha, beta, buf, stream);
 
     // the buffers go back with the work still queued: whatever reuses them
     // runs after it, on the same stream
+    auto& heap = fmm::gpu::DeviceHeap::instance();
     for (int b = 1; b <= 2; ++b)
         if (buf[b] != nullptr) heap.free(buf[b]);
     for (VecLevel& v : plan.vec) v.data = nullptr;
     plan.mid_src.data = nullptr;
     return ex.flops;
+}
+
+// The sweep of a partial plan (build_sweep_plan's stop) over x (N_loc x nrhs
+// forward, M_loc x nrhs transposed, ld ldi): the level it ends in,
+// plan.vec[plan.result], whose data is a buffer of the arena the caller gives
+// back (DeviceHeap::free) once the work that reads it is queued.  flops: what
+// the sweep did.
+inline VecLevel& sweep_partial(const BfDevice& bf, SweepPlan& plan, int nrhs, const DataType* vin, int ldi,
+                               double* flops = nullptr, cudaStream_t stream = nullptr) {
+    if (!plan.built || plan.vec.empty() || plan.stop < 0) {
+        throw std::invalid_argument("bf::gpu::sweep_partial: the plan is not built, or is a full one");
+    }
+    if (stream == nullptr) stream = fmm::gpu::Context::instance().stream();
+    SweepExec& ex = sweep_exec(bf, plan, nrhs);
+    repack(plan, nrhs);
+    DataType* buf[3];
+    detail::replay(plan, ex, nrhs, vin, ldi, nullptr, 0, DataType(1), DataType(0), buf, stream);
+    VecLevel& out = plan.vec[static_cast<size_t>(plan.result)];
+    DataType* kept = out.elements > 0 ? out.data : nullptr;
+    if (out.elements > 0 && kept == nullptr) {
+        throw std::runtime_error("bf::gpu::sweep_partial: the plan's last level is never written");
+    }
+    auto& heap = fmm::gpu::DeviceHeap::instance();
+    for (int b = 1; b <= 2; ++b)
+        if (buf[b] != nullptr && buf[b] != kept) heap.free(buf[b]);
+    for (VecLevel& v : plan.vec) v.data = nullptr;
+    plan.mid_src.data = nullptr;
+    out.data = kept;
+    if (flops != nullptr) *flops = ex.flops;
+    return out;
 }
 
 }  // namespace gpu

@@ -130,6 +130,35 @@ ExchangePlan build_all2all_plan(const BfBridge& bridge, int level, char mode_new
 
 void release_plan(ExchangePlan& plan);
 
+// A vector block the ranks of a leaf's group hold together: a low-rank block
+// (level_butterfly 0) on several ranks, each holding some rows of its one
+// leaf.  (ButterflyPACK's trees give every rank at least two leaf boxes, so
+// a butterfly proper never shares one.)  After the opening factor every rank
+// of the group has its rows' part
+// of the block, and the CPU sums them on all of them (MPI_ALLREDUCE); before
+// the closing factor only the group's head has the block, and the CPU
+// broadcasts it from there (MPI_Bcast from rank 0 of the group).  `vec` is
+// the sweep's vector level holding the block (an index into SweepPlan::vec,
+// -1 for its midpoint source) and `block` its index in that level's grid.
+// The sum always goes through MPI, on the host: the same call as the CPU's,
+// so a group of two ranks still matches it to the bit.  The broadcast goes
+// through NCCL when the group has it.
+struct GroupPlan {
+    MPI_Comm comm = MPI_COMM_NULL;
+    int nproc = 1;
+    bool sum = false;
+    int vec = -1;
+    size_t block = 0;
+    void* nccl = nullptr;
+};
+
+// Collective over the group (an NCCL communicator for a broadcast).
+GroupPlan build_group_plan(MPI_Comm comm, bool sum, int vec, size_t block);
+
+// The sum or the broadcast of n elements at data, on the device, ordered on
+// the stream.
+void group_level(const GroupPlan& g, DataType* data, int64_t n, cudaStream_t stream);
+
 // Pack, exchange and accumulate, for `nrhs` right-hand sides.  `src` is the
 // level the records come from and `dst` the one they go into; the CPU passes
 // the same array for both, and so may a caller here.

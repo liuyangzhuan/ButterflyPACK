@@ -342,6 +342,44 @@ void release_plan(ExchangePlan& plan) {
     plan.displ_nrhs = 0;
 }
 
+GroupPlan build_group_plan(MPI_Comm comm, bool sum, int vec, size_t block) {
+    GroupPlan g;
+    g.comm = comm;
+    MPI_Comm_size(comm, &g.nproc);
+    g.sum = sum;
+    g.vec = vec;
+    g.block = block;
+#ifdef BPACK_HAVE_NCCL
+    if (!sum) g.nccl = static_cast<void*>(nccl_comm_of(comm));
+#endif
+    return g;
+}
+
+void group_level(const GroupPlan& g, DataType* data, int64_t n, cudaStream_t stream) {
+    if (g.nproc <= 1 || n <= 0) return;
+    constexpr int kWords = static_cast<int>(sizeof(DataType) / sizeof(double));
+#ifdef BPACK_HAVE_NCCL
+    if (!g.sum && g.nccl != nullptr) {
+        check_nccl(ncclBroadcast(data, data, static_cast<size_t>(n) * kWords, ncclDouble, 0,
+                                 static_cast<ncclComm_t>(g.nccl), stream),
+                   "bf group broadcast");
+        return;
+    }
+#endif
+    static fmm::gpu::PinnedBuffer* host = new fmm::gpu::PinnedBuffer;  // never freed: see PinnedPool
+    const size_t bytes = static_cast<size_t>(n) * sizeof(DataType);
+    DataType* h = static_cast<DataType*>(host->reserve(bytes));
+    check_cuda(cudaMemcpyAsync(h, data, bytes, cudaMemcpyDeviceToHost, stream), "bf group stage out");
+    check_cuda(cudaStreamSynchronize(stream), "bf group stage out");
+    if (g.sum) {
+        MPI_Allreduce(MPI_IN_PLACE, h, static_cast<int>(n * kWords), MPI_DOUBLE_PRECISION, MPI_SUM, g.comm);
+    } else {
+        MPI_Bcast(h, static_cast<int>(n * kWords), MPI_DOUBLE_PRECISION, 0, g.comm);
+    }
+    check_cuda(cudaMemcpyAsync(data, h, bytes, cudaMemcpyHostToDevice, stream), "bf group stage in");
+    check_cuda(cudaStreamSynchronize(stream), "bf group stage in");
+}
+
 void launch_pack(const DataType* level, const ExchangeRecord* recs, int nrecs, const int64_t* displ, int nrhs,
                  DataType* buf, cudaStream_t stream) {
     if (nrecs <= 0) return;

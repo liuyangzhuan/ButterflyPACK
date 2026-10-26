@@ -42,6 +42,10 @@ struct BlockDesc {
     int rows = 0;
     int cols = 0;
     int lda = 0;         // == rows: the upload packs each block tightly
+    // the block itself where it lies outside that allocation: a butterfly the
+    // construction from matvecs is building, level by level (only the sweep
+    // reads it)
+    const DataType* ptr = nullptr;
 };
 
 // One level's grid of blocks: ButterflyKerl(level) has nr x nc of them,

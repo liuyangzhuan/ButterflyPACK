@@ -535,9 +535,10 @@ contains
    end function BF_gpu_rankreveal_ok
 
    !>**** Whether a butterfly's matvec runs on the device (GPU_BACKEND/bf_gpu):
-   !> the options ask for the GPU, this library has the backend, and the
-   !> block is a butterfly (the sweep is not validated on a low-rank block).
-   !> The device copy of the factors is made at the first call and kept.
+   !> the options ask for the GPU and this library has the backend.  A
+   !> low-rank block (level_butterfly 0) is one too: on several ranks they all
+   !> share its one leaf, which the device sums and broadcasts as the host
+   !> does.  The device copy of the factors is made at the first call and kept.
    !> Either option asks for it, as for BF_gpu_rankreveal_ok: a STRUMPACK H2
    !> front sets H2_use_gpu and leaves HODLR_use_gpu at 0.
    logical function BF_gpu_mult_ok(blocks, option)
@@ -547,21 +548,21 @@ contains
 
       BF_gpu_mult_ok = .false.
       if (option%HODLR_use_gpu <= 0 .and. option%H2_use_gpu <= 0) return
-      if (blocks%level_butterfly == 0) return
       if (.not. BPACK_gpu_available()) return
       BF_gpu_mult_ok = .true.
    end function BF_gpu_mult_ok
 
    !>**** Whether a butterfly's entry extraction is tried on the device
-   !> (GPU_BACKEND/bf_gpu/bf_extract.hpp): as for the matvec.  The device
-   !> itself declines what it does not handle yet - a butterfly on several
-   !> ranks, a block another rank owns - and the host path runs.
+   !> (GPU_BACKEND/bf_gpu/bf_extract.hpp): as for the matvec, a butterfly
+   !> rather than a low-rank block.  The device itself declines what it does
+   !> not handle yet - a butterfly on several ranks, a block another rank owns
+   !> - and the host path runs.
    logical function BF_gpu_extract_ok(blocks, option)
       implicit none
       type(matrixblock)::blocks
       type(Hoption)::option
 
-      BF_gpu_extract_ok = BF_gpu_mult_ok(blocks, option)
+      BF_gpu_extract_ok = BF_gpu_mult_ok(blocks, option) .and. blocks%level_butterfly > 0
    end function BF_gpu_extract_ok
 
    !>**** Whether a butterfly's construction from matvecs runs on the device
