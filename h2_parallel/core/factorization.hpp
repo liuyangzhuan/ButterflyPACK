@@ -381,7 +381,6 @@ inline int split_threads_for(int64_t items, int team) {
     }
     return std::max(1, std::min(cap, team / static_cast<int>(items)));
 }
-
 inline void split_range(
     int64_t count,
     int task,
@@ -393,25 +392,32 @@ inline void split_range(
 }
 
 constexpr int64_t H2_SPLIT_COLUMN_CHUNK = 256;
+// A split task's least columns: with 256-column chunks a 500-column box (the
+// levels above the leaf, where a wave has fewer boxes than threads and the
+// split is on) made two tasks of a 16-way split (2026-10-22).
+constexpr int64_t H2_SPLIT_COLUMN_MIN = 64;
 
 template <typename Function>
 inline void split_columns_chunked(
     int64_t columns,
     int split_threads,
     const Function& function) {
-    const int64_t chunks =
-        (columns + H2_SPLIT_COLUMN_CHUNK - 1) / H2_SPLIT_COLUMN_CHUNK;
-    if (split_threads > 1 && chunks > 1) {
+    if (split_threads > 1 && columns >= 2 * H2_SPLIT_COLUMN_MIN) {
+        // as many tasks as the split allows, each of at least
+        // H2_SPLIT_COLUMN_MIN columns (an output column's arithmetic does not
+        // depend on which chunk it is in: split 1 and 16 give the same bits)
         const int tasks = static_cast<int>(
-            std::min<int64_t>(split_threads, chunks));
+            std::min<int64_t>(split_threads, columns / H2_SPLIT_COLUMN_MIN));
+        const int64_t chunk = (columns + tasks - 1) / tasks;
         #pragma omp taskloop num_tasks(tasks) default(shared)
-        for (int64_t chunk = 0; chunk < chunks; ++chunk) {
-            function(
-                chunk * H2_SPLIT_COLUMN_CHUNK,
-                std::min<int64_t>(
-                    columns, (chunk + 1) * H2_SPLIT_COLUMN_CHUNK));
+        for (int64_t task = 0; task < tasks; ++task) {
+            const int64_t c0 = task * chunk;
+            const int64_t c1 = std::min<int64_t>(columns, c0 + chunk);
+            if (c1 > c0) function(c0, c1);
         }
     } else {
+        const int64_t chunks =
+            (columns + H2_SPLIT_COLUMN_CHUNK - 1) / H2_SPLIT_COLUMN_CHUNK;
         for (int64_t chunk = 0; chunk < chunks; ++chunk) {
             function(
                 chunk * H2_SPLIT_COLUMN_CHUNK,
@@ -8892,9 +8898,11 @@ void gather_id_target_streamed(
     }
 
     // Computes P_E = X_RR_full_E * temp2_E[B-rows]^T (r x n) for box-source s
-    // into the single P slot; may set box_src_r[s] = 0 (nothing to contribute).
-    auto compute_P = [&](size_t s) -> const DataType* {
-        DataType* P = P_all.data();
+    // into P (r x n), through the row positions and the TB gather buffer
+    // given; may set box_src_r[s] = 0 (nothing to contribute).  `split`: the
+    // P product's column split (1 inside a task).
+    auto compute_P_into = [&](size_t s, std::vector<int64_t>& positions, std::vector<DataType>& TB,
+                              DataType* P, int split) -> const DataType* {
         BoxData<CoordType, DataType>* src_box = box_src_boxes[s];
         const int64_t r = box_src_r[s];
         if (r == 0 || !src_box->X_NR.is_allocated()) {
@@ -8910,7 +8918,7 @@ void gather_id_target_streamed(
 
         int64_t slot_offset = 0, slot_count = 0;
         if (!lazy_far_locate_endpoint_rows(
-                src_box, col_end, slot_offset, slot_count, scratch.stream_positions)) {
+                src_box, col_end, slot_offset, slot_count, positions)) {
             box_src_r[s] = 0;  // no B rows in this source: contributes nothing
             return P;
         }
@@ -8918,16 +8926,15 @@ void gather_id_target_streamed(
         const DataType* temp2 = lazy_far_source_temp2(src_box);
         const int64_t temp2_ld = src_box->X_NR.lda;
 
-        // TB = temp2_E[B-rows] (n x r), gathered into stream_Trow.
-        auto& TB = scratch.stream_Trow;
+        // TB = temp2_E[B-rows] (n x r), gathered into TB.
         TB.resize(static_cast<size_t>(n * r));
-        const int Kp = scratch.split_threads;
+        const int Kp = split;
         {
             for (int64_t j = 0; j < r; ++j) {
                 const DataType* src_col = temp2 + j * temp2_ld + slot_offset;
                 for (int64_t i = 0; i < n; ++i) {
                     TB[i + j * n] =
-                        src_col[scratch.stream_positions[static_cast<size_t>(i)]];
+                        src_col[positions[static_cast<size_t>(i)]];
                 }
             }
         }
@@ -8950,6 +8957,11 @@ void gather_id_target_streamed(
             });
         }
         return P;
+    };
+    // ... into the box's single P slot (the loop over the sources below)
+    auto compute_P = [&](size_t s) -> const DataType* {
+        return compute_P_into(s, scratch.stream_positions, scratch.stream_Trow, P_all.data(),
+                              scratch.split_threads);
     };
 
     // ------------------------------------------------------------------
@@ -9303,23 +9315,18 @@ void gather_id_target_streamed(
     // source drops from (sum of pair rows) * r * n to d * r * n plus a sparse
     // row sketch, and only one W, one P and one row slice are live.
     // ------------------------------------------------------------------
-    if (sketch_space_fill) {
-        auto& W = scratch.stream_W;      // W_E^T: r x d, column-major
-        auto& Trow = scratch.stream_Trow;
-        auto& TrowT = scratch.stream_TrowT;
+    // W_E^T (r x d, column-major) of box-source s: the sketch, with the
+    // draws recorded for each ring block, of the source's temp2 rows at that
+    // block.  Through the buffers given (the box's own, or a task's); the
+    // laps only on the box's thread.  Returns whether any block listed it.
+    auto accumulate_W = [&](size_t src_idx, BoxData<CoordType, DataType>* src_box, int64_t r,
+                            std::vector<int64_t>& positions, std::vector<DataType>& Trow,
+                            std::vector<DataType>& TrowT, std::vector<DataType>& W, bool timed) -> bool {
         int inc_one = 1;
-        for (size_t src_idx = 0; src_idx < box_src_mortons.size(); ++src_idx) {
-            FMM_PHASE_LAP_BEGIN(fill_lap);
-            const DataType* P = compute_P(src_idx);
-            FMM_PHASE_LAP(fill_lap, SK_FILL_GEMM);
-            const int64_t r = box_src_r[src_idx];
-            if (r == 0) {
-                continue;
-            }
-            BoxData<CoordType, DataType>* src_box = box_src_boxes[src_idx];
-            const int64_t src_morton = box_src_mortons[src_idx];
-            W.assign(static_cast<size_t>(r * d), DataType{0.0});
-            bool any_rows = false;
+        const int64_t src_morton = box_src_mortons[src_idx];
+        W.assign(static_cast<size_t>(r * d), DataType{0.0});
+        bool any_rows = false;
+        FMM_PHASE_LAP_BEGIN(fill_lap);
 
             for (size_t nb_idx = 0; nb_idx < box->two_hop.size(); ++nb_idx) {
                 bool lists_source = false;
@@ -9346,7 +9353,7 @@ void gather_id_target_streamed(
                 int64_t slot_offset = 0, slot_count = 0;
                 if (!lazy_far_locate_endpoint_rows(
                         src_box, row_end, slot_offset, slot_count,
-                        scratch.stream_positions)) {
+                        positions)) {
                     continue;
                 }
 
@@ -9362,7 +9369,7 @@ void gather_id_target_streamed(
                     const DataType* src_col = temp2 + j * temp2_ld + slot_offset;
                     for (int64_t i = 0; i < a; ++i) {
                         Trow[i + j * a] =
-                            src_col[scratch.stream_positions[static_cast<size_t>(i)]];
+                            src_col[positions[static_cast<size_t>(i)]];
                     }
                 }
                 constexpr int64_t tile = 32;
@@ -9378,7 +9385,7 @@ void gather_id_target_streamed(
                     }
                 }
 
-                FMM_PHASE_LAP(fill_lap, SK_FILL_GATHER);
+                if (timed) FMM_PHASE_LAP(fill_lap, SK_FILL_GATHER);
                 // Sketch the rows with the draws recorded for this block.
                 const int64_t rb = blk_row_base[nb_idx];
                 int r_int = static_cast<int>(r);
@@ -9400,13 +9407,93 @@ void gather_id_target_streamed(
                     }
                 }
                 any_rows = true;
-                FMM_PHASE_LAP(fill_lap, SK_FILL_AXPY);
+                if (timed) FMM_PHASE_LAP(fill_lap, SK_FILL_AXPY);
             }
+        return any_rows;
+    };
+
+    if (sketch_space_fill && scratch.split_threads > 1 && box_src_mortons.size() > 1) {
+        // A small wave (fewer boxes than threads, 2026-10-22): the sources'
+        // P_E and W_E in parallel across the threads the wave leaves idle,
+        // one task a source, then folded into the sketch by column chunks,
+        // every chunk taking the sources in their order - the same operations
+        // in the same sequence on every entry as the loop below.
+        const size_t nsrc = box_src_mortons.size();
+        auto& per_source = scratch.stream_fill_sources;
+        if (per_source.size() < nsrc) per_source.resize(nsrc);
+        // (what compute_P would throw, checked here: a task cannot throw)
+        for (size_t s = 0; s < nsrc; ++s) {
+            BoxData<CoordType, DataType>* src_box = box_src_boxes[s];
+            const int64_t r = box_src_r[s];
+            if (r == 0 || !src_box->X_NR.is_allocated()) continue;
+            if (!src_box->X_RR_full.is_allocated() ||
+                src_box->X_RR_full.rows != r || src_box->X_RR_full.cols != r) {
+                throw std::runtime_error(
+                    "gather_id_target_streamed: X_RR_full missing for source " +
+                    std::to_string(box_src_mortons[s]));
+            }
+        }
+        FMM_PHASE_LAP_BEGIN(fill_lap);
+        std::exception_ptr fill_failure;
+        std::mutex fill_failure_mutex;
+        const int fill_tasks = static_cast<int>(std::min<size_t>(nsrc, static_cast<size_t>(scratch.split_threads)));
+        #pragma omp taskloop num_tasks(fill_tasks) default(shared)
+        for (size_t s = 0; s < nsrc; ++s) {
+            auto& ps = per_source[s];
+            ps.any_rows = false;
+            try {
+                ps.P.resize(static_cast<size_t>(std::max<int64_t>(box_src_r[s], 1) * n));
+                compute_P_into(s, ps.positions, ps.Trow, ps.P.data(), 1);
+                const int64_t r = box_src_r[s];
+                if (r > 0) {
+                    ps.any_rows = accumulate_W(s, box_src_boxes[s], r, ps.positions, ps.Trow, ps.TrowT, ps.W, false);
+                }
+            } catch (...) {
+                std::lock_guard<std::mutex> lock(fill_failure_mutex);
+                if (!fill_failure) fill_failure = std::current_exception();
+            }
+        }
+        if (fill_failure) std::rethrow_exception(fill_failure);
+        FMM_PHASE_LAP(fill_lap, SK_FILL_GATHER);
+        {
+            // O' (n x d) -= sum over the sources, in order, of P^T (n x r) W_E^T (r x d)
+            int m_i = static_cast<int>(n);
+            int ldc = static_cast<int>(n);
+            DataType alpha = DataType{-1.0};
+            DataType beta = DataType{1.0};
+            split_columns_chunked(d, scratch.split_threads, [&](int64_t c0, int64_t c1) {
+                int n_t = static_cast<int>(c1 - c0);
+                for (size_t s = 0; s < nsrc; ++s) {
+                    const int64_t r = box_src_r[s];
+                    if (r == 0 || !per_source[s].any_rows) continue;
+                    int k_i = static_cast<int>(r);
+                    int ld = static_cast<int>(r);
+                    gemm_("T", "N", &m_i, &n_t, &k_i, &alpha, per_source[s].P.data(), &ld,
+                          per_source[s].W.data() + c0 * r, &ld, &beta, Oacc.data() + c0 * n, &ldc);
+                }
+            });
+        }
+        FMM_PHASE_LAP(fill_lap, SK_FILL_GEMM);
+    } else if (sketch_space_fill) {
+        auto& W = scratch.stream_W;      // W_E^T: r x d, column-major
+        auto& Trow = scratch.stream_Trow;
+        auto& TrowT = scratch.stream_TrowT;
+        for (size_t src_idx = 0; src_idx < box_src_mortons.size(); ++src_idx) {
+            FMM_PHASE_LAP_BEGIN(fill_lap);
+            const DataType* P = compute_P(src_idx);
+            FMM_PHASE_LAP(fill_lap, SK_FILL_GEMM);
+            const int64_t r = box_src_r[src_idx];
+            if (r == 0) {
+                continue;
+            }
+            BoxData<CoordType, DataType>* src_box = box_src_boxes[src_idx];
+            const bool any_rows = accumulate_W(src_idx, src_box, r, scratch.stream_positions, Trow, TrowT, W, true);
             if (!any_rows) {
                 continue;
             }
 
             // O' (n x d) -= P^T (n x r) * W_E^T (r x d); output columns split.
+            FMM_PHASE_LAP_BEGIN(gemm_lap);
             int m_i = static_cast<int>(n);
             int n_i = static_cast<int>(d);
             int k_i = static_cast<int>(r);
@@ -9421,7 +9508,7 @@ void gather_id_target_streamed(
                 gemm_("T", "N", &m_i, &n_t, &k_i, &alpha, P, &lda, W.data() + c0 * r, &ldb,
                       &beta, Oacc.data() + c0 * n, &ldc);
             });
-            FMM_PHASE_LAP(fill_lap, SK_FILL_GEMM);
+            FMM_PHASE_LAP(gemm_lap, SK_FILL_GEMM);
         }
     }
 
