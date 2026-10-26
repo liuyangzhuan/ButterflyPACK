@@ -115,8 +115,14 @@ struct PartialDeviceStore {
     MetaBuilder meta;
     DeviceBuffer meta_device;
     PinnedBuffer host_in, host_out;
+    // the records the factorization kept here (their blocks, owned), and how
+    // to give them host copies before an eviction (partial_records_to_host)
+    std::vector<char*> kept_blocks;
+    size_t kept_bytes = 0;
+    std::function<void()> spill;
 
-    void release() {
+    // what the first CB product or entries set up (the kept records stay)
+    void release_prepared() {
         DeviceHeap& heap = DeviceHeap::instance();
 #ifdef H2_HAVE_NVCOMP
         for (auto& lv : levels) {
@@ -140,7 +146,20 @@ struct PartialDeviceStore {
         decided = false;
         usable = false;
     }
+    void release() {
+        release_prepared();
+        DeviceHeap& heap = DeviceHeap::instance();
+        for (char* b : kept_blocks) heap.free(b);
+        kept_blocks.clear();
+        kept_bytes = 0;
+        spill = nullptr;
+    }
 };
+
+// The factorization keeps a chunk of records on the device while all it
+// keeps stays under this fraction of the device pool (the higher levels'
+// factorization runs beside them; decide_solve_keep sees what they take)
+constexpr double kPartialKeepFraction = 0.2;
 
 // The store of the active operator (one per operator, as the solve's): its
 // device data goes with the operator, and with a new factorization of it
@@ -157,7 +176,11 @@ inline PartialDeviceStore& partial_device_store() {
         });
         c.holders.push_back([s](const void* tree) -> size_t {
             auto it = s->find(tree);
-            return it == s->end() ? 0 : it->second.bytes;
+            return it == s->end() ? 0 : it->second.bytes + it->second.kept_bytes;
+        });
+        c.spillers.push_back([s](const void* tree) {
+            auto it = s->find(tree);
+            if (it != s->end() && !it->second.kept_blocks.empty() && it->second.spill) it->second.spill();
         });
         device_store_invalidators().push_back([s] {
             auto it = s->find(operator_context().active);
@@ -228,7 +251,7 @@ bool partial_device_ready(ParallelTree<CoordType, DataType>* tree, int verbosity
     if (device_solve_suspended() || !color_gpu_enabled()) return false;
     PartialDeviceStore& st = partial_device_store();
     if (st.decided && st.tree == tree) return st.usable;
-    st.release();
+    st.release_prepared();
     st.tree = tree;
     st.decided = true;
     using clock = std::chrono::steady_clock;
@@ -309,8 +332,16 @@ bool partial_device_ready(ParallelTree<CoordType, DataType>* tree, int verbosity
                 d.cols = h.cols;
                 if (h.rows * h.cols == 0) return;
                 if (h.compressed()) compressed = true;
-                record_bytes += align_up(h.compressed() ? h.packed.size() : static_cast<size_t>(h.rows * h.cols) * D);
                 raw += align_up(static_cast<size_t>(h.rows * h.cols) * D);
+                if (h.device != nullptr) {  // kept by the factorization: read in place
+                    d.dev = h.device;
+                    if (h.compressed()) {
+                        d.chunk_off.assign(h.strides.size(), 0);
+                        for (size_t c = 1; c < h.strides.size(); ++c) d.chunk_off[c] = d.chunk_off[c - 1] + h.strides[c - 1];
+                    }
+                    return;
+                }
+                record_bytes += align_up(h.compressed() ? h.packed.size() : static_cast<size_t>(h.rows * h.cols) * D);
                 placed.push_back(Placed{&d, &h});
             };
             add(B.rr, f.X_RR);
@@ -360,6 +391,12 @@ bool partial_device_ready(ParallelTree<CoordType, DataType>* tree, int verbosity
     double sizes[3] = {static_cast<double>(record_bytes), static_cast<double>(root_bytes), need};
     MPI_Allreduce(MPI_IN_PLACE, sizes, 3, MPI_DOUBLE, MPI_MAX, tree->comm);
     if (bad) {
+        // the records kept here go to the host (the host paths read them) and
+        // free the device for the other operators
+        if (!st.kept_blocks.empty() && st.spill) st.spill();
+        st.release();
+        st.tree = tree;
+        st.decided = true;
         if (rank == 0 && verbosity >= 0) {
             std::printf("GPU partial CB: host product (%s on some rank; records %.2f GB, root block %.2f GB, need %.2f GB "
                         "against %.2f GB on rank 0)\n", reason.empty() ? "another rank" : reason.c_str(), sizes[0] / 1e9,
@@ -1112,6 +1149,13 @@ void partial_device_pairs(PartialDeviceWork& work, const std::vector<const Parti
         o += n;
     }
     work.release(d);
+}
+
+// Bytes from the device to the host through the backend's pinned staging
+// buffers (the kept records' host copies)
+inline void partial_download(void* dst, const void* src, size_t bytes) {
+    PartialDeviceWork work;
+    work.download(dst, src, bytes);
 }
 
 // c_bpack_partial_schur_release: the device copies go with the host's.

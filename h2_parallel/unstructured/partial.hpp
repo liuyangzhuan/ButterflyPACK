@@ -99,6 +99,44 @@ void partial_gemm(char ta, char tb, int64_t m, int64_t n, int64_t k, DataType al
     }
 }
 
+// The records kept on the device only (PartialRecord::device_only) given
+// host copies, for the paths that read them on the host (the host CB entries
+// and product, H2_partial_extract host, the BPACK_CHECK comparisons) and
+// before an eviction of the device data (drop_device: their device pointers
+// go, the store frees the blocks).  Local; nothing without kept records.
+template<typename CoordType, typename DataType>
+void partial_records_to_host(fmm::ParallelTree<CoordType, DataType>& tree, bool drop_device) {
+#ifdef H2_HAVE_GPU
+    if (!tree.partial_records_on_device) return;
+    for (auto& level : tree.levels) {
+        for (auto& box : level.local_boxes) {
+            auto& f = box.f22;
+            if (!f.sparsified) continue;
+            auto fetch = [&](fmm::PartialRecord<DataType>& m) {
+                if (m.device_only()) {
+                    if (m.compressed()) {
+                        size_t n = 0;
+                        for (uint32_t st : m.strides) n += st;
+                        m.packed.resize(n);
+                        fmm::gpu::partial_download(m.packed.data(), m.device, n);
+                    } else {
+                        m.data.resize(static_cast<size_t>(m.rows * m.cols));
+                        fmm::gpu::partial_download(m.data.data(), m.device, m.data.size() * sizeof(DataType));
+                    }
+                }
+                if (drop_device) m.device = nullptr;
+            };
+            for (auto* m : {&f.X_SR, &f.X_RS, &f.X_RR, &f.X_RN}) fetch(*m);
+            for (auto& m : f.X_NR) fetch(m);
+        }
+    }
+    if (drop_device) tree.partial_records_on_device = false;
+#else
+    (void)tree;
+    (void)drop_device;
+#endif
+}
+
 // A box's offset in its parent's point list (the children's skeletons in Morton order).
 template<typename CoordType, typename DataType>
 int64_t partial_child_offset(fmm::TreeLevel<CoordType, DataType>& child_level, int64_t morton, int dimension) {
@@ -873,14 +911,23 @@ void partial_f22_phase(fmm::ParallelTree<CoordType, DataType>* tree, fmm::TreeLe
         }
     }
     }
-    // the records' bytes as stored, and uncompressed
-    double record_gb[2] = {0.0, 0.0};
+    // the records' bytes as stored (on the host, kept on the device), and uncompressed
+    double record_gb[3] = {0.0, 0.0, 0.0};
     for (int64_t li : occupied_local) {
         const auto& f = level.local_boxes[static_cast<size_t>(li)].f22;
         if (!f.sparsified) continue;
         auto add = [&](const fmm::PartialRecord<DataType>& m) {
-            record_gb[0] += static_cast<double>(m.bytes()) / 1e9;
+            double kept = 0.0;
+            if (m.device_only()) {
+                if (m.compressed()) {
+                    for (uint32_t st : m.strides) kept += static_cast<double>(st);
+                } else {
+                    kept = static_cast<double>(m.rows) * static_cast<double>(m.cols) * sizeof(DataType);
+                }
+            }
+            record_gb[0] += (static_cast<double>(m.bytes()) + kept) / 1e9;
             record_gb[1] += static_cast<double>(m.rows) * static_cast<double>(m.cols) * sizeof(DataType) / 1e9;
+            record_gb[2] += kept / 1e9;
         };
         for (const auto* m : {&f.X_SR, &f.X_RS, &f.X_RR, &f.X_RN}) add(*m);
         for (const auto& m : f.X_NR) add(m);
@@ -888,7 +935,7 @@ void partial_f22_phase(fmm::ParallelTree<CoordType, DataType>* tree, fmm::TreeLe
     int64_t counts[3] = {sparsified_boxes, sparsified_points, kept_points};
     if (tree->mpi_size > 1) {
         MPI_Allreduce(MPI_IN_PLACE, counts, 3, MPI_INT64_T, MPI_SUM, level_comm);
-        MPI_Allreduce(MPI_IN_PLACE, record_gb, 2, MPI_DOUBLE, MPI_SUM, level_comm);
+        MPI_Allreduce(MPI_IN_PLACE, record_gb, 3, MPI_DOUBLE, MPI_SUM, level_comm);
     }
     if (print_detail && fmm::env::trace("phase")) {
         if (device) {
@@ -905,8 +952,15 @@ void partial_f22_phase(fmm::ParallelTree<CoordType, DataType>* tree, fmm::TreeLe
         std::printf("  F22 phase: %lld boxes, %lld points sparsified, %lld kept; records %.2f GB", static_cast<long long>(counts[0]),
                     static_cast<long long>(counts[1]), static_cast<long long>(counts[2]), record_gb[0]);
         if (tree->partial_compress_records) std::printf(" (%.2f GB uncompressed)", record_gb[1]);
+        if (record_gb[2] > 0.0) std::printf(", %.2f GB of them kept on the device only", record_gb[2]);
         std::printf("\n");
     }
+#ifdef H2_HAVE_GPU
+    // the kept records' host copies before an eviction of the operator's device data
+    if (tree->partial_records_on_device) {
+        fmm::gpu::partial_device_store().spill = [tree] { partial_records_to_host(*tree, true); };
+    }
+#endif
 }
 
 // =====================================================================
@@ -2460,7 +2514,8 @@ void partial_schur_blocks(fmm::ParallelTree<CoordType, DataType>& tree, int64_t 
     // 0 (auto) also when the call is large enough (the same on every rank:
     // the request and the option are).  BPACK_CHECK=solve: the host's too.
     if constexpr (fmm::gpu::gpu_data_type<DataType>) {
-        if (extract_mode != 2 && (extract_mode == 1 || ooff.back() >= kPartialExtractDeviceEntries) &&
+        if (extract_mode != 2 &&
+            (extract_mode == 1 || ooff.back() >= kPartialExtractDeviceEntries || tree.partial_records_on_device) &&
             fmm::gpu::partial_device_ready(&tree, 0)) {
             partial_schur_blocks_device(tree, ninter, rows, nrows, cols, ncols, out, roff, coff, ooff);
             if (fmm::gpu::device_solve_check()) {
@@ -2483,6 +2538,7 @@ void partial_schur_blocks(fmm::ParallelTree<CoordType, DataType>& tree, int64_t 
         }
     }
 #endif
+    partial_records_to_host(tree, false);  // (the host reads the records)
     // G (ni x nj) += A^T X B, A k1 x ni, X k1 x k2, B k2 x nj (each its rows the leading dimension), in the
     // cheaper order: a block's few members against another's many take A^T X first
     auto triple = [&](int64_t ni, int64_t nj, int64_t k1, int64_t k2, const DataType* A, const DataType* X,
@@ -3232,6 +3288,7 @@ void partial_schur_multiply(fmm::ParallelTree<CoordType, DataType>& tree, const 
         fmm::gather_skeleton_to_parent(level, tree.levels[static_cast<size_t>(l) - 1], up, raw[static_cast<size_t>(l) - 1],
                                        dimension, tree.comm);
     }
+    if (!device) partial_records_to_host(tree, false);  // (the host reads the records)
     // h: the accumulators; the root's block on the root's owner
     auto h = partial_scratch<CoordType, DataType>(&tree, nullptr, nrhs);
     if (pr.active && pr.n22 > 0) {
@@ -3672,8 +3729,9 @@ size_t partial_schur_release(fmm::ParallelTree<CoordType, DataType>& tree) {
         }
     }
 #ifdef H2_HAVE_GPU
-    if constexpr (fmm::gpu::gpu_data_type<DataType>) fmm::gpu::partial_device_release(&tree);
+    if constexpr (fmm::gpu::gpu_data_type<DataType>) fmm::gpu::partial_device_release(&tree);  // (the kept records too)
 #endif
+    tree.partial_records_on_device = false;
     const size_t freed = records + root + lists;
     if (fmm::env::trace("memory")) {
         std::printf("H2_PARTIAL_RELEASE rank=%d freed=%.6f records=%.6f root=%.6f lists=%.6f rss_before=%.6f rss_after=%.6f\n",

@@ -509,7 +509,13 @@ struct PartialRecord {
     // its stride
     std::vector<char, DefaultInitAllocator<char>> packed;
     std::vector<uint32_t> strides;
+    // kept on the device from the factorization (GPU_BACKEND/h2_gpu/
+    // partial_device.hpp): the entries, or the chunks end to end; null: on
+    // the host only.  With no host copy (device_only) the host paths fetch it
+    // first (partial_records_to_host).
+    const char* device = nullptr;
     bool compressed() const { return !strides.empty(); }
+    bool device_only() const { return device != nullptr && data.empty() && packed.empty() && rows * cols > 0; }
     size_t bytes() const { return data.capacity() * sizeof(DataType) + packed.capacity(); }
     void allocate(int64_t nrows, int64_t ncols) {  // zero-filled
         rows = nrows;
@@ -1728,6 +1734,7 @@ struct ParallelTree {
     double id_s_op = 0.0;                ///< H2_s_op: the IDs' absolute floor is tol * id_s_op (0: off)
     int64_t partial_count = 0;           ///< H2_partial: points with id < partial_count are F11 (eliminated); 0: full factorization
     bool partial_compress_records = false;  ///< H2_compress_factors with H2_partial: the F22 records stored compressed
+    bool partial_records_on_device = false;  ///< some F22 records kept on the device only (partial_device.hpp)
     bool partial() const { return partial_count > 0; }
     bool partial_f11(int64_t point_id) const { return point_id < partial_count; }
     PartialRootFactor<DataType> partial_root;  ///< the root of a partial factorization

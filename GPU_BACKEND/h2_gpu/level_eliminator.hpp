@@ -48,6 +48,7 @@
 #include "evaluator.hpp"
 #include "owner_plan.hpp"
 #include "core/partial_record_codec.hpp"
+#include "partial_device.hpp"
 
 #include <omp.h>
 
@@ -8524,7 +8525,10 @@ void LevelEliminator<CoordType, DataType, KernelType>::f22_record_chunk(std::vec
 // (core/partial_record_codec.hpp), in groups of at most kXnrStagingBudget
 // (the codec's staging), each group's bytes a block of its own and copied
 // into the records' packed bytes; a group the codec gets no staging for goes
-// raw with the rest.
+// raw with the rest.  A group of lossy records stays on the device instead
+// (a resident block of the partial store, PartialRecord::device, no host
+// copy) while what the factorization keeps fits kPartialKeepFraction of the
+// pool; T always goes to the host.
 template<typename CoordType, typename DataType, typename KernelType>
 template<typename Each>
 void LevelEliminator<CoordType, DataType, KernelType>::f22_submit_records(S* d_rec, size_t front_elems, size_t block_bytes,
@@ -8532,6 +8536,19 @@ void LevelEliminator<CoordType, DataType, KernelType>::f22_submit_records(S* d_r
     Context& ctx = Context::instance();
     cudaStream_t stream = ctx.stream();
     const size_t D = sizeof(S);
+    PartialDeviceStore& keep_store = partial_device_store();
+    // a resident block of `bytes` for kept records, or null (no room)
+    auto keep_block = [&](size_t bytes) -> char* {
+        if (bytes == 0) return nullptr;
+        const double room = kPartialKeepFraction * static_cast<double>(heap_.capacity());
+        if (static_cast<double>(keep_store.kept_bytes + bytes) > room) return nullptr;
+        char* b = heap_.try_alloc_resident(bytes);
+        if (b == nullptr) return nullptr;
+        keep_store.kept_blocks.push_back(b);
+        keep_store.kept_bytes += bytes;
+        tree_->partial_records_on_device = true;
+        return b;
+    };
     struct Item { PartialRecord<DataType>* m; int rows, cols; size_t at; bool lossy; bool packed = false; };
     std::vector<Item> items;
     size_t at = 0;  // elements
@@ -8593,7 +8610,8 @@ void LevelEliminator<CoordType, DataType, KernelType>::f22_submit_records(S* d_r
             }
             size_t total = 0;
             for (const auto& o : out) total += o.bytes;
-            char* d_pk = heap_.try_alloc(total, ResidentKind::Codec);
+            char* kept = keep_block(total);  // (else to the host)
+            char* d_pk = kept != nullptr ? kept : heap_.try_alloc(total, ResidentKind::Codec);
             if (d_pk == nullptr) {
                 codec.release();
                 f22_t_[12] += 1;
@@ -8621,6 +8639,13 @@ void LevelEliminator<CoordType, DataType, KernelType>::f22_submit_records(S* d_r
                 it.packed = true;
                 PartialRecord<DataType>* record = it.m;
                 const size_t n = out[q].bytes;
+                if (kept != nullptr) {
+                    record->device = kept + first;
+                    record->rows = it.rows;
+                    record->cols = it.cols;
+                    record->lda = it.rows;
+                    continue;
+                }
                 segments.push_back(HostCopier::Segment::into(
                     [record, n] {
                         record->packed.resize(n);
@@ -8630,11 +8655,36 @@ void LevelEliminator<CoordType, DataType, KernelType>::f22_submit_records(S* d_r
                 shapes->push_back(it);
             }
             codec.release();  // (the staging: after the copies, in the stream's order)
-            submit(d_pk, total, std::move(segments), total, shapes);
+            if (kept == nullptr) submit(d_pk, total, std::move(segments), total, shapes);
         }
     }
 #endif
-    // the rest from the block itself
+    // the rest from the block itself; its lossy records kept on the device
+    // when there is room (copied into a block of their own: the records block
+    // goes once T is down)
+    {
+        size_t bytes = 0;
+        for (const Item& it : items) {
+            if (!it.packed && it.lossy) bytes += align_up(static_cast<size_t>(it.rows) * static_cast<size_t>(it.cols) * D);
+        }
+        if (char* kept = keep_block(bytes)) {
+            size_t off = 0;
+            for (Item& it : items) {
+                if (it.packed || !it.lossy) continue;
+                const size_t n = static_cast<size_t>(it.rows) * static_cast<size_t>(it.cols);
+                if (n > 0) {
+                    check_cuda(cudaMemcpyAsync(kept + off, d_rec + it.at, n * D, cudaMemcpyDeviceToDevice, stream),
+                               "F22 step: a kept record");
+                    it.m->device = kept + off;
+                }
+                it.m->rows = it.rows;
+                it.m->cols = it.cols;
+                it.m->lda = it.rows;
+                it.packed = true;  // (handled)
+                off += align_up(n * D);
+            }
+        }
+    }
     auto shapes = std::make_shared<std::vector<Item>>();
     std::vector<HostCopier::Segment> segments;
     size_t copied = 0;

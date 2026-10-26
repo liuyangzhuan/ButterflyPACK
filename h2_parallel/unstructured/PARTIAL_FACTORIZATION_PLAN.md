@@ -533,7 +533,7 @@ point set and on a plain cube split, dense checks at small N.
     decompression of all 31.6 GB each product); raw records (31.7 GB) do not
     fit a 40 GB card there and the host product runs.  The host copies stay
     (the CB entries read them until G3); T22 stays on the host (the passes).
-  - **G3 done 2026-10-26 (uncommitted):** the CB entries on the device, with the
+  - **G3 done 2026-10-26 (committed 15018c3):** the CB entries on the device, with the
     host extraction kept selectable: solver option `H2_partial_extract`
     (0 auto, the default: device when the records are resident and the
     call is large enough, else host; 1 device when resident; 2 host; the
@@ -562,6 +562,23 @@ point set and on a plain cube split, dense checks at small N.
     100 MB to rank 0), a GPU-to-GPU exchange's job.  Raw records at 64^3 do
     not fit one card: the host runs.  Small calls lose on the device (20^3,
     4 small blocks: 4.1 ms against 2.5 ms): auto takes the device from 2^16
-    entries a call (kPartialExtractDeviceEntries, uncalibrated).  Next: the
-    records kept on the device from the factorization (no host copies), once
-    STRUMPACK's call sizes are known.
+    entries a call (kPartialExtractDeviceEntries, uncalibrated).
+  - **G4 done 2026-10-26 (uncommitted):** the records kept on the device from
+    the factorization, no host copies.  f22_submit_records keeps a chunk's
+    lossy records (Bitcomp chunks, or raw entries copied out of the records
+    block) in a resident block of the partial store (PartialRecord::device)
+    while all the factorization keeps stays under kPartialKeepFraction (0.2)
+    of the pool, else downloads them as before; T always goes down.  The
+    store reads kept records in place (release_prepared vs release: the kept
+    blocks go with the operator, a new factorization or the CB release).
+    The host paths (H2_partial_extract host, the BPACK_CHECK comparisons, a
+    store that does not fit) fetch the kept ones first
+    (partial_records_to_host); a store that does not fit and an operator
+    eviction spill them (host copies, device blocks freed).  Auto takes the
+    device for every call while records have no host copy.  Checks as G3,
+    also with a 0.0005 share (mixed residency: some records kept, the rest
+    uploaded).  64^3 one GPU, compressed: peak host RSS 11.04 -> 5.20 GB,
+    factor 8.62 -> 8.25-8.34 s, first CB use 0.98 -> 0.25 s, rounds as G3;
+    4 ranks: rank 0's RSS 4.20 -> 2.76 GB.  Raw records at 64^3: level 3
+    keeps 7.04 GB, the store cannot take the rest, so they spill at the first
+    CB use and the host runs (as before G4).
