@@ -203,7 +203,7 @@ struct SweepBatch {
     bool closing = false;
     DataType beta = DataType(1);
     int max_m = 0, max_n = 0, max_k = 0;
-    int tc_first = 0, tc48 = 0, tc64 = 0;  // its tensor-core tiles in the exec's list (48s, then 64s)
+    int tc_first = 0, tc32 = 0, tc48 = 0, tc64 = 0;  // its tensor-core tiles in the exec's list (32s, 48s, 64s)
     double flops = 0.0;
 };
 
@@ -565,15 +565,24 @@ inline void leaf_offsets(const BfDevice& bf, std::vector<int64_t>& acc_n, std::v
 }
 
 // Whether a batch runs on the FP64 tensor cores (fmm::gpu::launch_dgemm_vbatched_tc,
-// which rounds as MAGMA does): from 32 columns, and transposed from 9 (below
-// that a narrow kernel takes it).  Measured on one A100 (262144^2, L = 12,
-// ms a matvec): untransposed MAGMA 3.6 and the tensor cores 5.1 at 24
-// columns, 5.8 and 5.3 at 32, 9.2 and 6.6 at 64, 33 and 24 at 256;
-// transposed MAGMA stays at 4.6-5.3 up to 32 columns, the tensor cores the same.
-inline bool sweep_tensor_cores(bool trans_a, int max_n) {
+// which rounds as MAGMA does) when no narrow kernel takes it: transposed
+// always; untransposed from 25 columns, where MAGMA's GEMMs slow by half
+// (8192 GEMMs of 50 x 50 on one A100: 0.27 ms at 24 columns, 0.47 at 28;
+// the tensor cores 0.30 and 0.32), and for blocks of more than 64 rows and
+// 32 inner columns at any width (16 columns of 128 x 64: 0.83 against 0.47;
+// of 128 x 24, MAGMA's 0.21 against 0.34).  Measured on the same A100
+// (262144^2, L = 12, ms a matvec, with 48 and 64 tiles): untransposed 9.2
+// against 6.6 at 64 columns and 33 against 24 at 256.
+inline bool sweep_tensor_cores(bool trans_a, int max_m, int max_n, int max_k) {
     if (!std::is_same<DataType, double>::value) return false;
-    return max_n >= 32 || (trans_a && max_n > 8);
+    return trans_a || max_n >= 25 || (max_m > 64 && max_k > 32);
 }
+
+// Up to this many columns a batch's tensor-core tiles are 32 x 32, which
+// leave the least of a tile empty there (8192 GEMMs of 50 x 50 at 32
+// columns: 0.34 ms against 0.42 with one 64 tile each); wider, each GEMM
+// takes 48s or 64s by what it leaves empty.
+constexpr int kTcNarrowCols = 32;
 
 // Record the sweep of `plan` for nrhs: the same walk as the CPU sweep's
 // levels (the index arithmetic above), but every GEMM kept as offsets, and
@@ -846,28 +855,33 @@ inline SweepExec& sweep_exec(const BfDevice& bf, SweepPlan& plan, int nrhs) {
         exchange_after(level, 300 + level);
     }
 
-    // ---- the tensor-core tiles of the batches wide enough for them
+    // ---- the tensor-core tiles of the batches that run on them: those no
+    // narrow kernel takes (the closing product's narrow kernel needs the
+    // caller's alpha 1 and beta 0 or 1, so it keeps its tiles)
     std::vector<int2> tiles;
     const bool tc = std::is_same<DataType, double>::value;
     for (SweepBatch& b : ex.batches) {
         b.tc_first = static_cast<int>(tiles.size());
-        b.tc48 = b.tc64 = 0;
-        if (!tc || !sweep_tensor_cores(b.trans_a, b.max_n)) continue;
-        std::vector<int2> t48, t64;
+        b.tc32 = b.tc48 = b.tc64 = 0;
+        if (!tc || !sweep_tensor_cores(b.trans_a, b.max_m, b.max_n, b.max_k)) continue;
+        if (!b.closing && sweep_narrow_kind(b.trans_a, b.max_m, b.max_n) != 0) continue;
+        std::vector<int2> t32, t48, t64;
         for (int i = 0; i < b.count; ++i) {
             const SweepItem& it = items[static_cast<size_t>(b.first + i)];
             if (it.m <= 0 || it.n <= 0) continue;
             typename fmm::gpu::VBatch<double>::Entry e{};
             e.m = it.m;
             e.n = it.n;
-            const int tile = fmm::gpu::VBatch<double>::tc_tile_of(e);
-            std::vector<int2>& out = tile == 48 ? t48 : t64;
+            const int tile = b.max_n <= kTcNarrowCols ? 32 : fmm::gpu::VBatch<double>::tc_tile_of(e);
+            std::vector<int2>& out = tile == 32 ? t32 : (tile == 48 ? t48 : t64);
             const int rows = (it.m + tile - 1) / tile, cols = (it.n + tile - 1) / tile;
             for (int c = 0; c < cols; ++c)
                 for (int r = 0; r < rows; ++r) out.push_back(make_int2(i, (r << 16) | c));
         }
+        b.tc32 = static_cast<int>(t32.size());
         b.tc48 = static_cast<int>(t48.size());
         b.tc64 = static_cast<int>(t64.size());
+        tiles.insert(tiles.end(), t32.begin(), t32.end());
         tiles.insert(tiles.end(), t48.begin(), t48.end());
         tiles.insert(tiles.end(), t64.begin(), t64.end());
     }
@@ -953,15 +967,18 @@ inline void run_batch(const SweepExec& ex, const SweepBatch& b, DataType alpha, 
                             ex.d_b + f, ex.d_ldb + f, be, ex.d_c + f, ex.d_ldc + f, b.max_m, b.max_n, stream);
         return;
     }
-    if (b.tc48 + b.tc64 > 0) {
+    if (b.tc32 + b.tc48 + b.tc64 > 0) {
         if constexpr (std::is_same<DataType, double>::value) {
-            for (int part = 0; part < 2; ++part) {
-                const int nb = part == 0 ? b.tc48 : b.tc64;
-                if (nb == 0) continue;
-                fmm::gpu::launch_dgemm_vbatched_tc(
-                    b.trans_a, false, ex.d_m + f, ex.d_n + f, ex.d_k + f, al, ex.d_a + f, ex.d_lda + f, ex.d_b + f,
-                    ex.d_ldb + f, be, ex.d_c + f, ex.d_ldc + f, ex.d_tc + b.tc_first + (part == 0 ? 0 : b.tc48), nb,
-                    part == 0 ? 48 : 64, stream);
+            const int parts[3] = {b.tc32, b.tc48, b.tc64};
+            int at = b.tc_first;
+            for (int part = 0; part < 3; ++part) {
+                if (parts[part] > 0) {
+                    fmm::gpu::launch_dgemm_vbatched_tc(b.trans_a, false, ex.d_m + f, ex.d_n + f, ex.d_k + f, al,
+                                                       ex.d_a + f, ex.d_lda + f, ex.d_b + f, ex.d_ldb + f, be,
+                                                       ex.d_c + f, ex.d_ldc + f, ex.d_tc + at, parts[part],
+                                                       32 + 16 * part, stream);
+                }
+                at += parts[part];
             }
             return;
         }

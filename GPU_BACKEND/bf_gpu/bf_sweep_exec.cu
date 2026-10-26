@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 
 namespace bf {
 namespace gpu {
@@ -32,66 +33,99 @@ __global__ void patch_kernel(int count, const int64_t* b_off, const int64_t* c_o
     }
 }
 
-// C = alpha A^T B + beta C for at most kCols columns: one thread block per
-// entry and a thread per row of C, k in chunks of 32 staged in shared memory
-// (a warp per column of A, its lanes along k, stored with an odd pitch so
-// neither the stores nor the reads collide on a bank).  Each element of C
-// accumulates its k products in order from zero, one rounding each, then
-// takes alpha and beta as MAGMA's kernels do - so the result is MAGMA's, and
-// the tensor-core GEMM's, to the bit.  A batch of few columns streams the
-// factors once instead of through GEMM tiles that a column or two leave
-// mostly empty.
+// C = alpha A^T B + beta C for at most kStagedMaxCols columns and
+// kStagedMaxRows rows: one thread block per entry, its threads splitting C's
+// columns in groups of kGroupCols, a thread per row of C within a group.  k
+// goes in chunks of 32 staged in shared memory: a warp per column of A, then
+// of B, its lanes along k, with kLoads columns' loads in flight before it
+// stores any.  (Staging one column at a time made a chunk a chain of memory
+// latencies: a 262144^2 matvec at 16 columns took 5.0 ms against the
+// untransposed sweep's 3.4.)  A^T is stored with an odd pitch, so neither the
+// stores nor the reads collide on a bank; B k-major, so a thread reads its
+// columns as 16-byte broadcasts.  Each element of C accumulates its k
+// products in order from zero, one rounding each, then takes alpha and beta
+// as MAGMA's kernels do - so the result is MAGMA's, and the tensor-core
+// GEMM's, to the bit.  kAccum reads C before the k loop rather than after it,
+// and gets its own register bound: at 64 registers its C values spill.
 constexpr int kKC = 32;
-constexpr int kSkinnyMaxRows = 160;  // the pitch keeps a block's shared memory under 48 KB
+constexpr int kGroupCols = 8;
+constexpr int kStagedMaxRows = 64;
+constexpr int kStagedMaxCols = 32;
+constexpr int kStagedMaxThreads = 256;  // 64 rows x 4 groups
+constexpr int kLoads = 6;
 
-template<int kCols, int kThreads>
-__global__ void __launch_bounds__(kThreads)
-skinny_kernel(const int* m, const int* n, const int* k, DataType alpha, const DataType* const* a, const int* lda,
+template<bool kAccum>
+__global__ void __launch_bounds__(kStagedMaxThreads, kAccum ? 3 : 4)
+staged_kernel(const int* m, const int* n, const int* k, DataType alpha, const DataType* const* a, const int* lda,
               const DataType* const* b, const int* ldb, DataType beta, DataType* const* c, const int* ldc,
-              int pitch) {
-    constexpr int kWarps = kThreads / 32;
+              int pitch, int pitch_b, int rows_pad) {
+    static_assert(std::is_same<DataType, double>::value, "B is read as double2");
     extern __shared__ DataType smem[];
     DataType* sA = smem;                                       // A^T(r, kk) at kk * pitch + r
-    DataType* sB = smem + static_cast<size_t>(kKC) * pitch;    // B(kk, j) at j * kKC + kk
+    DataType* sB = smem + static_cast<size_t>(kKC) * pitch;    // B(kk, j) at kk * pitch_b + j
     const int e = blockIdx.x;
     const int M = m[e], N = n[e], K = k[e];
     if (M <= 0 || N <= 0) return;
-    const DataType* A = a[e];
-    const DataType* B = b[e];
+    const DataType* __restrict__ A = a[e];
+    const DataType* __restrict__ B = b[e];
     const int la = lda[e], lb = ldb[e];
-    const int tid = threadIdx.x, lane = tid & 31, warp = tid >> 5;
-    DataType acc[kCols];
+    const int tid = threadIdx.x, lane = tid & 31, warp = tid >> 5, warps = blockDim.x >> 5;
+    const int r = tid % rows_pad, j0 = (tid / rows_pad) * kGroupCols;
+    const bool mine = r < M && j0 < N;
+    DataType* C = c[e] + r;
+    const int lc = ldc[e];
+    DataType cv[kAccum ? kGroupCols : 1];
+    if (kAccum && mine) {
 #pragma unroll
-    for (int j = 0; j < kCols; ++j) acc[j] = DataType(0);
+        for (int j = 0; j < kGroupCols; ++j) cv[j] = j0 + j < N ? C[static_cast<int64_t>(j0 + j) * lc] : DataType(0);
+    }
+    DataType acc[kGroupCols];
+#pragma unroll
+    for (int j = 0; j < kGroupCols; ++j) acc[j] = DataType(0);
+    const int ncols = M + N;  // a chunk's columns: A's M, then B's N
     for (int k0 = 0; k0 < K; k0 += kKC) {
         const int kc = min(kKC, K - k0);
         __syncthreads();
-        // A^T(r, kk) = A(kk, r) at A[kk + r la]: a warp per r, lanes along kk
-        for (int r = warp; r < M; r += kWarps) {
-            if (lane < kc) sA[lane * pitch + r] = A[(k0 + lane) + static_cast<int64_t>(r) * la];
-        }
-        for (int j = warp; j < N; j += kWarps) {
-            if (lane < kc) sB[j * kKC + lane] = B[(k0 + lane) + static_cast<int64_t>(j) * lb];
+        if (lane < kc) {
+            for (int c0 = warp; c0 < ncols; c0 += warps * kLoads) {
+                DataType v[kLoads];
+#pragma unroll
+                for (int u = 0; u < kLoads; ++u) {
+                    const int col = c0 + u * warps;
+                    const DataType* src = col < M ? A + static_cast<int64_t>(col) * la
+                                                  : B + static_cast<int64_t>(col - M) * lb;
+                    v[u] = col < ncols ? __ldg(src + k0 + lane) : DataType(0);
+                }
+#pragma unroll
+                for (int u = 0; u < kLoads; ++u) {
+                    const int col = c0 + u * warps;
+                    if (col < M) sA[lane * pitch + col] = v[u];
+                    else if (col < ncols) sB[lane * pitch_b + col - M] = v[u];
+                }
+            }
         }
         __syncthreads();
-        if (tid < M) {
+        if (mine) {
+            const DataType* ap = sA + r;
+            const double2* bp = reinterpret_cast<const double2*>(sB + j0);
+            const int pb2 = pitch_b / 2;
+#pragma unroll 4
             for (int kk = 0; kk < kc; ++kk) {
-                const DataType av = sA[kk * pitch + tid];
+                const DataType av = ap[kk * pitch];
 #pragma unroll
-                for (int j = 0; j < kCols; ++j) {
-                    if (j < N) acc[j] = fma(av, sB[j * kKC + kk], acc[j]);
+                for (int q = 0; q < kGroupCols / 2; ++q) {
+                    const double2 bv = bp[kk * pb2 + q];
+                    acc[2 * q] = fma(av, bv.x, acc[2 * q]);
+                    acc[2 * q + 1] = fma(av, bv.y, acc[2 * q + 1]);
                 }
             }
         }
     }
-    if (tid >= M) return;
-    DataType* C = c[e] + tid;
-    const int lc = ldc[e];
+    if (!mine) return;
 #pragma unroll
-    for (int j = 0; j < kCols; ++j) {
-        if (j >= N) continue;
-        DataType* cp = C + static_cast<int64_t>(j) * lc;
-        *cp = beta == DataType(0) ? alpha * acc[j] : alpha * acc[j] + beta * *cp;
+    for (int j = 0; j < kGroupCols; ++j) {
+        if (j0 + j >= N) continue;
+        C[static_cast<int64_t>(j0 + j) * lc] = kAccum ? alpha * acc[j] + beta * cv[j] : alpha * acc[j];
     }
 }
 
@@ -119,40 +153,41 @@ direct_kernel(const int* m, const int* n, const int* k, DataType alpha, const Da
     *cp = beta == DataType(0) ? alpha * acc : alpha * acc + beta * *cp;
 }
 
-template<int kCols, int kThreads>
-void skinny_threads(int count, const int* m, const int* n, const int* k, DataType alpha, const DataType* const* a,
-                    const int* lda, const DataType* const* b, const int* ldb, DataType beta, DataType* const* c,
-                    const int* ldc, int pitch, cudaStream_t stream) {
-    const size_t shared = (static_cast<size_t>(kKC) * pitch + static_cast<size_t>(kCols) * kKC) * sizeof(DataType);
-    skinny_kernel<kCols, kThreads><<<count, kThreads, shared, stream>>>(m, n, k, alpha, a, lda, b, ldb, beta, c, ldc,
-                                                                       pitch);
-}
-
-template<int kCols>
-void skinny_with(int count, const int* m, const int* n, const int* k, DataType alpha, const DataType* const* a,
+// At least two warps a block: one warp alone stages too little at a time (a
+// 24-row leaf factor at one column ran 10% slower).  The widest block's
+// shared memory, 32 x (65 + 34) values, is under the 48 KB a launch gets.
+void staged_with(int count, const int* m, const int* n, const int* k, DataType alpha, const DataType* const* a,
                  const int* lda, const DataType* const* b, const int* ldb, DataType beta, DataType* const* c,
-                 const int* ldc, int max_m, cudaStream_t stream) {
+                 const int* ldc, int max_m, int max_n, cudaStream_t stream) {
     const int pitch = max_m | 1;  // odd
-    if (max_m <= 64) {
-        skinny_threads<kCols, 64>(count, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc, pitch, stream);
-    } else if (max_m <= 128) {
-        skinny_threads<kCols, 128>(count, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc, pitch, stream);
+    const int rows_pad = (max_m + 31) / 32 * 32;
+    const int groups = (max_n + kGroupCols - 1) / kGroupCols;
+    const int pitch_b = groups * kGroupCols + 2;  // even, for the 16-byte reads
+    const int threads = std::max(rows_pad * groups, 64);
+    const size_t shared = static_cast<size_t>(kKC) * (pitch + pitch_b) * sizeof(DataType);
+    if (beta == DataType(0)) {
+        staged_kernel<false><<<count, threads, shared, stream>>>(m, n, k, alpha, a, lda, b, ldb, beta, c, ldc, pitch,
+                                                                 pitch_b, rows_pad);
     } else {
-        skinny_threads<kCols, 192>(count, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc, pitch, stream);
+        staged_kernel<true><<<count, threads, shared, stream>>>(m, n, k, alpha, a, lda, b, ldb, beta, c, ldc, pitch,
+                                                                pitch_b, rows_pad);
     }
 }
 
 }  // namespace
 
 // Which narrow kernel takes a batch, if one does (bf_sweep_n.hpp): the
-// direct one for one untransposed column, the staged one for up to 8
-// transposed columns; MAGMA and the tensor cores take the rest.  Measured on
-// one A100 (262144^2, L = 12): MAGMA's transposed batches run at 4.6 ms a
-// matvec whatever the column count up to 16, the staged kernel 2.3-2.9 ms up
-// to 8 columns; untransposed, MAGMA is the faster from 2 columns on.
+// direct one for one untransposed column, the staged one for transposed
+// batches of up to kStagedMaxCols columns and kStagedMaxRows rows; MAGMA and
+// the tensor cores take the rest.  Measured on one A100, 8192 GEMMs of
+// 50 x 50 (ms, beta 0 / 1): at 16 columns the staged kernel 0.23 / 0.28, the
+// tensor cores 0.28 / 0.37 and untransposed MAGMA 0.25 / 0.32; at 32
+// columns 0.35 / 0.43, 0.34 / 0.54 and 0.47 / 0.57.  From 100 rows the
+// tensor cores are the faster (160 x 160 at 16 columns: 0.42 against 0.47).
+// Untransposed, MAGMA is the faster from 2 columns on.
 int sweep_narrow_kind(bool trans_a, int max_m, int max_n) {
     if (!trans_a) return max_n == 1 ? 1 : 0;
-    return (max_n <= 8 && max_m <= kSkinnyMaxRows) ? 2 : 0;
+    return (max_n <= kStagedMaxCols && max_m <= kStagedMaxRows) ? 2 : 0;
 }
 
 void launch_sweep_narrow(bool trans_a, int count, const int* m, const int* n, const int* k, DataType alpha,
@@ -171,8 +206,7 @@ void launch_sweep_narrow(bool trans_a, int count, const int* m, const int* n, co
                                                    b + first, ldb + first, beta, c + first, ldc + first);
         }
     } else if (kind == 2) {
-        if (max_n <= 4) skinny_with<4>(count, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc, max_m, stream);
-        else skinny_with<8>(count, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc, max_m, stream);
+        staged_with(count, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc, max_m, max_n, stream);
     } else {
         throw std::invalid_argument("launch_sweep_narrow: no narrow kernel takes this batch");
     }
