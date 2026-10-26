@@ -39,9 +39,14 @@ Everything the H2 and HODLR backends keep on the device lives in the pool.
 Within it, the H2 factorization keeps a level's solve factors on the device
 when an upper bound of their size fits under 0.8 of the pool (the others are
 uploaded at the first solve), and the H2 compression keeps the blocks of the
-device matvec while the pool stays under 0.9 of its size. With several H2
-matrices in one process, each keeps its device data; the least recently used
-matrices' data is released when the others hold more than half the pool.
+device matvec while the pool stays under 0.9 of its size, and a partial
+factorization (`H2_partial`, [h2_partial_factorization.md](h2_partial_factorization.md))
+keeps its Schur complement's records there, without host copies, while they
+fit under 0.2 of it. With several H2 matrices in one process, each keeps its
+device data; at the start of a build (a compression or factorization), the
+least recently used matrices' data is released while some rank's free pool
+is short of what a build takes (the most an earlier build took, plus an
+eighth), their data without a host copy going to the host first.
 
 ### BPACK_GPU_EXCHANGE_MB
 
@@ -80,7 +85,7 @@ meaningful. The checks print on rank 0 unless noted.
 
 | Value | Applies to | What it does | Expected result |
 |---|---|---|---|
-| `solve` | H2 GPU (`H2_use_gpu`), factorization | Every solve and every multiply with the factors on the GPU is run again on the host. Prints `GPU solve check: \|x_gpu - x_host\| / \|x_host\|` and `GPU multiply check: \|y_gpu - y_host\| / \|y_host\|` for each call. | Round-off: about 1e-16 to 1e-13. |
+| `solve` | H2 GPU (`H2_use_gpu`), factorization | Every solve and every multiply with the factors on the GPU is run again on the host. Prints `GPU solve check: \|x_gpu - x_host\| / \|x_host\|` and `GPU multiply check: \|y_gpu - y_host\| / \|y_host\|` for each call. With a partial factorization (`H2_partial`), the same for its partial solves (`GPU partial forward check`, `GPU partial backward check`) and for the Schur complement's products and entries computed on the GPU (`GPU partial CB product check`, `GPU partial CB entries check: ... (N entries)`). | Round-off: about 1e-16 to 1e-13. |
 | `matvec` | H2 GPU, compression only (`precon 2`, the H2 matvec without a factorization) | Every matvec of the compressed matrix on the GPU is run again on the host. Prints `GPU matvec check: \|y_gpu - y_host\| / \|y_host\|`. | Round-off. |
 | `kernel` | H2 GPU and HODLR GPU with a registered GPU evaluator of the entries ([gpu_kernels.md](gpu_kernels.md)) | Compares the evaluator's entries with the application's (its CPU entry callback) on up to 32 x 32 entries per block. H2: at the start of every GPU level, three blocks per rank: a box with itself (the singular self terms), with a neighbor, and with the last local box; prints `[gpu] level L kernel check (rank R, form): ...`, the form being `entry evaluator`, `entry evaluator (source, NVRTC)`, `block evaluator` or `entry-list evaluator`. HODLR: before the GPU construction, a dense leaf with itself and its rows with the last columns of the matrix, the largest over the ranks; prints `HODLR GPU kernel check: ...`. Each value is the largest difference relative to the block's largest entry. | Round-off; a large value means the evaluator does not compute the application's kernel (parameters, ids off by one, rows and columns swapped, coordinates read without `BPACK_GPU_COORDINATES`). |
 | `replica` | H2 GPU, replicated CA levels (`CA_level`, `H2_CA_owner_component 0`) | After each CA level on the GPU, compares every ghost copy of a box (each rank eliminates its ghosts again) with its owner's copy, bitwise, by hashes of the skeleton, T, LU(X_RR), pivots and the other factors. Prints `[gpu] level L CA replica check: N ghost copies, M differ from their owners' (bitwise)` and, per rank, the first copies that differ and in which factors. Also keeps the host copies of the factors, which are compared. | `0 differ`. Any difference breaks the CA solve's consistency. |

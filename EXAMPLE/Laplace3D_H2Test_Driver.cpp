@@ -62,7 +62,7 @@ struct DriverOptions {
   int extract_check = 0;   // intersections of the extraction check of a compression-only H2 (precon 2); 0: none
   int64_t h2_partial = 0;  // H2_partial: the first h2_partial points (the grid's first planes) form F11
   int h2_partial_extract = 0;  // H2_partial_extract: 0 auto, 1 device, 2 host
-  int partial_check = 0;   // 1: the partial solves and Schur complement against dense LAPACK on rank 0 (N <= 20000, distributed64 1)
+  int partial_check = 0;   // 1: the partial solves and Schur complement against dense LAPACK on rank 0 (N <= 40000, distributed64 1)
   int partial_extract_bench = 0;  // > 0: that many rounds of parent-like Schur complement blocks through c_bpack_extractelement
   int logdet_check = 0;    // 1: the logdet and a solve again after another H2 is built (format 7, not precon 2)
   int verbosity = 1;
@@ -512,7 +512,7 @@ void print_usage(const char* executable) {
       << "  --partial_extract_bench <R>   (with --H2_partial: R rounds of Schur complement blocks as a\n"
       << "                            parent front would read them through c_bpack_extractelement - near\n"
       << "                            field 64 x 64 blocks and 16 x 4096 panels - timed)\n"
-      << "  --partial_check <0|1>   (with --H2_partial, distributed64 1, N <= 20000: the partial solves\n"
+      << "  --partial_check <0|1>   (with --H2_partial, distributed64 1, N <= 40000: the partial solves\n"
          "                            and the Schur complement against dense LAPACK on rank 0)\n"
       << "  --extract_check <count>   (format=7, precon 2, distributed64 1: that many\n"
          "                             random blocks extracted from the compressed H2,\n"
