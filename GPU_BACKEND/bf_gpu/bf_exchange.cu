@@ -105,6 +105,27 @@ ncclComm_t nccl_comm_of(MPI_Comm comm) {
         (*comms)[key] = nullptr;
         return nullptr;
     }
+    // NCCL refuses two ranks of a communicator on one GPU ("Duplicate GPU"),
+    // but only those two find out: the others wait for them in its bootstrap
+    // (seen with 5 ranks on 4 GPUs).  So the ranks compare their devices
+    // first, and a group sharing one stays on MPI.
+    {
+        constexpr int kBus = 32;
+        char bus[kBus] = {0};
+        int dev = 0;
+        int ok = cudaGetDevice(&dev) == cudaSuccess && cudaDeviceGetPCIBusId(bus, kBus, dev) == cudaSuccess ? 1 : 0;
+        std::vector<char> all(static_cast<size_t>(nproc) * kBus);
+        MPI_Allgather(bus, kBus, MPI_CHAR, all.data(), kBus, MPI_CHAR, comm);
+        std::vector<std::string> ids;
+        for (int p = 0; p < nproc; ++p) ids.emplace_back(all.data() + static_cast<size_t>(p) * kBus);
+        std::sort(ids.begin(), ids.end());
+        if (std::adjacent_find(ids.begin(), ids.end()) != ids.end()) ok = 0;
+        MPI_Allreduce(MPI_IN_PLACE, &ok, 1, MPI_INT, MPI_MIN, comm);
+        if (!ok) {
+            (*comms)[key] = nullptr;
+            return nullptr;
+        }
+    }
     ncclUniqueId id;
     if (myid == 0 && ncclGetUniqueId(&id) != ncclSuccess) {
         throw std::runtime_error("bf::gpu: ncclGetUniqueId failed");
