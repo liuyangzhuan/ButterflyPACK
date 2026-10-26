@@ -13,6 +13,16 @@
 //
 // Each element of C accumulates its k products in order with one rounding
 // each (DMMA is IEEE fp64), as MAGMA's kernels do: the results are the same.
+//
+// The complex form (launch_zgemm_vbatched_tc) keeps the operands' real views
+// in shared memory, a complex k as two doubles (re, im) along the row, so a
+// slice is 8 complex k.  With x = op(A)(i, p), y = B(p, j), cuCfma - MAGMA's
+// complex multiply-add - rounds re after x.re y.re, then after -x.im y.im,
+// and im after x.re y.im, then after x.im y.re: the real view's k order for
+// re against op(A) with its imaginary entries negated (a sign flip of the A
+// fragment at odd k), and for im against B with each (re, im) pair swapped
+// (the B fragment read at k ^ 1).  Two DMMAs a fragment pair, real and
+// imaginary accumulators apart.
 
 #include "device_kernels.hpp"
 
@@ -40,6 +50,10 @@ __device__ __forceinline__ void dmma(double (&d)[2], double a, double b) {
 // 8 bytes global -> shared, zero-filled when !valid (src is then not read).
 __device__ __forceinline__ void cp_async8(unsigned dst, const double* src, bool valid) {
     asm volatile("cp.async.ca.shared.global [%0], [%1], 8, %2;\n" ::"r"(dst), "l"(src), "r"(valid ? 8 : 0));
+}
+// 16 bytes global -> shared (one complex value), zero-filled when !valid.
+__device__ __forceinline__ void cp_async16(unsigned dst, const void* src, bool valid) {
+    asm volatile("cp.async.cg.shared.global [%0], [%1], 16, %2;\n" ::"r"(dst), "l"(src), "r"(valid ? 16 : 0));
 }
 __device__ __forceinline__ void cp_async_commit() { asm volatile("cp.async.commit_group;\n" ::); }
 template<int kPending>
@@ -246,7 +260,227 @@ void launch_tc_config(bool trans_a, bool trans_b, const int* m, const int* n, co
     }
 }
 
+// ---- double complex: the slices hold 8 complex k (16 doubles) a row.
+template<int BM, int WM, int WN>
+struct ZTileConfig {
+    static constexpr int kTile = BM;
+    static constexpr int kThreads = 32 * WM * WN;
+    static constexpr int kWarpsN = WN;
+    static constexpr int kWarpRows = BM / WM, kWarpCols = BM / WN;
+    static constexpr int kTI = kWarpRows / 8, kTJ = kWarpCols / 8;
+    static constexpr int kCK = kBK / 2;                   // complex k a slice
+    static constexpr int kLoads = BM * kCK / kThreads;    // complex values per operand, thread and slice
+    static constexpr int kSliceDoubles = BM * kPitch;
+    static constexpr size_t kSharedBytes = 2 * kStages * kSliceDoubles * sizeof(double);
+    static_assert(kWarpRows % 8 == 0 && kWarpCols % 8 == 0, "warp tiles are made of 8 x 8 DMMA tiles");
+    static_assert(kThreads % BM == 0 && kThreads % kCK == 0 && (BM * kCK) % kThreads == 0,
+                  "the slice loaders need whole rows of threads");
+};
+
+// SliceLoader for complex operands: element q of a thread is one complex
+// value, copied whole into its row's (re, im) pair.
+template<class C, bool kRowsContiguous>
+struct ZSliceLoader {
+    static constexpr int kQRows = C::kThreads / C::kCK;
+    static constexpr int kQK = C::kThreads / C::kTile;
+    const dcomplex* base;
+    const dcomplex* next;
+    int64_t q_step;
+    int64_t slice_step;
+    unsigned dst0;
+    int k_first;
+    unsigned row_ok;
+
+    __device__ ZSliceLoader(const dcomplex* x, int ld, int rows, int row0, int tid) : base(x) {
+        int row, kk;
+        if (kRowsContiguous) {
+            row = tid % C::kTile;
+            kk = tid / C::kTile;
+            q_step = kQK * static_cast<int64_t>(ld);
+            slice_step = C::kCK * static_cast<int64_t>(ld);
+            next = x + (row0 + row) + static_cast<int64_t>(kk) * ld;
+            row_ok = row0 + row < rows ? 0xffffu : 0u;
+        } else {
+            kk = tid % C::kCK;
+            row = tid / C::kCK;
+            q_step = kQRows * static_cast<int64_t>(ld);
+            slice_step = C::kCK;
+            next = x + kk + static_cast<int64_t>(row0 + row) * ld;
+            row_ok = 0;
+            for (int q = 0; q < C::kLoads; ++q) {
+                if (row0 + row + kQRows * q < rows) row_ok |= 1u << q;
+            }
+        }
+        dst0 = static_cast<unsigned>((row * kPitch + 2 * kk) * sizeof(double));
+        k_first = kk;
+    }
+
+    __device__ __forceinline__ void copy(unsigned smem, int k0, int k) {
+#pragma unroll
+        for (int q = 0; q < C::kLoads; ++q) {
+            const int gk = k0 + k_first + (kRowsContiguous ? kQK * q : 0);
+            const bool valid = ((row_ok >> q) & 1u) && gk < k;
+            const unsigned dst = smem + dst0 +
+                                 static_cast<unsigned>((kRowsContiguous ? 2 * kQK * q : kQRows * q * kPitch) *
+                                                       sizeof(double));
+            cp_async16(dst, valid ? next + q * q_step : base, valid);
+        }
+        next += slice_step;
+    }
+};
+
+template<class C, bool kTransA>
+__global__ void __launch_bounds__(C::kThreads)
+zgemm_vbatched_tc_kernel(const int* __restrict__ ms, const int* __restrict__ ns, const int* __restrict__ ks,
+                         const dcomplex* const* __restrict__ as, const int* __restrict__ ldas,
+                         const dcomplex* const* __restrict__ bs, const int* __restrict__ ldbs, bool accumulate,
+                         dcomplex* const* __restrict__ cs, const int* __restrict__ ldcs,
+                         const int2* __restrict__ blocks) {
+    constexpr int BM = C::kTile, TI = C::kTI, TJ = C::kTJ;
+    extern __shared__ double shared[];  // stage s: A slice at 2 s, B slice at 2 s + 1
+    const int2 block = blocks[blockIdx.x];
+    const int item = block.x;
+    const int m = ms[item], n = ns[item], k = ks[item];
+    const int i0 = (block.y >> 16) * BM, j0 = (block.y & 0xffff) * BM;
+    const int tid = threadIdx.x, lane = tid & 31, warp = tid >> 5;
+    const int wm = (warp / C::kWarpsN) * C::kWarpRows, wn = (warp % C::kWarpsN) * C::kWarpCols;
+    ZSliceLoader<C, !kTransA> load_a(as[item], ldas[item], m, i0, tid);
+    ZSliceLoader<C, false> load_b(bs[item], ldbs[item], n, j0, tid);
+    const unsigned smem = static_cast<unsigned>(__cvta_generic_to_shared(shared));
+    constexpr unsigned kSliceBytes = C::kSliceDoubles * sizeof(double);
+
+    const int slices = (k + C::kCK - 1) / C::kCK;
+    int issued = 0;
+    auto issue = [&] {
+        if (issued < slices) {
+            const unsigned stage = smem + static_cast<unsigned>(issued % kStages) * 2 * kSliceBytes;
+            load_a.copy(stage, issued * C::kCK, k);
+            load_b.copy(stage + kSliceBytes, issued * C::kCK, k);
+        }
+        ++issued;
+        cp_async_commit();
+    };
+#pragma unroll
+    for (int s = 0; s < kStages - 1; ++s) issue();
+
+    double re[TI][TJ][2], im[TI][TJ][2];
+#pragma unroll
+    for (int ti = 0; ti < TI; ++ti)
+#pragma unroll
+        for (int tj = 0; tj < TJ; ++tj) re[ti][tj][0] = re[ti][tj][1] = im[ti][tj][0] = im[ti][tj][1] = 0.0;
+
+    const int frag_row = lane >> 2, frag_k = lane & 3;
+    const bool imag_k = (frag_k & 1) != 0;  // this lane's k of the fragments is an imaginary part
+    for (int t = 0; t < slices; ++t) {
+        cp_async_wait<kStages - 2>();
+        __syncthreads();
+        issue();
+        const double* sa = shared + (t % kStages) * 2 * C::kSliceDoubles;
+        const double* pa = sa + (wm + frag_row) * kPitch + frag_k;
+        const double* pb = sa + C::kSliceDoubles + (wn + frag_row) * kPitch + frag_k;
+        const double* ps = sa + C::kSliceDoubles + (wn + frag_row) * kPitch + (frag_k ^ 1);
+#pragma unroll
+        for (int kk = 0; kk < kBK; kk += 4) {
+            double fa[TI], fn[TI], fb[TJ], fs[TJ];
+#pragma unroll
+            for (int u = 0; u < TI; ++u) {
+                fa[u] = pa[u * 8 * kPitch + kk];
+                fn[u] = imag_k ? -fa[u] : fa[u];
+            }
+#pragma unroll
+            for (int u = 0; u < TJ; ++u) {
+                fb[u] = pb[u * 8 * kPitch + kk];
+                fs[u] = ps[u * 8 * kPitch + kk];
+            }
+#pragma unroll
+            for (int ti = 0; ti < TI; ++ti)
+#pragma unroll
+                for (int tj = 0; tj < TJ; ++tj) {
+                    dmma(re[ti][tj], fn[ti], fb[tj]);
+                    dmma(im[ti][tj], fa[ti], fs[tj]);
+                }
+        }
+    }
+    cp_async_wait<0>();
+
+    dcomplex* __restrict__ c = cs[item];
+    const int ldc = ldcs[item];
+#pragma unroll
+    for (int ti = 0; ti < TI; ++ti) {
+        const int row = i0 + wm + ti * 8 + frag_row;
+        if (row >= m) continue;
+        dcomplex* __restrict__ crow = c + row;
+        dcomplex old[TJ][2];
+#pragma unroll
+        for (int tj = 0; tj < TJ; ++tj)
+#pragma unroll
+            for (int e = 0; e < 2; ++e) {
+                const int col = j0 + wn + tj * 8 + 2 * frag_k + e;
+                old[tj][e] = accumulate && col < n ? crow[static_cast<int64_t>(col) * ldc] : dcomplex(0.0, 0.0);
+            }
+#pragma unroll
+        for (int tj = 0; tj < TJ; ++tj)
+#pragma unroll
+            for (int e = 0; e < 2; ++e) {
+                const int col = j0 + wn + tj * 8 + 2 * frag_k + e;
+                if (col >= n) continue;
+                crow[static_cast<int64_t>(col) * ldc] =
+                    accumulate ? dcomplex(re[ti][tj][e] + old[tj][e].re, im[ti][tj][e] + old[tj][e].im)
+                               : dcomplex(re[ti][tj][e], im[ti][tj][e]);
+            }
+    }
+}
+
+template<class C, bool kTransA>
+void launch_ztc(const int* m, const int* n, const int* k, const dcomplex* const* a, const int* lda,
+                const dcomplex* const* b, const int* ldb, bool accumulate, dcomplex* const* c, const int* ldc,
+                const int2* blocks, int num_blocks, cudaStream_t stream) {
+    auto kernel = zgemm_vbatched_tc_kernel<C, kTransA>;
+    static const cudaError_t attr = cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                                         static_cast<int>(C::kSharedBytes));
+    if (attr != cudaSuccess) {
+        throw std::runtime_error(std::string("launch_zgemm_vbatched_tc: ") + cudaGetErrorString(attr));
+    }
+    kernel<<<static_cast<unsigned>(num_blocks), C::kThreads, C::kSharedBytes, stream>>>(m, n, k, a, lda, b, ldb,
+                                                                                       accumulate, c, ldc, blocks);
+}
+
+template<class C>
+void launch_ztc_config(bool trans_a, const int* m, const int* n, const int* k, const dcomplex* const* a,
+                       const int* lda, const dcomplex* const* b, const int* ldb, bool accumulate, dcomplex* const* c,
+                       const int* ldc, const int2* blocks, int num_blocks, cudaStream_t stream) {
+    if (trans_a) {
+        launch_ztc<C, true>(m, n, k, a, lda, b, ldb, accumulate, c, ldc, blocks, num_blocks, stream);
+    } else {
+        launch_ztc<C, false>(m, n, k, a, lda, b, ldb, accumulate, c, ldc, blocks, num_blocks, stream);
+    }
+}
+
 }  // namespace
+
+void launch_zgemm_vbatched_tc(bool trans_a, const int* m, const int* n, const int* k, const dcomplex* const* a,
+                              const int* lda, const dcomplex* const* b, const int* ldb, bool accumulate,
+                              dcomplex* const* c, const int* ldc, const int2* blocks, int num_blocks, int tile,
+                              cudaStream_t stream) {
+    if (num_blocks <= 0) return;
+    switch (tile) {
+        case 32:
+            launch_ztc_config<ZTileConfig<32, 2, 2>>(trans_a, m, n, k, a, lda, b, ldb, accumulate, c, ldc, blocks,
+                                                     num_blocks, stream);
+            break;
+        case 64:
+            launch_ztc_config<ZTileConfig<64, 2, 2>>(trans_a, m, n, k, a, lda, b, ldb, accumulate, c, ldc, blocks,
+                                                     num_blocks, stream);
+            break;
+        default:
+            throw std::invalid_argument("launch_zgemm_vbatched_tc: tile must be 32 or 64");
+    }
+    const cudaError_t status = cudaGetLastError();
+    if (status != cudaSuccess) {
+        throw std::runtime_error(std::string("CUDA launch failed in zgemm_vbatched_tc_kernel: ") +
+                                 cudaGetErrorString(status));
+    }
+}
 
 void launch_dgemm_vbatched_tc(bool trans_a, bool trans_b, const int* m, const int* n, const int* k, double alpha,
                               const double* const* a, const int* lda, const double* const* b, const int* ldb,

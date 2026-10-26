@@ -241,6 +241,17 @@ void launch_dgemm_vbatched_tc(bool trans_a, bool trans_b, const int* m, const in
                               const double* const* a, const int* lda, const double* const* b, const int* ldb,
                               double beta, double* const* c, const int* ldc, const int2* blocks, int num_blocks,
                               int tile, cudaStream_t stream);
+// The same on double complex data, C_i = op(A_i) B_i (+ C_i when accumulate),
+// tile 32 or 64: each complex product as two real DMMA products of the
+// operands' real views - the real part with A's imaginary entries negated,
+// the imaginary part with B's (re, im) pairs swapped - so every element sums
+// its k products in cuCfma's order, MAGMA's zgemm's, and the result is
+// MAGMA's to the bit.  (Alpha 1 and beta 0 or 1 only: MAGMA's complex
+// scaling is left to MAGMA.)
+void launch_zgemm_vbatched_tc(bool trans_a, const int* m, const int* n, const int* k, const dcomplex* const* a,
+                              const int* lda, const dcomplex* const* b, const int* ldb, bool accumulate,
+                              dcomplex* const* c, const int* ldc, const int2* blocks, int num_blocks, int tile,
+                              cudaStream_t stream);
 
 template<typename T>
 void launch_gather(const GatherItemT<T>* items, int count, int max_m, int max_n,

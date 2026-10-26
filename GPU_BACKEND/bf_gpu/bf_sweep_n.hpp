@@ -260,11 +260,17 @@ int sweep_narrow_kind(bool trans_a, int max_m, int max_n);
 void launch_sweep_narrow(bool trans_a, int count, const int* m, const int* n, const int* k, double alpha,
                          const double* const* a, const int* lda, const double* const* b, const int* ldb,
                          double beta, double* const* c, const int* ldc, int max_m, int max_n, cudaStream_t stream);
-// The narrow kernel of a batch of scalar T: they are real kernels, so a
-// complex batch has none.
+// The complex batches' (alpha 1, beta 0 or 1; MAGMA's zgemm's order, cuCfma's).
+int sweep_narrow_kind_z(bool trans_a, int max_m, int max_n);
+void launch_sweep_narrow(bool trans_a, int count, const int* m, const int* n, const int* k, fmm::gpu::dcomplex alpha,
+                         const fmm::gpu::dcomplex* const* a, const int* lda, const fmm::gpu::dcomplex* const* b,
+                         const int* ldb, fmm::gpu::dcomplex beta, fmm::gpu::dcomplex* const* c, const int* ldc,
+                         int max_m, int max_n, cudaStream_t stream);
+// The narrow kernel of a batch of scalar T.
 template<typename T>
 inline int narrow_kind(bool trans_a, int max_m, int max_n) {
-    return std::is_same<T, double>::value ? sweep_narrow_kind(trans_a, max_m, max_n) : 0;
+    return std::is_same<T, double>::value ? sweep_narrow_kind(trans_a, max_m, max_n)
+                                          : sweep_narrow_kind_z(trans_a, max_m, max_n);
 }
 
 // The kernel of a replay (bf_sweep_exec.cu): every GEMM's input and output
@@ -596,10 +602,25 @@ inline void leaf_offsets(const BfDevice<T>& bf, std::vector<int64_t>& acc_n, std
 // of 128 x 24, MAGMA's 0.21 against 0.34).  Measured on the same A100
 // (262144^2, L = 12, ms a matvec, with 48 and 64 tiles): untransposed 9.2
 // against 6.6 at 64 columns and 33 against 24 at 256.
+// Complex batches (fmm::gpu::launch_zgemm_vbatched_tc) from 17 columns
+// either way, where MAGMA's are the slower (4096 GEMMs of 25 x 25, ms at
+// beta 0 / 1: at 24 columns 0.137 / 0.174 against 0.107 / 0.154, at 256
+// 0.99 / 1.34 against 0.71 / 1.24 - the vectors' traffic bounds both); up
+// to 16 the narrow kernels or MAGMA are as fast.
 template<typename T>
 inline bool sweep_tensor_cores(bool trans_a, int max_m, int max_n, int max_k) {
-    if (!std::is_same<T, double>::value) return false;
+    if (!std::is_same<T, double>::value) return max_n > 16;
     return trans_a || max_n >= 25 || (max_m > 64 && max_k > 32);
+}
+
+// A complex batch's tile wider than kTcNarrowCols: 64 unless it leaves more
+// of the tile empty than 32 does (blocks of 25 rows at 256 columns: 0.71 ms
+// on 32s, 1.10 on 64s; of 50, 2.0 against 2.0, and 2.5 against 2.9 at beta 1).
+inline int ztc_tile_of(int m, int n) {
+    const double mn = static_cast<double>(m) * n;
+    const double used32 = mn / (static_cast<double>((m + 31) / 32 * ((n + 31) / 32)) * 32.0 * 32.0);
+    const double used64 = mn / (static_cast<double>((m + 63) / 64 * ((n + 63) / 64)) * 64.0 * 64.0);
+    return used64 >= used32 ? 64 : 32;
 }
 
 // Up to this many columns a batch's tensor-core tiles are 32 x 32, which
@@ -885,13 +906,13 @@ inline SweepExec<T>& sweep_exec(const BfDevice<T>& bf, SweepPlan<T>& plan, int n
 
     // ---- the tensor-core tiles of the batches that run on them: those no
     // narrow kernel takes (the closing product's narrow kernel needs the
-    // caller's alpha 1 and beta 0 or 1, so it keeps its tiles)
+    // caller's alpha 1 and beta 0 or 1, so it keeps its tiles; a complex
+    // closing product with other scalars goes to MAGMA)
     std::vector<int2> tiles;
-    const bool tc = std::is_same<DataType, double>::value;
     for (SweepBatch& b : ex.batches) {
         b.tc_first = static_cast<int>(tiles.size());
         b.tc32 = b.tc48 = b.tc64 = 0;
-        if (!tc || !sweep_tensor_cores<T>(b.trans_a, b.max_m, b.max_n, b.max_k)) continue;
+        if (!sweep_tensor_cores<T>(b.trans_a, b.max_m, b.max_n, b.max_k)) continue;
         if (!b.closing && narrow_kind<T>(b.trans_a, b.max_m, b.max_n) != 0) continue;
         std::vector<int2> t32, t48, t64;
         for (int i = 0; i < b.count; ++i) {
@@ -900,7 +921,9 @@ inline SweepExec<T>& sweep_exec(const BfDevice<T>& bf, SweepPlan<T>& plan, int n
             typename fmm::gpu::VBatch<double>::Entry e{};
             e.m = it.m;
             e.n = it.n;
-            const int tile = b.max_n <= kTcNarrowCols ? 32 : fmm::gpu::VBatch<double>::tc_tile_of(e);
+            const int tile = b.max_n <= kTcNarrowCols ? 32
+                             : std::is_same<DataType, double>::value ? fmm::gpu::VBatch<double>::tc_tile_of(e)
+                                                                     : ztc_tile_of(it.m, it.n);
             std::vector<int2>& out = tile == 32 ? t32 : (tile == 48 ? t48 : t64);
             const int rows = (it.m + tile - 1) / tile, cols = (it.n + tile - 1) / tile;
             for (int c = 0; c < cols; ++c)
@@ -990,12 +1013,24 @@ inline void run_batch(const SweepExec<T>& ex, const SweepBatch& b, T alpha, T be
     const DataType al = b.closing ? alpha : DataType(1);
     const DataType be = b.closing ? beta : DataType(b.beta);
     const size_t f = static_cast<size_t>(b.first);
-    if constexpr (std::is_same<DataType, double>::value) {
-        if (al == DataType(1) && (be == DataType(0) || be == DataType(1)) &&
-            sweep_narrow_kind(b.trans_a, b.max_m, b.max_n) != 0) {
-            launch_sweep_narrow(b.trans_a, b.count, ex.d_m + f, ex.d_n + f, ex.d_k + f, al, ex.d_a + f,
-                                ex.d_lda + f, ex.d_b + f, ex.d_ldb + f, be, ex.d_c + f, ex.d_ldc + f, b.max_m,
-                                b.max_n, stream);
+    const bool unit = al == DataType(1) && (be == DataType(0) || be == DataType(1));
+    if (unit && narrow_kind<DataType>(b.trans_a, b.max_m, b.max_n) != 0) {
+        launch_sweep_narrow(b.trans_a, b.count, ex.d_m + f, ex.d_n + f, ex.d_k + f, al, ex.d_a + f, ex.d_lda + f,
+                            ex.d_b + f, ex.d_ldb + f, be, ex.d_c + f, ex.d_ldc + f, b.max_m, b.max_n, stream);
+        return;
+    }
+    if constexpr (!std::is_same<DataType, double>::value) {
+        // the complex tensor cores take alpha 1 and beta 0 or 1; a complex
+        // batch's tiles are 32s, then 64s (ztc_tile_of)
+        if (unit && b.tc32 + b.tc64 > 0) {
+            const int at[2] = {b.tc_first, b.tc_first + b.tc32}, count[2] = {b.tc32, b.tc64};
+            for (int part = 0; part < 2; ++part) {
+                if (count[part] == 0) continue;
+                fmm::gpu::launch_zgemm_vbatched_tc(b.trans_a, ex.d_m + f, ex.d_n + f, ex.d_k + f, ex.d_a + f,
+                                                   ex.d_lda + f, ex.d_b + f, ex.d_ldb + f, be == DataType(1),
+                                                   ex.d_c + f, ex.d_ldc + f, ex.d_tc + at[part], count[part],
+                                                   32 << part, stream);
+            }
             return;
         }
     }

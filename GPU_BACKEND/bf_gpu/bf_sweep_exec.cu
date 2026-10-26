@@ -18,8 +18,8 @@ namespace gpu {
 namespace {
 
 constexpr int kThreads = 256;
-// the narrow kernels' scalar: they run the double library's batches (a
-// complex batch goes to MAGMA)
+// the real narrow kernels' scalar (the complex ones below take double2, the
+// layout of fmm::gpu::dcomplex)
 using DataType = double;
 
 // Buffers: 0 the caller's x, 1 and 2 the ping-pong buffers, 3 the caller's y.
@@ -177,6 +177,178 @@ void staged_with(int count, const int* m, const int* n, const int* k, DataType a
     }
 }
 
+// ---- double complex: an untransposed form and the staged transposed one,
+// alpha 1 and beta 0 or 1.  Each element sums its k products from zero in
+// cuCfma's order (re after a.re b.re, then -a.im b.im; im after a.re b.im,
+// then a.im b.re), MAGMA's zgemm's, so the result is MAGMA's to the bit
+// (checked on 4096 GEMMs of 25 x 25, 26 x 64, 64 x 26 and 50 x 50 at 1-32
+// columns, beta 0 and 1).  Four columns a thread (kZGroupCols): a complex
+// accumulator is two doubles.
+constexpr int kZGroupCols = 4;
+
+__device__ __forceinline__ void zfma(double2& c, double2 a, double2 b) {
+    c.x = __fma_rn(a.x, b.x, c.x);
+    c.x = __fma_rn(-a.y, b.y, c.x);
+    c.y = __fma_rn(a.x, b.y, c.y);
+    c.y = __fma_rn(a.y, b.x, c.y);
+}
+
+// C = A B (+ C) for at most kZRowsMaxCols columns: a thread per row of C and
+// group of columns, reading A straight from memory (a warp's threads read
+// consecutive rows) kZRowsLoads values at a time, B staged in chunks of kKC.
+// A batch of a few hundred GEMMs leaves most of the GPU idle, and then the
+// time is the chain of A's loads from memory: with four in flight, a
+// 65536^2 matvec on four A100s (256 GEMMs of 25 x 25 a batch) took 13.8 us
+// a batch against MAGMA's 11.4 (nsys); with eight it is the faster.  (A
+// benchmark that reuses its blocks from L2 does not show this.)  At 16
+// columns MAGMA is as fast.
+constexpr int kZRowsMaxCols = 8;
+constexpr int kZRowsLoads = 8;
+
+__global__ void __launch_bounds__(kStagedMaxThreads)
+zrows_kernel(const int* m, const int* n, const int* k, const double2* const* a, const int* lda,
+             const double2* const* b, const int* ldb, bool accum, double2* const* c, const int* ldc, int rows_pad,
+             int pitch_b) {
+    extern __shared__ double2 zshared[];  // B(kk, j) at kk * pitch_b + j
+    const int e = blockIdx.x;
+    const int M = m[e], N = n[e], K = k[e];
+    if (M <= 0 || N <= 0) return;
+    const int tid = threadIdx.x, lane = tid & 31, warp = tid >> 5, warps = blockDim.x >> 5;
+    const int r = tid % rows_pad, j0 = (tid / rows_pad) * kZGroupCols;
+    const bool mine = r < M && j0 < N;
+    const double2* __restrict__ A = a[e] + r;
+    const double2* __restrict__ B = b[e];
+    const int la = lda[e], lb = ldb[e];
+    double2 acc[kZGroupCols];
+#pragma unroll
+    for (int j = 0; j < kZGroupCols; ++j) acc[j] = make_double2(0.0, 0.0);
+    for (int k0 = 0; k0 < K; k0 += kKC) {
+        const int kc = min(kKC, K - k0);
+        __syncthreads();
+        if (lane < kc) {
+            for (int col = warp; col < N; col += warps) {
+                zshared[lane * pitch_b + col] = __ldg(B + static_cast<int64_t>(col) * lb + k0 + lane);
+            }
+        }
+        __syncthreads();
+        if (mine) {
+            // kZRowsLoads of A's values in flight before any is used
+            int kk = 0;
+            for (; kk + kZRowsLoads <= kc; kk += kZRowsLoads) {
+                double2 av[kZRowsLoads];
+#pragma unroll
+                for (int u = 0; u < kZRowsLoads; ++u) av[u] = __ldg(A + static_cast<int64_t>(k0 + kk + u) * la);
+#pragma unroll
+                for (int u = 0; u < kZRowsLoads; ++u)
+#pragma unroll
+                    for (int q = 0; q < kZGroupCols; ++q) zfma(acc[q], av[u], zshared[(kk + u) * pitch_b + j0 + q]);
+            }
+            for (; kk < kc; ++kk) {
+                const double2 av = __ldg(A + static_cast<int64_t>(k0 + kk) * la);
+#pragma unroll
+                for (int q = 0; q < kZGroupCols; ++q) zfma(acc[q], av, zshared[kk * pitch_b + j0 + q]);
+            }
+        }
+    }
+    if (!mine) return;
+    double2* C = c[e] + r;
+    const int lc = ldc[e];
+#pragma unroll
+    for (int j = 0; j < kZGroupCols; ++j) {
+        if (j0 + j >= N) continue;
+        double2 v = acc[j];
+        if (accum) {
+            const double2 o = C[static_cast<int64_t>(j0 + j) * lc];
+            v.x += o.x;
+            v.y += o.y;
+        }
+        C[static_cast<int64_t>(j0 + j) * lc] = v;
+    }
+}
+
+// C = A^T B (+ C), staged_kernel's form for complex values, at most
+// kZStagedMaxCols columns.  An odd pitch keeps a quarter warp's 16-byte
+// stores on distinct banks, as it does a warp's 8-byte ones.  4096 GEMMs of
+// 25 x 25 on one A100, ms MAGMA -> this at beta 0: 0.119 -> 0.048 at 1
+// column, 0.122 -> 0.066 at 8, 0.128 -> 0.088 at 16 (the tensor cores 0.093).
+constexpr int kZStagedMaxCols = 16;
+
+template<bool kAccum>
+__global__ void __launch_bounds__(kStagedMaxThreads)
+zstaged_kernel(const int* m, const int* n, const int* k, const double2* const* a, const int* lda,
+               const double2* const* b, const int* ldb, double2* const* c, const int* ldc, int pitch, int pitch_b,
+               int rows_pad) {
+    extern __shared__ double2 zshared[];
+    double2* sA = zshared;                                     // A^T(r, kk) at kk * pitch + r
+    double2* sB = zshared + static_cast<size_t>(kKC) * pitch;  // B(kk, j) at kk * pitch_b + j
+    const int e = blockIdx.x;
+    const int M = m[e], N = n[e], K = k[e];
+    if (M <= 0 || N <= 0) return;
+    const double2* __restrict__ A = a[e];
+    const double2* __restrict__ B = b[e];
+    const int la = lda[e], lb = ldb[e];
+    const int tid = threadIdx.x, lane = tid & 31, warp = tid >> 5, warps = blockDim.x >> 5;
+    const int r = tid % rows_pad, j0 = (tid / rows_pad) * kZGroupCols;
+    const bool mine = r < M && j0 < N;
+    double2* C = c[e] + r;
+    const int lc = ldc[e];
+    double2 cv[kAccum ? kZGroupCols : 1];
+    if (kAccum && mine) {
+#pragma unroll
+        for (int j = 0; j < kZGroupCols; ++j) {
+            cv[j] = j0 + j < N ? C[static_cast<int64_t>(j0 + j) * lc] : make_double2(0.0, 0.0);
+        }
+    }
+    double2 acc[kZGroupCols];
+#pragma unroll
+    for (int j = 0; j < kZGroupCols; ++j) acc[j] = make_double2(0.0, 0.0);
+    const int ncols = M + N;
+    for (int k0 = 0; k0 < K; k0 += kKC) {
+        const int kc = min(kKC, K - k0);
+        __syncthreads();
+        if (lane < kc) {
+            for (int c0 = warp; c0 < ncols; c0 += warps * kLoads) {
+                double2 v[kLoads];
+#pragma unroll
+                for (int u = 0; u < kLoads; ++u) {
+                    const int col = c0 + u * warps;
+                    const double2* src = col < M ? A + static_cast<int64_t>(col) * la
+                                                 : B + static_cast<int64_t>(col - M) * lb;
+                    v[u] = col < ncols ? __ldg(src + k0 + lane) : make_double2(0.0, 0.0);
+                }
+#pragma unroll
+                for (int u = 0; u < kLoads; ++u) {
+                    const int col = c0 + u * warps;
+                    if (col < M) sA[lane * pitch + col] = v[u];
+                    else if (col < ncols) sB[lane * pitch_b + col - M] = v[u];
+                }
+            }
+        }
+        __syncthreads();
+        if (mine) {
+            const double2* ap = sA + r;
+            const double2* bp = sB + j0;
+#pragma unroll 4
+            for (int kk = 0; kk < kc; ++kk) {
+                const double2 av = ap[kk * pitch];
+#pragma unroll
+                for (int q = 0; q < kZGroupCols; ++q) zfma(acc[q], av, bp[kk * pitch_b + q]);
+            }
+        }
+    }
+    if (!mine) return;
+#pragma unroll
+    for (int j = 0; j < kZGroupCols; ++j) {
+        if (j0 + j >= N) continue;
+        double2 v = acc[j];
+        if (kAccum) {
+            v.x += cv[j].x;
+            v.y += cv[j].y;
+        }
+        C[static_cast<int64_t>(j0 + j) * lc] = v;
+    }
+}
+
 }  // namespace
 
 // Which narrow kernel takes a batch, if one does (bf_sweep_n.hpp): the
@@ -212,6 +384,58 @@ void launch_sweep_narrow(bool trans_a, int count, const int* m, const int* n, co
         staged_with(count, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc, max_m, max_n, stream);
     } else {
         throw std::invalid_argument("launch_sweep_narrow: no narrow kernel takes this batch");
+    }
+    const cudaError_t status = cudaGetLastError();
+    if (status != cudaSuccess) {
+        throw std::runtime_error(std::string("CUDA launch failed in launch_sweep_narrow: ") +
+                                 cudaGetErrorString(status));
+    }
+}
+
+// The complex batches' narrow kernels: the rows-direct one for up to
+// kZRowsMaxCols untransposed columns, the staged one for up to
+// kZStagedMaxCols transposed; at most kStagedMaxRows rows either way.
+// Untransposed from 9 columns MAGMA and the tensor cores are the faster.
+int sweep_narrow_kind_z(bool trans_a, int max_m, int max_n) {
+    if (max_m > kStagedMaxRows) return 0;
+    if (!trans_a) return max_n <= kZRowsMaxCols ? 3 : 0;
+    return max_n <= kZStagedMaxCols ? 4 : 0;
+}
+
+void launch_sweep_narrow(bool trans_a, int count, const int* m, const int* n, const int* k, fmm::gpu::dcomplex alpha,
+                         const fmm::gpu::dcomplex* const* a, const int* lda, const fmm::gpu::dcomplex* const* b,
+                         const int* ldb, fmm::gpu::dcomplex beta, fmm::gpu::dcomplex* const* c, const int* ldc,
+                         int max_m, int max_n, cudaStream_t stream) {
+    if (count <= 0) return;
+    const bool accum = beta == fmm::gpu::dcomplex(1.0, 0.0);
+    if (alpha != fmm::gpu::dcomplex(1.0, 0.0) || (!accum && beta != fmm::gpu::dcomplex(0.0, 0.0))) {
+        throw std::invalid_argument("launch_sweep_narrow: complex batches take alpha 1 and beta 0 or 1");
+    }
+    const auto* za = reinterpret_cast<const double2* const*>(a);
+    const auto* zb = reinterpret_cast<const double2* const*>(b);
+    auto* zc = reinterpret_cast<double2* const*>(c);
+    const int kind = sweep_narrow_kind_z(trans_a, max_m, max_n);
+    const int rows_pad = (max_m + 31) / 32 * 32;
+    const int groups = (max_n + kZGroupCols - 1) / kZGroupCols;
+    const int threads = std::max(rows_pad * groups, 64);
+    const int pitch_b = groups * kZGroupCols | 1;  // odd
+    if (kind == 3) {
+        const size_t shared = static_cast<size_t>(kKC) * pitch_b * sizeof(double2);
+        zrows_kernel<<<count, threads, shared, stream>>>(m, n, k, za, lda, zb, ldb, accum, zc, ldc, rows_pad,
+                                                         pitch_b);
+    } else if (kind == 4) {
+        // the widest block's shared memory, 32 x (65 + 17) complex values, is under 48 KB
+        const int pitch = max_m | 1;
+        const size_t shared = static_cast<size_t>(kKC) * (pitch + pitch_b) * sizeof(double2);
+        if (accum) {
+            zstaged_kernel<true><<<count, threads, shared, stream>>>(m, n, k, za, lda, zb, ldb, zc, ldc, pitch,
+                                                                     pitch_b, rows_pad);
+        } else {
+            zstaged_kernel<false><<<count, threads, shared, stream>>>(m, n, k, za, lda, zb, ldb, zc, ldc, pitch,
+                                                                      pitch_b, rows_pad);
+        }
+    } else {
+        throw std::invalid_argument("launch_sweep_narrow: no narrow kernel takes this complex batch");
     }
     const cudaError_t status = cudaGetLastError();
     if (status != cudaSuccess) {
