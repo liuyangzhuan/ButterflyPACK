@@ -21,6 +21,8 @@
 #include "ButterflyPACK_config.fi"
 module Bplus_compress
    use BPACK_DEFS
+   use BPACK_GPU
+   use iso_c_binding
    use MISC_Utilities
    use Bplus_randomizedop
    use BPACK_structure
@@ -68,9 +70,26 @@ contains
       type(intersect), allocatable :: submats(:)
       type(intersect) :: submats_dummy(1)
 
+      !>**** the level's rank-reveal on the device (GPU_BACKEND/bf_gpu)
+      logical :: gpu_id
+      !>**** the level's entries left on the device by the butterfly's GPU
+      !> evaluator for that rank-reveal, rather than brought to the host
+      logical :: entries_dev
+      integer :: g_info, g_trans
+      integer, allocatable :: g_rows(:), g_cols(:), g_rank(:), g_jpvt(:)
+      integer(kind=8), allocatable :: g_xoff(:)
+      integer, allocatable :: g_joff(:)
+      type(c_ptr), allocatable :: g_blk(:)
+      DT, allocatable, target :: g_x(:)   ! target: its address goes to the bridge
+      DT, pointer :: g_xp(:, :)
+
 
       DT:: mat_dummy(1, 1)
+      !>**** seconds by phase, for BPACK_TRACE=phase: sampling, entries, the
+      !> device's rank-reveal, the placement, the level's end
+      real(kind=8) :: tph(5), tq
       Memory = 0.
+      tph = 0
 
       blocks%rankmax = -100000
       blocks%rankmin = 100000
@@ -161,6 +180,7 @@ contains
             enddo
 
 
+            entries_dev = .false.
             if(option%forwardN15flag==3)then
                call assert(option%pat_comp==1,'forwardN15flag=3 currently only supports pat_comp=1')
                call BF_compress_NlogN_tree_R_sample(submats, nr, nc, idx_r, idx_c, inc_r, inc_c, blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, stats, msh, ker, ptree, level, flops1)
@@ -177,32 +197,84 @@ contains
                   flops =flops+flops1
                enddo
                n2 = MPI_Wtime()
+               tph(1) = tph(1) + n2 - n1
                ! time_tmp = time_tmp + n2 - n1
                if(Nboundall==0)then ! Nboundall>0 means there are intersections with masks, which cannot use contiguous buffers yet.
                   allocate(alldat_loc_in(nnz_loc))
                   call LogMemory(stats, SIZEOF(alldat_loc_in)/1024.0d3)
-                  call element_Zmn_blocklist_user(submats, nr*nc, msh, option, ker, 0, passflag, ptree, stats, alldat_loc_in)
+                  entries_dev = c_associated(ker%gpu_entries) .and. BF_gpu_rankreveal_ok(blocks, option, Nboundall)
+                  call element_Zmn_blocklist_user(submats, nr*nc, msh, option, ker, 0, passflag, ptree, stats, alldat_loc_in, &
+                                                  entries_on_device=entries_dev)
                else
                   call element_Zmn_blocklist_user(submats, nr*nc, msh, option, ker, 0, passflag, ptree, stats)
                endif
+               tph(2) = tph(2) + MPI_Wtime() - n2
             endif
+            tq = MPI_Wtime()
+
+            !>**** The level's rank-reveal on the device: one batch over every
+            !> block, which is what it wants - the entries already sit in one
+            !> contiguous buffer, because element_Zmn_blocklist_user filled
+            !> alldat_loc_in for the whole level.  g_info /= 0 means the device
+            !> declined (no room, or a precision without the butterfly
+            !> backend) and the blocks below take the CPU path unchanged.
+            gpu_id = .false.
+            if (allocated(alldat_loc_in) .and. nr*nc > 0 .and. nnz_loc > 0 .and. level /= level_butterfly + 1) then
+            if (BF_gpu_rankreveal_ok(blocks, option, Nboundall)) then
+               allocate (g_rows(nr*nc), g_cols(nr*nc), g_rank(nr*nc), g_blk(nr*nc))
+               allocate (g_xoff(nr*nc + 1), g_joff(nr*nc + 1))
+               g_xoff(1) = 0
+               g_joff(1) = 0
+               do index_ij = 1, nr*nc
+                  g_rows(index_ij) = size(submats(index_ij)%dat, 1)
+                  g_cols(index_ij) = size(submats(index_ij)%dat, 2)
+                  g_blk(index_ij) = c_loc(submats(index_ij)%dat(1, 1))
+                  g_xoff(index_ij + 1) = g_xoff(index_ij) + int(g_rows(index_ij), 8)*g_cols(index_ij)
+                  g_joff(index_ij + 1) = g_joff(index_ij) + g_cols(index_ij)
+               enddo
+               allocate (g_jpvt(max(g_joff(nr*nc + 1), 1)))
+               allocate (g_x(max(g_xoff(nr*nc + 1), 1_8)))
+               g_trans = 0
+               if (entries_dev) then
+                  call c_bf_gpu_level_id_kept(ker%gpu_entries, nr*nc, g_rows, g_cols, g_blk, g_trans, &
+                                              c_loc(alldat_loc_in(1)), nnz_loc, option%tol_comp, BPACK_SafeUnderflow, &
+                                              g_rank, g_jpvt, c_loc(g_x(1)), g_info)
+               else
+                  call c_bf_gpu_level_id(nr*nc, g_rows, g_cols, g_blk, g_trans, c_loc(alldat_loc_in(1)), &
+                                         nnz_loc, option%tol_comp, BPACK_SafeUnderflow, g_rank, g_jpvt, &
+                                         c_loc(g_x(1)), g_info)
+               endif
+               gpu_id = (g_info == 0)
+            endif
+            endif
+            tph(3) = tph(3) + MPI_Wtime() - tq
+            tq = MPI_Wtime()
 
             if(option%format==3 .and. option%near_para<=0.1d0)option%tol_comp = option%tol_comp/max(1,blocks%level_butterfly/2)
 #ifdef HAVE_OPENMP
-            !$omp parallel do default(shared) private(index_ij,index_i,index_j,index_i_loc,index_j_loc,rank_new1,flops1) reduction(MAX:rank_new) reduction(+:flops)
+            !$omp parallel do default(shared) private(index_ij,index_i,index_j,index_i_loc,index_j_loc,rank_new1,flops1,g_xp) reduction(MAX:rank_new) reduction(+:flops)
 #endif
             do index_ij = 1, nr*nc
                index_i_loc = (index_ij - 1)/nc + 1
                index_j_loc = mod(index_ij - 1, nc) + 1
                index_i = (index_i_loc - 1)*inc_r + idx_r
                index_j = (index_j_loc - 1)*inc_c + idx_c
-               call BF_compress_NlogN_oneblock_R_rankreveal(submats,blocks, option, stats, msh, ker, ptree, index_i, index_j, index_ij,level, rank_new1, flops1)
+               if (gpu_id) then
+                  call Array1DtoPointer2D(g_x(g_xoff(index_ij) + 1:g_xoff(index_ij + 1)), g_xp, &
+                                          g_rows(index_ij), g_cols(index_ij))
+                  call BF_compress_NlogN_oneblock_R_rankreveal(submats,blocks, option, stats, msh, ker, ptree, index_i, index_j, index_ij,level, rank_new1, flops1, &
+                       xdat=g_xp, jpvt_in=g_jpvt(g_joff(index_ij) + 1:g_joff(index_ij + 1)), rank_in=g_rank(index_ij))
+               else
+                  call BF_compress_NlogN_oneblock_R_rankreveal(submats,blocks, option, stats, msh, ker, ptree, index_i, index_j, index_ij,level, rank_new1, flops1)
+               endif
                rank_new = MAX(rank_new, rank_new1)
                flops =flops+flops1
             enddo
 #ifdef HAVE_OPENMP
             !$omp end parallel do
 #endif
+            tph(4) = tph(4) + MPI_Wtime() - tq
+            tq = MPI_Wtime()
             if(option%format==3 .and. option%near_para<=0.1d0)option%tol_comp = option%tol_comp*max(1,blocks%level_butterfly/2)
 
 
@@ -226,6 +298,7 @@ contains
                call LogMemory(stats, -SIZEOF(alldat_loc_in)/1024.0d3)
                deallocate(alldat_loc_in)
             endif
+            if(allocated(g_rows))deallocate(g_rows, g_cols, g_rank, g_blk, g_xoff, g_joff, g_jpvt, g_x)
 
             !>**** the adaptive tree sampler (forwardN15flag 3) makes a
             !> data-dependent number of rounds per rank, so a rank that has
@@ -255,6 +328,7 @@ contains
             endif
             endif
             stats%Flop_Fill = stats%Flop_Fill + flops
+            tph(5) = tph(5) + MPI_Wtime() - tq
          enddo
 
          level_final = level_half + 1
@@ -313,20 +387,63 @@ contains
             enddo
             ! !$omp end parallel do
             n2 = MPI_Wtime()
+            tph(1) = tph(1) + n2 - n1
             ! time_tmp = time_tmp + n2 - n1
+            entries_dev = .false.
             if(Nboundall==0)then ! Nboundall>0 means there are intersections with masks, which cannot use contiguous buffers yet.
                allocate(alldat_loc_in(nnz_loc))
                call LogMemory(stats, SIZEOF(alldat_loc_in)/1024.0d3)
-               call element_Zmn_blocklist_user(submats, nr*nc, msh, option, ker, 0, passflag, ptree, stats, alldat_loc_in)
+               entries_dev = level /= level_final .and. c_associated(ker%gpu_entries) .and. &
+                             BF_gpu_rankreveal_ok(blocks, option, Nboundall)
+               call element_Zmn_blocklist_user(submats, nr*nc, msh, option, ker, 0, passflag, ptree, stats, alldat_loc_in, &
+                                               entries_on_device=entries_dev)
             else
                call element_Zmn_blocklist_user(submats, nr*nc, msh, option, ker, 0, passflag, ptree, stats)
             endif
+            tph(2) = tph(2) + MPI_Wtime() - n2
+            tq = MPI_Wtime()
 
             rank_new = 0
             flops = 0
+            !>**** the level's rank-reveal on the device, as in the 'R' half
+            !> above; this half factorizes the transposed panel, which is what
+            !> the 1 says.  The level that ends the half inherits its skeleton
+            !> and does no algebra, so it stays on the host.
+            gpu_id = .false.
+            if (allocated(alldat_loc_in) .and. nr*nc > 0 .and. nnz_loc > 0 .and. level /= level_final) then
+            if (BF_gpu_rankreveal_ok(blocks, option, Nboundall)) then
+               allocate (g_rows(nr*nc), g_cols(nr*nc), g_rank(nr*nc), g_blk(nr*nc))
+               allocate (g_xoff(nr*nc + 1), g_joff(nr*nc + 1))
+               g_xoff(1) = 0
+               g_joff(1) = 0
+               do index_ij = 1, nr*nc
+                  g_rows(index_ij) = size(submats(index_ij)%dat, 1)
+                  g_cols(index_ij) = size(submats(index_ij)%dat, 2)
+                  g_blk(index_ij) = c_loc(submats(index_ij)%dat(1, 1))
+                  g_xoff(index_ij + 1) = g_xoff(index_ij) + int(g_rows(index_ij), 8)*g_cols(index_ij)
+                  ! transposed: the pivots run over the panel's rows
+                  g_joff(index_ij + 1) = g_joff(index_ij) + g_rows(index_ij)
+               enddo
+               allocate (g_jpvt(max(g_joff(nr*nc + 1), 1)))
+               allocate (g_x(max(g_xoff(nr*nc + 1), 1_8)))
+               g_trans = 1
+               if (entries_dev) then
+                  call c_bf_gpu_level_id_kept(ker%gpu_entries, nr*nc, g_rows, g_cols, g_blk, g_trans, &
+                                              c_loc(alldat_loc_in(1)), nnz_loc, option%tol_comp, BPACK_SafeUnderflow, &
+                                              g_rank, g_jpvt, c_loc(g_x(1)), g_info)
+               else
+                  call c_bf_gpu_level_id(nr*nc, g_rows, g_cols, g_blk, g_trans, c_loc(alldat_loc_in(1)), &
+                                         nnz_loc, option%tol_comp, BPACK_SafeUnderflow, g_rank, g_jpvt, &
+                                         c_loc(g_x(1)), g_info)
+               endif
+               gpu_id = (g_info == 0)
+            endif
+            endif
+            tph(3) = tph(3) + MPI_Wtime() - tq
+            tq = MPI_Wtime()
             if(option%format==3 .and. option%near_para<=0.1d0)option%tol_comp = option%tol_comp/max(1,blocks%level_butterfly/2)
 #ifdef HAVE_OPENMP
-            !$omp parallel do default(shared) private(index_ij,index_i,index_j,index_j_loc,index_i_loc,rank_new1,flops1) reduction(MAX:rank_new) reduction(+:flops)
+            !$omp parallel do default(shared) private(index_ij,index_i,index_j,index_j_loc,index_i_loc,rank_new1,flops1,g_xp) reduction(MAX:rank_new) reduction(+:flops)
 #endif
             do index_ij = 1, nr*nc
                index_j_loc = (index_ij - 1)/nr + 1
@@ -334,7 +451,15 @@ contains
                index_i = (index_i_loc - 1)*inc_r + idx_r
                index_j = (index_j_loc - 1)*inc_c + idx_c
 
-               call BF_compress_NlogN_oneblock_C_rankreveal(submats, blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij, level, level_final, rank_new1, flops1)
+               if (gpu_id) then
+                  ! the device's X is (cols x rows) here, the transposed shape
+                  call Array1DtoPointer2D(g_x(g_xoff(index_ij) + 1:g_xoff(index_ij + 1)), g_xp, &
+                                          g_cols(index_ij), g_rows(index_ij))
+                  call BF_compress_NlogN_oneblock_C_rankreveal(submats, blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij, level, level_final, rank_new1, flops1, &
+                       xdat=g_xp, jpvt_in=g_jpvt(g_joff(index_ij) + 1:g_joff(index_ij + 1)), rank_in=g_rank(index_ij))
+               else
+                  call BF_compress_NlogN_oneblock_C_rankreveal(submats, blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij, level, level_final, rank_new1, flops1)
+               endif
                rank_new = MAX(rank_new, rank_new1)
                flops = flops+flops1
 
@@ -342,6 +467,8 @@ contains
 #ifdef HAVE_OPENMP
             !$omp end parallel do
 #endif
+            tph(4) = tph(4) + MPI_Wtime() - tq
+            tq = MPI_Wtime()
             if(option%format==3 .and. option%near_para<=0.1d0)option%tol_comp = option%tol_comp*max(1,blocks%level_butterfly/2)
             do index_ij = 1, nr*nc
                if(Nboundall>0)then
@@ -359,6 +486,7 @@ contains
                call LogMemory(stats, -SIZEOF(alldat_loc_in)/1024.0d3)
                deallocate(alldat_loc_in)
             endif
+            if(allocated(g_rows))deallocate(g_rows, g_cols, g_rank, g_blk, g_xoff, g_joff, g_jpvt, g_x)
 
             passflag = 0
             do while (passflag == 0)
@@ -375,6 +503,7 @@ contains
             endif
             endif
             stats%Flop_Fill = stats%Flop_Fill + flops
+            tph(5) = tph(5) + MPI_Wtime() - tq
          enddo
 
       endif
@@ -406,6 +535,8 @@ contains
 
       call BF_ComputeMemory(blocks, Memory)
       call BF_get_rank(blocks, ptree)
+      if (c_bpack_env_trace('phase'//c_null_char) /= 0 .and. ptree%MyID == ptree%pgrp(blocks%pgno)%head) &
+         write (*, '(A,5Es11.3)') ' BF_compress_NlogN (s): sample, entries, device rank-reveal, placement, level end', tph
       return
 
    end subroutine BF_compress_NlogN
@@ -1827,7 +1958,7 @@ contains
 
 
 
-   subroutine BF_compress_NlogN_oneblock_R_rankreveal(submats, blocks, option, stats, msh, ker, ptree, index_i, index_j, index_ij, level, rank_new, flops)
+   subroutine BF_compress_NlogN_oneblock_R_rankreveal(submats, blocks, option, stats, msh, ker, ptree, index_i, index_j, index_ij, level, rank_new, flops, xdat, jpvt_in, rank_in)
 
 
       implicit none
@@ -1854,6 +1985,10 @@ contains
 
       integer, allocatable::jpvt(:)
       integer Nlayer, passflag, levelm, nrow, ncol
+      !>**** the device's rank-reveal of this block, when bf_gpu did it
+      DT, optional :: xdat(:, :)
+      integer, optional :: jpvt_in(:)
+      integer, optional :: rank_in
 
       integer, allocatable :: rankmax_for_butterfly(:), rankmin_for_butterfly(:), mrange(:), nrange(:), mrange1(:), nrange1(:), mmap(:), nmap(:)
       real(kind=8)::n2, n1,overrate
@@ -1894,32 +2029,52 @@ contains
       enddo
 
       rankmax_r = size(submats(index_ij)%dat,1)
+
+      !>**** The rank-reveal, which level 0 and the interior levels share;
+      !> level level_butterfly+1 stores its panel as it stands.  It leaves
+      !> dat(1:rank_new, 1:nn) holding X with A ~ A(:, jpvt(1:rank_new)) X, and
+      !> the placement below is the only thing that differs between levels.
+      !> With xdat/jpvt_in/rank_in present the device already did it
+      !> (GPU_BACKEND/bf_gpu) and its values are taken, so there is one copy of
+      !> the placement and of the skeleton mapping rather than two.
+      if (level /= level_butterfly + 1) then
+         allocate (jpvt(max(rankmax_c, rankmax_r)))
+         jpvt = 0
+         if (present(rank_in)) then
+            !>**** the device factorized the panel as the caller found it, so
+            !> its column count has to be the nn used here; a mismatch would
+            !> silently reveal the rank of a different matrix
+            call BPACK_require(size(xdat, 2) == nn .and. size(xdat, 1) == rankmax_r, &
+                               'bf_gpu rank-reveal: the panel shape differs from the block''s')
+            rank_new = rank_in
+            jpvt(1:rank_new) = jpvt_in(1:rank_new)
+            submats(index_ij)%dat(1:rank_new, 1:nn) = xdat(1:rank_new, 1:nn)
+         else
+            allocate (core(rankmax_r, rankmax_c))
+            do j = 1, rankmax_c
+               core(:, j) = submats(index_ij)%dat(:, select_column(j))
+            enddo
+            allocate (tau(max(rankmax_c, rankmax_r)))
+            call geqp3modf90(core, jpvt, tau, option%tol_comp, BPACK_SafeUnderflow, rank_new, flop=flop)
+            flops = flops + flop
+            if (rank_new > 0) then
+               call un_or_mqrf90(core, tau, submats(index_ij)%dat, 'L', 'C', rankmax_r, nn, rank_new, flop=flop)
+               flops = flops + flop
+               call trsmf90(core, submats(index_ij)%dat, 'L', 'U', 'N', 'N', rank_new, nn, flop=flop)
+               flops = flops + flop
+            else
+               rank_new = 1
+               jpvt(1) = 1
+               submats(index_ij)%dat = 0
+            endif
+         endif
+      endif
+
       if (level == 0) then
 
          header_m = msh%basis_group(group_m)%head
          header_n = msh%basis_group(group_n)%head
 
-         allocate (core(rankmax_r, rankmax_c))
-         do j = 1, rankmax_c
-            core(:, j) = submats(index_ij)%dat(:, select_column(j))
-         enddo
-
-         allocate (jpvt(max(rankmax_c, rankmax_r)))
-         allocate (tau(max(rankmax_c, rankmax_r)))
-         jpvt = 0
-         call geqp3modf90(core, jpvt, tau, option%tol_comp, BPACK_SafeUnderflow, rank_new, flop=flop)
-         flops = flops + flop
-
-         if (rank_new > 0) then
-            call un_or_mqrf90(core, tau, submats(index_ij)%dat, 'L', 'C', rankmax_r, nn, rank_new, flop=flop)
-            flops = flops + flop
-            call trsmf90(core, submats(index_ij)%dat, 'L', 'U', 'N', 'N', rank_new, nn, flop=flop)
-            flops = flops + flop
-         else
-            rank_new = 1
-            jpvt(1) = 1
-            submats(index_ij)%dat = 0
-         endif
 
          index_j_loc_k = (index_j - blocks%ButterflyV%idx)/blocks%ButterflyV%inc + 1
          allocate (blocks%ButterflyV%blocks(index_j_loc_k)%matrix(nn, rank_new))
@@ -1947,27 +2102,6 @@ contains
          header_n2 = msh%basis_group(2*group_n + 1)%head
          nnn1 = msh%basis_group(2*group_n)%tail - msh%basis_group(2*group_n)%head + 1
 
-         allocate (core(rankmax_r, rankmax_c))
-         do j = 1, rankmax_c
-            core(:, j) = submats(index_ij)%dat(:, select_column(j))
-         enddo
-
-         allocate (jpvt(max(rankmax_c, rankmax_r)))
-         allocate (tau(max(rankmax_c, rankmax_r)))
-         jpvt = 0
-         call geqp3modf90(core, jpvt, tau, option%tol_comp, BPACK_SafeUnderflow, rank_new, flop=flop)
-         flops = flops + flop
-
-         if (rank_new > 0) then
-            call un_or_mqrf90(core, tau, submats(index_ij)%dat, 'L', 'C', rankmax_r, nn, rank_new, flop=flop)
-            flops = flops + flop
-            call trsmf90(core, submats(index_ij)%dat, 'L', 'U', 'N', 'N', rank_new, nn, flop=flop)
-            flops = flops + flop
-         else
-            rank_new = 1
-            jpvt(1) = 1
-            submats(index_ij)%dat = 0
-         endif
 
          allocate (blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix(rank_new, nn1))
          allocate (blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix(rank_new, nn2))
@@ -1997,7 +2131,6 @@ contains
       if (allocated(select_column)) deallocate (select_column)
 
    end subroutine BF_compress_NlogN_oneblock_R_rankreveal
-
 
 
 
@@ -3898,7 +4031,7 @@ do i_dim = 1,dims_row(dim)
       if (allocated(select_column)) deallocate (select_column)
    end subroutine BF_compress_NlogN_oneblock_C_sample
 
-   subroutine BF_compress_NlogN_oneblock_C_rankreveal(submats, blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij, level, level_final, rank_new,flops)
+   subroutine BF_compress_NlogN_oneblock_C_rankreveal(submats, blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij, level, level_final, rank_new,flops, xdat, jpvt_in, rank_in)
 
 
       implicit none
@@ -3928,6 +4061,10 @@ do i_dim = 1,dims_row(dim)
       DT, allocatable:: UU(:, :), VV(:, :), matrix_little(:, :), matrix_little_inv(:, :), matrix_U(:, :), matrix_V(:, :), matrix_V_tmp(:, :), matrix_tmp(:, :), matrix_little_cc(:, :), core(:, :), core_tmp(:, :), core_tmp1(:, :), tau(:)
 
       integer, allocatable::jpvt(:)
+      !>**** the device's rank-reveal of this block, when bf_gpu did it
+      DT, optional :: xdat(:, :)
+      integer, optional :: jpvt_in(:)
+      integer, optional :: rank_in
       integer Nlayer, levelm, group_m_mid, group_n_mid, idxstart, idxend, nrow, ncol
       integer, allocatable :: rankmax_for_butterfly(:), rankmin_for_butterfly(:), mrange(:), nrange(:), mrange1(:), nrange1(:), mmap(:), nmap(:)
       integer::passflag = 0
@@ -3969,25 +4106,33 @@ do i_dim = 1,dims_row(dim)
          select_row(i) = i
       enddo
 
-      if (level == level_butterfly + 1) then
-         if (level == level_final) then
-            index_i_loc_k = (index_i - blocks%ButterflyU%idx)/blocks%ButterflyU%inc + 1
-            mm = size(submats(index_ij)%dat,1)
-            rank_new = size(submats(index_ij)%dat,2)
-            allocate (blocks%ButterflyU%blocks(index_i_loc_k)%matrix(mm, rank_new))
-            blocks%ButterflyU%blocks(index_i_loc_k)%matrix = submats(index_ij)%dat
-
+      !>**** The rank-reveal, which every level but the one ending this half
+      !> shares; at level_final the skeleton is inherited and the panel is
+      !> stored as it stands.  This half selects ROWS, so it works on the
+      !> transpose and leaves core_tmp(1:rank_new, 1:mm) holding X with
+      !> A^T ~ A^T(:, jpvt(1:rank_new)) X; the placement below is the only
+      !> thing that differs between levels.  With xdat/jpvt_in/rank_in present
+      !> the device already did it (GPU_BACKEND/bf_gpu).
+      if (level /= level_final .and. level /= 0) then
+         allocate (core_tmp(rankmax_c, rankmax_r))
+         allocate (jpvt(max(rankmax_c, rankmax_r)))
+         jpvt = 0
+         if (present(rank_in)) then
+            !>**** the device factorized the transposed panel, so its shape has
+            !> to be the one used here; a mismatch would silently reveal the
+            !> rank of a different matrix
+            call BPACK_require(size(xdat, 1) == rankmax_c .and. size(xdat, 2) == rankmax_r, &
+                               'bf_gpu rank-reveal: the panel shape differs from the block''s')
+            rank_new = rank_in
+            jpvt(1:rank_new) = jpvt_in(1:rank_new)
+            core_tmp(1:rank_new, 1:mm) = xdat(1:rank_new, 1:mm)
          else
             allocate (core(rankmax_c, rankmax_r))
-            allocate (core_tmp(rankmax_c, rankmax_r))
             call copymatT(submats(index_ij)%dat, core, rankmax_r, rankmax_c)
             call copymatT(submats(index_ij)%dat, core_tmp, rankmax_r, rankmax_c)
-            allocate (jpvt(max(rankmax_c, rankmax_r)))
             allocate (tau(max(rankmax_c, rankmax_r)))
-            jpvt = 0
             call geqp3modf90(core, jpvt, tau, option%tol_comp, BPACK_SafeUnderflow, rank_new, flop=flop)
             flops = flops + flop
-
             if (rank_new > 0) then
                call un_or_mqrf90(core, tau, core_tmp, 'L', 'C', rankmax_c, mm, rank_new, flop=flop)
                flops = flops + flop
@@ -3998,6 +4143,18 @@ do i_dim = 1,dims_row(dim)
                jpvt(1) = 1
                core_tmp = 0
             endif
+         endif
+      endif
+
+      if (level == level_butterfly + 1) then
+         if (level == level_final) then
+            index_i_loc_k = (index_i - blocks%ButterflyU%idx)/blocks%ButterflyU%inc + 1
+            mm = size(submats(index_ij)%dat,1)
+            rank_new = size(submats(index_ij)%dat,2)
+            allocate (blocks%ButterflyU%blocks(index_i_loc_k)%matrix(mm, rank_new))
+            blocks%ButterflyU%blocks(index_i_loc_k)%matrix = submats(index_ij)%dat
+
+         else
 
             index_i_loc_k = (index_i - blocks%ButterflyU%idx)/blocks%ButterflyU%inc + 1
             allocate (blocks%ButterflyU%blocks(index_i_loc_k)%matrix(mm, rank_new))
@@ -4035,26 +4192,6 @@ do i_dim = 1,dims_row(dim)
          else
             index_i_loc_s = (index_i - blocks%ButterflySkel(level)%idx_r)/blocks%ButterflySkel(level)%inc_r + 1
             index_j_loc_s = (index_j - blocks%ButterflySkel(level)%idx_c)/blocks%ButterflySkel(level)%inc_c + 1
-            allocate (core(rankmax_c, rankmax_r))
-            allocate (core_tmp(rankmax_c, rankmax_r))
-            call copymatT(submats(index_ij)%dat, core, rankmax_r, rankmax_c)
-            call copymatT(submats(index_ij)%dat, core_tmp, rankmax_r, rankmax_c)
-            allocate (jpvt(max(rankmax_c, rankmax_r)))
-            allocate (tau(max(rankmax_c, rankmax_r)))
-            jpvt = 0
-            call geqp3modf90(core, jpvt, tau, option%tol_comp, BPACK_SafeUnderflow, rank_new, flop=flop)
-            flops = flops + flop
-
-            if (rank_new > 0) then
-               call un_or_mqrf90(core, tau, core_tmp, 'L', 'C', rankmax_c, mm, rank_new, flop=flop)
-               flops = flops + flop
-               call trsmf90(core, core_tmp, 'L', 'U', 'N', 'N', rank_new, mm, flop=flop)
-               flops = flops + flop
-            else
-               rank_new = 1
-               jpvt(1) = 1
-               core_tmp = 0
-            endif
 
             allocate (blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix(mm1, rank_new))
             allocate (blocks%ButterflyKerl(level)%blocks(index_i_loc_k + 1, index_j_loc_k)%matrix(mm2, rank_new))
@@ -4084,6 +4221,7 @@ do i_dim = 1,dims_row(dim)
       if (allocated(matrix_V)) deallocate (matrix_V)
       if (allocated(select_row)) deallocate (select_row)
       if (allocated(select_column)) deallocate (select_column)
+
    end subroutine BF_compress_NlogN_oneblock_C_rankreveal
 
 

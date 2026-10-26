@@ -123,6 +123,11 @@ module BPACK_GPU
          character(kind=c_char), dimension(*) :: value
       end function c_bpack_env_check
 
+      integer(c_int) function c_bpack_env_trace(value) bind(c, name="c_bpack_env_trace")
+         import :: c_int, c_char
+         character(kind=c_char), dimension(*) :: value
+      end function c_bpack_env_trace
+
       subroutine c_bpack_hodlr_gpu_add_leaf(gpu, row0, m, d, ldd) bind(c, name="c_bpack_hodlr_gpu_add_leaf")
          import :: c_ptr, c_int, c_int64_t
          type(c_ptr), value :: gpu, d
@@ -377,6 +382,143 @@ module BPACK_GPU
          type(c_ptr), value :: gpu
          real(c_double) :: flops
       end subroutine c_bpack_gpu_dm_flops
+      !>**** The rank-reveal of one level of a butterfly construction on the
+      !> device (GPU_BACKEND/bf_gpu).  `entry_off` is each panel's offset into
+      !> `entries`, in elements; `transposed` is 1 for the 'C' half.  The
+      !> results come back in block order: `rank` one per block, `jpvt` the
+      !> cumulative sum of the panels' column counts, `xout` the cumulative sum
+      !> of m*n.  info 1 means the device declined (no room, or a precision
+      !> without the butterfly backend) and the caller runs the CPU path.
+      subroutine c_bf_gpu_level_id(nblk, rows, cols, blk, transposed, entries, nnz, rtol, atol, &
+                                   rank, jpvt, xout, info) bind(c, name="c_bf_gpu_level_id")
+         import :: c_int, c_int64_t, c_double, c_ptr
+         integer(c_int) :: nblk, transposed
+         integer(c_int) :: rows(*), cols(*)
+         type(c_ptr) :: blk(*)
+         integer(c_int64_t) :: nnz
+         !>**** the entry buffer and the output X cross as addresses, so this
+         !> binding is the same in every precision; the backend is real double
+         !> for now and declines (info 1) in the others
+         type(c_ptr), value :: entries, xout
+         real(c_double) :: rtol, atol
+         integer(c_int) :: rank(*), jpvt(*), info
+      end subroutine c_bf_gpu_level_id
+
+      !>**** c_bf_gpu_level_id on the entries the butterfly's GPU evaluator
+      !> (handle) left on the device; `entries` is the host buffer they mirror,
+      !> filled only when the device declines (info 1)
+      subroutine c_bf_gpu_level_id_kept(handle, nblk, rows, cols, blk, transposed, entries, nnz, rtol, atol, &
+                                        rank, jpvt, xout, info) bind(c, name="c_bf_gpu_level_id_kept")
+         import :: c_int, c_int64_t, c_double, c_ptr
+         type(c_ptr), value :: handle
+         integer(c_int) :: nblk, transposed
+         integer(c_int) :: rows(*), cols(*)
+         type(c_ptr) :: blk(*)
+         integer(c_int64_t) :: nnz
+         type(c_ptr), value :: entries, xout
+         real(c_double) :: rtol, atol
+         integer(c_int) :: rank(*), jpvt(*), info
+      end subroutine c_bf_gpu_level_id_kept
+
+      !>**** A butterfly matvec on the caller's host arrays, run on the device
+      !> (GPU_BACKEND/bf_gpu): y = op(bf) x, the factors resident between
+      !> calls.  Collective over the butterfly's ranks.  info 1 means the
+      !> device declined and the caller runs the CPU path.
+      subroutine c_bf_gpu_mult_host(bf, ptree, op, nrhs, x, ldx, y, ldy, flops, info) &
+         bind(c, name="c_bf_gpu_mult_host")
+         import :: c_int, c_double, c_ptr, c_char
+         type(c_ptr), value :: bf, ptree, x, y
+         character(kind=c_char) :: op
+         integer(c_int) :: nrhs, ldx, ldy, info
+         real(c_double) :: flops
+      end subroutine c_bf_gpu_mult_host
+
+      !>**** The entries of a list of intersections of a butterfly, on the
+      !> device (GPU_BACKEND/bf_gpu/bf_extract.hpp), in C_BF_ExtractElement's
+      !> arguments (columns 1..N, pgidx 0 based).  info 1: the device declined
+      !> (a butterfly on several ranks, a block another rank owns, no room)
+      !> and the caller runs the host path.
+      subroutine c_bf_gpu_extract(bf, ptree, ninter, allrows, allcols, rowidx, colidx, pgidx, npmap, pmaps, &
+                                  alldat_loc, nalldat_loc, flops, info) bind(c, name="c_bf_gpu_extract")
+         import :: c_int, c_int64_t, c_double, c_ptr
+         type(c_ptr), value :: bf, ptree, alldat_loc
+         integer(c_int) :: ninter, npmap, info
+         integer(c_int) :: allrows(*), allcols(*), rowidx(*), colidx(*), pgidx(*), pmaps(*)
+         integer(c_int64_t) :: nalldat_loc
+         real(c_double) :: flops
+      end subroutine c_bf_gpu_extract
+
+      !>**** This rank's rows of a butterfly's intersections, on the device,
+      !> for BF_ExtractElement on a process group (GPU_BACKEND/bf_gpu/
+      !> bf_extract.hpp, extract_dist): nr and nc rows and columns of each,
+      !> every row's leaf and position in it (zero based, stacked), every
+      !> column's, nloc local rows of each at positions local (zero based, in
+      !> dat_loc's order), the rank holding each leaf (2^L each).  out: the
+      !> dat_loc blocks, nloc x nc each, stacked.  info 1: the device declined
+      !> on every rank together.  Collective over the group.
+      subroutine c_bf_gpu_extract_dist(bf, ptree, ninter, nr, nc, row_leaf, row_pos, col_leaf, col_pos, nloc, &
+                                       local, row_owner, col_owner, out, flops, info) bind(c, name="c_bf_gpu_extract_dist")
+         import :: c_int, c_double, c_ptr
+         type(c_ptr), value :: bf, ptree, out
+         integer(c_int) :: ninter, info
+         integer(c_int) :: nr(*), nc(*), row_leaf(*), row_pos(*), col_leaf(*), col_pos(*), nloc(*), local(*)
+         integer(c_int) :: row_owner(*), col_owner(*)
+         real(c_double) :: flops
+      end subroutine c_bf_gpu_extract_dist
+
+      !>**** The handle of a butterfly's GPU evaluator (c_bf_set_gpu_*), null
+      !> when it has none, for its M rows and N columns; xyz: the butterfly
+      !> mesh's coordinates xyz(1:dim, -N:M), or null.  warm: the evaluator's
+      !> first-use costs, paid here.
+      subroutine c_bf_gpu_entries(bf, M, N, dim, xyz, handle, warm) bind(c, name="c_bf_gpu_entries")
+         import :: c_int, c_double, c_ptr
+         type(c_ptr), value :: bf, xyz
+         integer(c_int) :: M, N, dim
+         type(c_ptr) :: handle
+         real(c_double) :: warm
+      end subroutine c_bf_gpu_entries
+
+      !>**** BF_randomized (less_adapt 1) on the device, for BF_randomized_gpu
+      !> (GPU_BACKEND/bf_gpu/bf_randomized.hpp): a butterfly of L >= 1 levels
+      !> on its process group, laid out as bf_rand (BF_Init_randomized's
+      !> structure, no factors yet): this rank's blocks of every level, its
+      !> leaves' ends ms and ns as BF_Init_randomized counts them, over its U
+      !> and its V blocks, and the global index (zero based) of its first row
+      !> and column.  The black box is the device one registered for bf
+      !> (c_bf_set_gpu_matvec), else the C callback matvec with its quant.
+      !> rows/cols: the shapes of this rank's blocks - V's, Kerl(1:L)'s row by
+      !> row, U's - for c_bf_gpu_randomized_fetch, which takes the handle.
+      !> prof: seconds of all, the black box, the sweeps, the range finding
+      !> and solves, the error test; then the black box's calls and columns,
+      !> the tries of the rank guess and the test's error.  info 1: the device
+      !> declined, on every rank together.  Collective over the group.
+      subroutine c_bf_gpu_randomized(bf, bf_rand, ptree, L, level_half, M, N, ms, ns, row0, col0, rank0, rankrate, &
+                                     itermax, nbundle, tol_rdetect, tol_ls, matvec, quant, handle, rows, cols, prof, &
+                                     info) bind(c, name="c_bf_gpu_randomized")
+         import :: c_int, c_double, c_ptr, c_funptr
+         type(c_ptr), value :: bf, bf_rand, ptree, quant
+         type(c_funptr), value :: matvec
+         integer(c_int) :: L, level_half, M, N, row0, col0, rank0, itermax, nbundle, info
+         integer(c_int) :: ms(*), ns(*), rows(*), cols(*)
+         real(c_double) :: rankrate, tol_rdetect, tol_ls, prof(*)
+         type(c_ptr) :: handle
+      end subroutine c_bf_gpu_randomized
+
+      !>**** The blocks of c_bf_gpu_randomized into ptrs (null: skipped), and
+      !> the handle released; seconds: the time of the copy
+      subroutine c_bf_gpu_randomized_fetch(handle, ptrs, seconds) bind(c, name="c_bf_gpu_randomized_fetch")
+         import :: c_double, c_ptr
+         type(c_ptr), value :: handle
+         type(c_ptr) :: ptrs(*)
+         real(c_double) :: seconds
+      end subroutine c_bf_gpu_randomized_fetch
+
+      !>**** Drop what a butterfly holds on the device; before it is freed
+      subroutine c_bf_gpu_release(bf) bind(c, name="c_bf_gpu_release")
+         import :: c_ptr
+         type(c_ptr), value :: bf
+      end subroutine c_bf_gpu_release
+
    end interface
 
    !> the device indices of the forward blocks of a rank (HODLR_gpu_block_table)
@@ -385,6 +527,83 @@ module BPACK_GPU
    end type hodlr_gpu_itab
 
 contains
+
+   !>**** Whether a butterfly level's rank-reveal runs on the device
+   !> (GPU_BACKEND/bf_gpu): the options ask for the GPU, this library has the
+   !> backend, the block really is a butterfly (a low-rank block goes through
+   !> BF_gpu_construct instead, see BF_gpu_construct_ok), and the level's
+   !> entries arrive in one contiguous buffer - which they do not when there
+   !> are masks, so a masked block stays on the host.
+   !>
+   !> EITHER option asks for it, because a butterfly block reaches here from
+   !> two places: coupling two HODLRs, where it inherits HODLR_use_gpu, or as
+   !> the F12/F21 of an H2 front, where the format is 7 and the caller sets
+   !> H2_use_gpu instead.  A STRUMPACK H2 front does the latter and
+   !> deliberately leaves HODLR_use_gpu at 0, because HODLR_gpu_check_options
+   !> requires format 1 and LRlevel 0 - neither true of an H2 with butterfly
+   !> couplings - so reading HODLR_use_gpu alone would never fire there.
+   logical function BF_gpu_rankreveal_ok(blocks, option, Nboundall)
+      implicit none
+      type(matrixblock)::blocks
+      type(Hoption)::option
+      integer::Nboundall
+
+      BF_gpu_rankreveal_ok = .false.
+      if (option%HODLR_use_gpu <= 0 .and. option%H2_use_gpu <= 0) return
+      if (blocks%level_butterfly == 0) return
+      if (Nboundall /= 0) return
+      if (.not. BPACK_gpu_available()) return
+      BF_gpu_rankreveal_ok = .true.
+   end function BF_gpu_rankreveal_ok
+
+   !>**** Whether a butterfly's matvec runs on the device (GPU_BACKEND/bf_gpu):
+   !> the options ask for the GPU and this library has the backend.  A
+   !> low-rank block (level_butterfly 0) is one too: on several ranks they all
+   !> share its one leaf, which the device sums and broadcasts as the host
+   !> does.  The device copy of the factors is made at the first call and kept.
+   !> Either option asks for it, as for BF_gpu_rankreveal_ok: a STRUMPACK H2
+   !> front sets H2_use_gpu and leaves HODLR_use_gpu at 0.
+   logical function BF_gpu_mult_ok(blocks, option)
+      implicit none
+      type(matrixblock)::blocks
+      type(Hoption)::option
+
+      BF_gpu_mult_ok = .false.
+      if (option%HODLR_use_gpu <= 0 .and. option%H2_use_gpu <= 0) return
+      if (.not. BPACK_gpu_available()) return
+      BF_gpu_mult_ok = .true.
+   end function BF_gpu_mult_ok
+
+   !>**** Whether a butterfly's entry extraction is tried on the device
+   !> (GPU_BACKEND/bf_gpu/bf_extract.hpp): as for the matvec, a butterfly
+   !> rather than a low-rank block.  The device itself declines what it does
+   !> not handle yet - a butterfly on several ranks, a block another rank owns
+   !> - and the host path runs.
+   logical function BF_gpu_extract_ok(blocks, option)
+      implicit none
+      type(matrixblock)::blocks
+      type(Hoption)::option
+
+      BF_gpu_extract_ok = BF_gpu_mult_ok(blocks, option) .and. blocks%level_butterfly > 0
+   end function BF_gpu_extract_ok
+
+   !>**** Whether a butterfly's construction from matvecs runs on the device
+   !> (BF_randomized_gpu): as for the matvec, a butterfly rather than a
+   !> low-rank block, with the less adaptive scheme (less_adapt 1; the other
+   !> one is BF_randomized_old's, as is a low-rank block's).
+   logical function BF_gpu_sketch_ok(blocks, option, ptree)
+      implicit none
+      type(matrixblock)::blocks
+      type(Hoption)::option
+      type(proctree)::ptree
+
+      BF_gpu_sketch_ok = .false.
+      if (.not. BF_gpu_mult_ok(blocks, option)) return
+      if (blocks%level_butterfly == 0) return
+      if (option%less_adapt /= 1) return
+      if (.not. IOwnPgrp(ptree, blocks%pgno)) return
+      BF_gpu_sketch_ok = .true.
+   end function BF_gpu_sketch_ok
 
    !> Whether this library has the GPU backend (the double or double complex
    !> library of a build with enable_h2_gpu=ON)

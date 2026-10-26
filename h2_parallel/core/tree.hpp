@@ -295,6 +295,16 @@ struct FactorizationThreadScratch {
     std::vector<const std::vector<int64_t>*> stream_blk_skeleton;
     std::vector<const std::vector<int64_t>*> stream_blk_wanted;
     std::vector<int64_t> stream_positions;
+    // The fill pass over a box's sources in parallel (a small wave, with
+    // split_threads > 1): each source's P_E, W_E, gather buffers and row
+    // positions, one set a source, so phase 2 can fold them into the sketch
+    // in source order.
+    struct StreamFillSource {
+        std::vector<DataType> P, W, Trow, TrowT;
+        std::vector<int64_t> positions;
+        bool any_rows = false;
+    };
+    std::vector<StreamFillSource> stream_fill_sources;
 };
 
 

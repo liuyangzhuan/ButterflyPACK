@@ -50,7 +50,7 @@ void c_bpack_construct_init_fortran(int* Npo, int* Ndim, double* Locations, int*
 // the mesh can carry a basis_group reproducing the H2's own distribution; a
 // butterfly block built on this mesh (c_bf_construct_init) then lands on the
 // same rows.
-void c_bpack_set_mesh_h2(int* Npo, int* new2old, int* idxs, int* idxe, int* nproc, int* rank_idxs, int* rank_idxe, F2Cptr* msh_Cptr);
+void c_bpack_set_mesh_h2(int* Npo, int* new2old, int* idxs, int* idxe, int* nproc, int* rank_idxs, int* rank_idxe, int* nmin_leaf, F2Cptr* msh_Cptr);
 void c_bpack_set_mesh_distributed64(const int64_t* N_global, const int64_t* N_input_local, const int64_t* N_internal_local, const int64_t* internal_global_start, F2Cptr* msh_Cptr);
 void c_bpack_wrap_h2(F2Cptr* bmat_Cptr, C2Fptr h2_ptr);
 void c_bpack_get_h2(C2Fptr bmat_Cptr, F2Cptr* h2_ptr);
@@ -87,9 +87,20 @@ void c_bpack_set_gpu_entry_source(F2Cptr* bmat, const char* source, const double
 void c_bpack_set_gpu_block_evaluator(F2Cptr* bmat, bpack_gpu_block_evaluator evaluate, void* user, const int* flags);
 void c_bpack_set_gpu_list_evaluator(F2Cptr* bmat, bpack_gpu_list_evaluator evaluate, void* user, const int* flags);
 void c_bpack_gpu_warm_up(F2Cptr* bmat, double* seconds);
+/*
+ * The same for a butterfly block (the bf handle of c_bf_construct_init), with
+ * HODLR_use_gpu > 0: K(i, j) for row i of the row mesh and column j of the
+ * column mesh, ids the CPU callbacks' indices minus one.
+ */
+void c_bf_set_gpu_entry_launchers(F2Cptr* bf, const bpack_gpu_entry_launchers* launchers);
+void c_bf_set_gpu_entry_source(F2Cptr* bf, const char* source, const double* params, const int* nparams, const int* flags);
+void c_bf_set_gpu_block_evaluator(F2Cptr* bf, bpack_gpu_block_evaluator evaluate, void* user, const int* flags);
+void c_bf_set_gpu_list_evaluator(F2Cptr* bf, bpack_gpu_list_evaluator evaluate, void* user, const int* flags);
+void c_bf_set_gpu_matvec(F2Cptr* bf, bpack_gpu_bf_matvec matvec, void* user);
 /* GPU state of formats other than H2 (SRC/BPACK_gpu_wrapper.cpp) */
 void c_bpack_gpu_create(void** gpu);
 void c_bpack_gpu_set_evaluator(void* gpu, const void* evaluator);
+void c_bf_gpu_set_evaluator(void* bf, const void* evaluator);
 void c_bpack_get_internal_global_ids64(F2Cptr* bmat, const int64_t* internal_local_offset, const int64_t* count, int64_t* global_ids);
 void c_bpack_get_input_to_internal_map64(F2Cptr* bmat, const int64_t* input_local_offset, const int64_t* count, int64_t* global_ids, int* internal_owner_ranks, int64_t* internal_global_indices);
 void c_bpack_input_to_internal(F2Cptr* bmat, const int* nrhs, const C_DT* input_values, C_DT* internal_values);
@@ -224,6 +235,39 @@ c_bpack_setoption(option, nam, (C2Fptr) &val);
 }
 
 void c_bf_extractelement(F2Cptr* blocks,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree, int* Ninter, int* Nallrows, int* Nallcols, int64_t* Nalldat_loc, int* allrows,int* allcols, C_DT* alldat_loc, int* rowidx, int* colidx, int* pgidx, int* Npmap, int* pmaps);
+void c_bf_get_block_pid(F2Cptr bf, F2Cptr ptree, int level, int index_i, int index_j, char mode, int* pid, int* myid, int* nproc);
+void c_bf_get_sub_head(F2Cptr bf, F2Cptr ptree, int* is_head, MPI_Fint* comm, int* nproc);
+void c_bf_get_exchange_dest(F2Cptr bf, F2Cptr ptree, int level, char mode, char collect, int nr, int nc,
+                            int idx_r, int inc_r, int idx_c, int inc_c, int* pid);
+void c_bf_get_mvp_vec_ranges(F2Cptr bf, F2Cptr ptree, char chara, int* idx_r, int* inc_r, int* nr,
+                             int* idx_c, int* inc_c, int* nc);
+void c_bf_get_all2all_dest(F2Cptr bf, F2Cptr ptree, int level, char mode_new, int nr, int nc,
+                           int idx_r, int inc_r, int idx_c, int inc_c, int* pid);
+void c_bf_get_all2all_range(F2Cptr bf, F2Cptr ptree, int level, char mode_new, int* idx_r, int* inc_r, int* nr,
+                            int* idx_c, int* inc_c, int* nc);
+void c_bf_get_block_group(F2Cptr bf, F2Cptr ptree, int level, int index_i, int index_j, char mode,
+                          int* nproc, MPI_Fint* comm, int* is_head);
+void c_bf_gpu_level_id(const int* nblk, const int* rows, const int* cols, void* const* blk,
+                       const int* transposed, const void* entries, const int64_t* nnz,
+                       const double* rtol, const double* atol, int* rank, int* jpvt, void* xout,
+                       int* info);
+/* alpha and beta point to the library's scalar (double, or double complex) */
+void c_bf_gpu_mult(F2Cptr bf, F2Cptr ptree, const char* op, const int* nrhs, const void* x,
+                   const int* ldx, void* y, const int* ldy, const void* alpha, const void* beta,
+                   double* flops, int* info);
+void c_bf_gpu_mult_host(F2Cptr bf, F2Cptr ptree, const char* op, const int* nrhs, const void* x,
+                        const int* ldx, void* y, const int* ldy, double* flops, int* info);
+void c_bf_gpu_extract(F2Cptr bf, F2Cptr ptree, const int* ninter, const int* allrows, const int* allcols,
+                      const int* rowidx, const int* colidx, const int* pgidx, const int* npmap, const int* pmaps,
+                      void* alldat_loc, const int64_t* nalldat_loc, double* flops, int* info);
+void c_bf_gpu_release(F2Cptr bf);
+void c_bpack_gpu_workspace_alloc(const int64_t* elements, void** ptr);
+void c_bpack_gpu_workspace_free(void* ptr);
+void c_bpack_gpu_workspace_copy(void* device, void* host, const int64_t* elements,
+                                const int* to_device);
+void c_bf_get_vec_ranges(F2Cptr bf, F2Cptr ptree, char dir, int* idx_r, int* inc_r, int* nr, int* idx_c, int* inc_c, int* nc);
+void c_bf_get_layout(F2Cptr bf, int* level_butterfly, int* level_half, int* M, int* N, int* M_loc, int* N_loc, int* nlevels, int* nblocks);
+void c_bf_get_blocks(F2Cptr bf, int* lvl_nr, int* lvl_nc, int* lvl_idxr, int* lvl_idxc, int* lvl_incr, int* lvl_incc, int* blk_rows, int* blk_cols, void** blk_ptr);
 void c_bf_construct_init(int* M, int* N,int* M_loc,int* N_loc, int* nnsr, int* nnsc, F2Cptr* mshr,F2Cptr* mshc,F2Cptr* bf, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, void (*C_FuncDistmn)(int*, int*, double*,C2Fptr), void (*C_FuncNearFar)(int*, int*, int*,C2Fptr), C2Fptr C_QuantApp);
 void c_bf_construct_element_compute(F2Cptr* bf, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, void (*C_FuncZmn)(int*, int*, C_DT*,C2Fptr), void (*C_FuncZmnBlock)(int*, int*, int*, int64_t*, int*, int*, C_DT*, int*, int*, int*, int*, int*, C2Fptr), C2Fptr C_QuantApp);
 void c_bf_construct_matvec_compute(F2Cptr* bf, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree,void (*C_FuncBMatVec)(char const *, int*, int*, int*, C_DT const*,C_DT*,C2Fptr,C_DT*, C_DT*), C2Fptr C_QuantApp);

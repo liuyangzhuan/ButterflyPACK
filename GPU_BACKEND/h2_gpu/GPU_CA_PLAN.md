@@ -7485,6 +7485,217 @@ upper levels run at a third of the rate on larger, fewer items (level 4:
 explains, and would gain more from a different block shape than the leaf
 would.  Left as measured.
 
+#### The CPU's CA3 margin, looked at the same way (2026-10-22)
+
+Runs only (h2_c1_work/cpu/, the Oct 19 CPU build frozen as
+build/gpu_prep/frozen_cpu_1022; 64 ranks on 16 GPU nodes, 4 x 16 threads).
+A perf profile of rank 0 (192^3, Nmin 216): OpenBLAS 40%, libgomp spin 30%
+plus sched_yield 6%, libc 9%, ButterflyPACK 8%, MPI 5%, Color and CA3
+alike.  The phase lines place the spin: box-phase thread utilization 81% at
+the leaf, 64% at level 5 (27-37 boxes a wave), 17% at level 4 (1-7 a wave),
+~5% at levels 3-2 (one box a wave), a box being single-threaded.  Levels
+4-2 are 46 of Color's 105 s at 320^3/64 (Nmin 64), 32 s of it "staged"
+(the exchange and the wait on neighbours) - where the 343-box rule forbids
+CA.
+
+320^3 on 64 ranks, one job, longest rank's level times (L6 = leaf):
+
+| | factor | L6 | L5 | L4 | L3 | L2 |
+|---|---|---|---|---|---|---|
+| Color (lazy_schur 2) | 105 | 15.7 | 22.7 | 19.7 | 13.5 | 13.4 |
+| CA3 at the leaf | 96.2 | 12.7 | 18.5 | 19.7 | 13.4 | 12.6 |
+| CA3 at the leaf and level 5 | 97.2 | 12.8 | 19.3 | 17.9 | 13.8 | 13.0 |
+| CA0 at the leaf | 106 | 17.7 | 22.7 | 18.9 | 13.6 | 13.1 |
+| CA0 at the leaf and level 5 | 123 | 17.7 | 41.1 | 15.2 | 11.2 | 12.7 |
+| Color, lazy_schur 1 | 106 | 18.1 | 25.1 | 20.4 | 12.4 | 11.0 |
+| CA3 at the leaf, lazy_schur 1 | **87.7** | 12.8 | 20.4 | 15.6 | 9.4 | 10.2 |
+
+Three things in it.  (1) CA3's own level gains 3 s; its 8.4 s margin is
+mostly the *Color* level above running 4.2 s faster after a CA3 leaf than
+after a Color leaf (192^3/64: leaf -0.8 s, levels 4-3 -3.1 s of the 4.6 s
+margin).  The minor faults say why: level 5 takes 1,670 faults a box after
+a Color leaf and 240 after a CA3 leaf, and every part of it (box 6.1 ->
+5.5, owner 3.7 -> 3.5, staged 11.9 -> 8.8 s) is faster.  Not the allocator
+returning memory (TCMALLOC_RELEASE_RATE=0: unchanged, 1,610 faults a box),
+not the lazy_schur clamp of CA levels (lazy_schur 1 for both: unchanged,
+1,669).  What remains: CA3's leaf maps more memory (payloads sent and
+received, 1.6-1.8 GB a rank, and their staging) and the next levels reuse
+it without faulting, while after Color's leaner leaf each level grows the
+heap and 16 threads fault its pages in at once.  Under lazy_schur 1 the
+effect reaches levels 4-2 (faults a box 3,806 / 1,122 / 9,660 against 67 /
+23 / 21; those levels 20.4 / 12.4 / 11.0 against 15.6 / 9.4 / 10.2 s).  A
+transient pool kept across levels (the CPU twin of the GPU heap) would
+give Color the same, and the margin to report is best-against-best after
+it; today's best-against-best is Color 105 (lazy 2) against CA3 87.7 (lazy
+1), 16.5%, of which CA3's own level is ~3 s.  Accuracy the same (acc_forward
+5.14e-3 / 5.24e-3).  (2) CA3 at level 5 does what it should - box wall 6.1
+-> 4.1 s, the 8.5 s of per-colour waits gone - and gives it back in 3.4 s
+of component passes and a 4.4 s cross-rank wait (elimination 14.9-19.3 s):
+19.3 s against 18.5 after a CA3 leaf.  CA0 at level 5 replicates an 8^3
+brick's halo: 41 s.  (3) Where a real CA gap could come from: levels 4-2,
+44% of the time and nearly all of it waiting in one-box waves, the shape
+CA3's arrival-driven schedule is for, forbidden by
+minimum_CA_boxes_per_active_process (343, set for CA0's halo; CA3
+replicates nothing).  Intra-box threading at those levels would cut both
+variants' time by more than the gap.
+
+*The box's threading above the leaf, measured (2026-10-22).*  A wave is
+an `omp for` over its boxes, one thread a box; when a wave has fewer boxes
+than threads, split_threads_for gives the box threads/boxes (capped by
+h2_gemm_split 16) and a few loops use `omp taskloop`: kernel evaluation by
+column range, the P and fill GEMMs in 256-column chunks, the right-inverse
+solves in 512-row chunks, the step-2 temp GEMMs by neighbour columns.  Not
+split: the gathers, the QRCP, the LU, the assembly, every GEMM under a
+chunk.  In the 192^3/64 profile's upper-level window (levels 3-2) the main
+thread is on-CPU 57% of the time and each worker 18%, 46% of all samples
+libgomp spin.  Color 320^3/64 with h2_gemm_split 1 against 16 (one job):
+factor 118 against 105 s; box walls L4 5.7 / 5.2, L3 2.9 / 1.7, L2 6.2 /
+3.1 s (L6, L5 unchanged: the split does not engage with boxes >= threads);
+the per-colour waits of the slower ranks grow with it (staged L3 15.1 /
+11.6).  So the split is live and worth ~2x at levels 3-2, and the other
+half of a box (0.39 s a box at level 2 with 16 threads) is serial.
+Proposed, not built: for waves with fewer than ~2x threads boxes, run the
+boxes one at a time with the whole team inside each - orphaned `omp for`
+in the sketch, the owner updates and the near/step-2 work, partitioned by
+output columns (each thread its column range of Y, looping over the fill
+sources in the existing Morton order), so the accumulation order and the
+bits are unchanged; the gathers by ring-row block; the QRCP serial.  Worth
+~8-10 s of Color's 105 s at 320^3/64 (box 16 s + owner 7 s at levels 5-2
+towards ~5 s), the same for CA3; nothing of the 27 s of per-colour waits.
+
+*Built (2026-10-22): the fill pass in two phases, and finer split chunks.*
+Two things, both in the small-wave path only (split_threads > 1, so the
+leaf's code and bits are untouched): (1) split_columns_chunked makes as
+many tasks as the split allows at >= 64 columns each (the 256-column chunks
+gave two tasks on a 500-column box); (2) the sketch's fill pass over a
+box's sources runs as phase 1, a task a source computing P_E and W_E into
+per-source buffers (FactorizationThreadScratch::stream_fill_sources;
+compute_P_into and accumulate_W take their buffers as arguments), and
+phase 2, the fold O' -= sum_E P_E^T W_E by column chunks across the
+threads, each chunk taking the sources in their order - every entry sees
+the same operations in the same sequence as the serial loop.  The gathers
+and axpys stay serial per source (an earlier column-ownership split of
+them is recorded as slower), as do the ring-row consume, the QRCP and the
+LU.  192^3/64 Color bitwise (-89253588.025574505), 42.1 -> 39.6 s.
+320^3/64, one job each:
+
+| | Color factor | L6 | L5 | L4 | L3 | L2 | CA3 at the leaf |
+|---|---|---|---|---|---|---|---|
+| Oct 19 build | 105 | 15.7 | 22.7 | 19.7 | 13.5 | 13.4 | 96.2 |
+| two-phase fill + 64-column tasks | 101 | 15.6 | 22.6 | 18.5 | 12.7 | 12.4 | 93.3 |
+
+Box walls L4 5.2 -> 4.0, L3 1.7 -> 1.2, L2 3.1 -> 2.2 s.  The 320^3 logdet's
+last digit (...778.77657938 / ...944) follows the build and the allocator,
+not the code path (the new build with h2_gemm_split 1 gives ...944, the old
+build under TCMALLOC_RELEASE_RATE=0 did too).  Tried and dropped: the
+split engaged for waves under 3x threads boxes (level 5: 27-37 boxes), to
+take the 4.4 s chain of each wave's slowest box - no change (6.2 s, 4.5),
+since taskloop pieces are run only by threads already at the barrier.
+Left at those levels: the ring-row consume and kernel rows, the ID, the
+near updates - and the 27 s of per-colour waits.
+
+*CA3 above the leaf, tried (2026-10-22): a design limit, not a rule.*  The
+floor of minimum_CA_boxes_per_active_process (343, a 7^3 brick) was
+lowered to 8 for the owner-component mode and 320^3/64 run with CA_level
+4, 3 and 2.  Every run died at level 4's schedule setup: first
+"auxiliary_components: boundary box 512 outside the graph's
+neighbourhood" (the local graph construction), then, with the global
+construction (BPACK_CHECK=globalgraph), "shared box 0 of component 0 not
+held by rank 45".  The standalone graph build
+(h2_c1_work/cpu/small_bricks_graph.cpp, from tests/owner_graph_test.cpp)
+shows why: at a 4^3 brick the CA classifier makes one blue component of
+3,584 boxes shared by all 64 ranks (no purple, no green), at 2^3 one of
+512; at 8^3 the intended 27 blue corner clusters, 54 purple edge runs and
+36 green faces, at most 8 sharers each.  The colour classes are bands of
+fixed width about a brick's corners, edges and faces; a brick narrower
+than about six boxes is all corner band, the grid's whole boundary becomes
+one component, and the arrival-driven schedule has nothing to schedule.
+That is what the 7^3 floor encodes; it stays.  Reverted.  Reaching the 26 s
+of per-colour waits at levels 4-2 with 64 ranks would need a colouring
+for thin bricks (a different decomposition, not a parameter), or fewer
+ranks at those levels, which costs more compute than the waits.
+
+*CA3's owner choice by cost, measured (2026-10-23): dropped.*  Owners are
+chosen largest-first by box count (assign_owners, LPT_CUMULATIVE), so a
+corner rank of the 4^3 rank grid owns as many boxes as an interior one but
+many of them on the domain's surface.  Two diagnostics (frozen_cpu_dg1:
+BPACK_TRACE=phase bins each box's time by the boxes within two of it;
+BPACK_TRACE=skew writes every rank's CA3 timings, owner_<job>.<step>_level<L>.csv),
+one job (60148080), logdets as before (the 320^3 CA3 one in the 16th digit,
+...4980 against tt1's ...4992, the layout sensitivity seen between builds).
+A box's time grows about linearly with its neighbourhood (320^3 leaf, Color:
+2.3 ms + 0.18 ms a box within two): inside 24.1 ms, on a face 15.3 (0.63),
+an edge 11.1 (0.46), a corner 9.4 (0.39), one layer in from a face 20.4
+(0.85); CA3 and 192^3 alike (faces 0.61-0.66).  The earlier two-cost fit
+(a surface box a third of an inner one) had put every rank-to-rank
+difference on the surface boxes.  CA3's ranks by neighbour ranks, slowest
+class (26) minus fastest (7):
+
+| leaf | elimination gap | owned work (box region + passes) | taking in (install, replays, pack) | waits | interior and rest |
+|---|---|---|---|---|---|
+| 320^3 on 64 | +1.46 s | +0.86 | +0.69 | -0.59 | +0.49 |
+| 192^3 on 64 | +1.44 s | +0.73 | +0.79 | -0.37 | +0.29 |
+
+Owned work is about half the gap; an interior rank installs 19 components
+against a corner rank's 11.  Balancing owned work perfectly would take the
+slowest class's excess over the mean, 0.39 s at 320^3 and 0.20 s at 192^3,
+less the installs the shed components add: under 0.5% of either
+factorization.  The diagnostics were committed in 318d04c.
+
+*32^3 bricks on CPU nodes: memory and a first comparison (2026-10-23).*
+320^3 (Nmin 64) on 8 ranks has the bricks and per-rank data of 640^3 on 64
+ranks.  One rank per Perlmutter CPU node (128 cores, 503 GB; account m4484,
+premium, build/gpu_prep/run_cpu_nodes.sh), 128 threads, frozen_cpu_dg1,
+BPACK_TRACE=memory,phase,skew, job 60163096 (h2_c1_work/cpu8):
+
+| variant | peak RSS a rank (sacct) | factor time | levels 6 / 5 / 4 / 3 / 2 | acc_forward |
+|---|---|---|---|---|
+| Color | 144.8 GB | 251 s | 55.9 / 66.6 / 44.8 / 28.1 / 10.7 | 5.19e-3 |
+| CA3 at the leaf | 160.5 GB | 195 s | 37.5 / 52.2 / 29.6 / 18.6 / 10.3 | 5.25e-3 |
+| CA0 at the leaf | 152.8 GB | 209 s | 37.7 / 52.3 / 34.3 / 28.5 / 10.7 | 5.07e-3 |
+
+The peak is above the leaf (levels 5-4: the kept factors of the levels
+below, 58-87 GB, plus ~40 GB the memory trace does not attribute), not 8x
+the 320^3/64 peak (30.8-34.3 GB) as projected.  On 64 ranks the interior
+ranks peaked ~25% above the average at 320^3, so 640^3 on 64 ranks needs
+up to ~180-200 GB a rank: 2 ranks a node, 32 nodes.  Both CA variants beat
+Color here (all 8 ranks are corner ranks): the leaf by a third (Color's
+owner pass 17.1 s and transport 20.2 s at 128 threads), and the Color
+levels above run 9-15 s faster after a CA leaf, where they fault a tenth
+of the pages (level 5: 8.45M minor faults after the Color leaf, 0.86M
+after CA3's) - the after-effect of the 16-thread runs, much larger at
+128 threads a rank.
+
+*640^3 on 64 ranks, CPU nodes (2026-10-23).*  32^3 bricks with interior
+ranks: 32 CPU nodes, 2 ranks a node, 64 threads a rank (m4484 regular,
+job 60178851, h2_c1_work/cpu64), frozen_cpu_dg1, BPACK_TRACE=memory,phase,skew.
+All three pass the quick verification (acc_forward 6.40-6.47e-3).
+
+| variant | factor time | the factorization's own total | leaf (7) | levels 6 / 5 / 4 / 3 / 2 | peak RSS a rank |
+|---|---|---|---|---|---|
+| Color | 656 s | 393 s | 57.6 | 107.3 / 77.4 / 48.3 / 25.0 / 17.3 | 172 GB |
+| CA3 at the leaf | 459 s | 349 s | 40.3 | 82.4 / 54.4 / 68.0 / 25.3 / 16.7 | 203 GB |
+| CA0 at the leaf | 382 s | 330 s | 39.8 | 65.3 / 75.9 / 50.3 / 22.5 / 16.8 | 175 GB |
+
+The factor time includes 52-263 s after the factorization's own timer
+stops: the memory trace's post-factorization snapshot and rank-by-rank
+print.  A rerun without it (BPACK_TRACE=phase,skew, job 60187739) gives
+factor time = own total: Color 395, CA3 355, CA0 327 s, logdets bitwise
+the first run's, levels within a few seconds of it.  The leaf, the
+only level where the variants differ, is 30% faster with either CA, as on
+8 ranks (55.9 / 37.5 / 37.7 s at 128 threads): the interior ranks did not
+cost CA0 its lead (the 16-thread projection, CA0 about even, was wrong).
+Color's leaf loses it in its transport (staged 23.6 s on rank 0, of it
+14.3 s exchanges).  The levels above are Color in all three yet differ by
+up to 42 s a level, in the waits (level 6 staged 69.3 / 48.7 / 32.2 s; box
+and owner work equal); rank 0's minor faults follow it at level 6 (7.48M
+after the Color leaf, 2.11M / 1.75M after the CA leaves) but not at level
+4 (CA3's 58.2 s of staged with 0.48M).  Not noise: the rerun repeats every
+variant's pattern (CA3's level 4 66.4 s, CA0's level 5 79.4 s, Color's
+level 6 103.7 s), with the same skeleton sizes in all three (61.5 / 84.5 /
+104.3 at levels 6-4), so the leaf variant changes how the Color levels
+above wait, not their work.  Cause not yet found.
+
 #### logdet of an operator after another one is built (2026-10-17)
 
 GPTune's GP training factors K, builds the derivative operators (compression

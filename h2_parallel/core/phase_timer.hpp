@@ -15,6 +15,9 @@
 //              consumption, lazy fill: temp2 gathers, sparse axpys, GEMMs).
 // WALL_BOX_MAXSUM is the per-wave slowest-box time summed over waves: the
 // critical-path floor of the per-box phase under the wave schedule.
+// Box time by neighbourhood (FMM_PHASE_BOX_SCOPE_NB): each box's time, binned
+// by the boxes within two of it (one_hop + two_hop: 124 inside a 3D domain,
+// fewer on and near its surface), summed over the level's ranks.
 // ---------------------------------------------------------------------------
 #ifndef FMM_PHASE_TIMERS
 #define FMM_PHASE_TIMERS 1
@@ -25,6 +28,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <mutex>
+#include <string>
 #include <vector>
 #include <mpi.h>
 #include <sys/resource.h>
@@ -62,8 +66,14 @@ enum Phase : int {
     NUM_PHASES
 };
 
+/// Bins of the box time by neighbourhood: boxes within two of a box (3D at
+/// most 124, 2D 24).
+constexpr int kNbBins = 128;
+
 struct ThreadRecord {
     double acc[NUM_PHASES];
+    double nb_time[kNbBins];     ///< box time by neighbourhood size (s)
+    int64_t nb_count[kNbBins];   ///< ... and the boxes
     double box_max;
     int64_t waves, boxes_min, boxes_max;
     int64_t boxes, minflt;   ///< boxes processed; minor page faults inside them
@@ -73,6 +83,8 @@ struct ThreadRecord {
     ~ThreadRecord();
     void clear() {
         std::fill(acc, acc + NUM_PHASES, 0.0);
+        std::fill(nb_time, nb_time + kNbBins, 0.0);
+        std::fill(nb_count, nb_count + kNbBins, int64_t{0});
         box_max = 0.0;
         waves = 0;
         boxes_min = INT64_MAX;
@@ -94,6 +106,8 @@ inline std::vector<ThreadRecord*>& registry() { static std::vector<ThreadRecord*
 /// Totals folded in from records of threads that have exited (nested teams).
 struct RetiredTotals {
     double acc[NUM_PHASES] = {};
+    double nb_time[kNbBins] = {};
+    int64_t nb_count[kNbBins] = {};
     int64_t boxes = 0;
     int64_t minflt = 0;
 };
@@ -111,6 +125,7 @@ inline ThreadRecord::~ThreadRecord() {
     v.erase(std::remove(v.begin(), v.end(), this), v.end());
     auto& R = retired_totals();
     for (int p = 0; p < NUM_PHASES; ++p) R.acc[p] += acc[p];
+    for (int b = 0; b < kNbBins; ++b) { R.nb_time[b] += nb_time[b]; R.nb_count[b] += nb_count[b]; }
     R.boxes += boxes;
     R.minflt += minflt;
 }
@@ -134,14 +149,19 @@ struct Scope {
 
 /// RAII: tracks the calling thread's slowest box in the current wave, the
 /// box count, and the minor page faults taken inside boxes.
+/// With `nb` >= 0 (the boxes within two of this one) it also bins the box's
+/// time by that count; -1 leaves the box out of the bins (a box split over
+/// several threads, whose time a taskloop shares with other boxes).
 struct BoxScope {
-    double t0; int64_t f0;
-    BoxScope() : t0(now()), f0(thread_minflt()) {}
+    double t0; int64_t f0; int nb;
+    explicit BoxScope(int neighbourhood = -1) : t0(now()), f0(thread_minflt()), nb(neighbourhood) {}
     ~BoxScope() {
         auto& r = rec();
-        r.box_max = std::max(r.box_max, now() - t0);
+        const double dt = now() - t0;
+        r.box_max = std::max(r.box_max, dt);
         r.boxes += 1;
         r.minflt += thread_minflt() - f0;
+        if (nb >= 0 && nb < kNbBins) { r.nb_time[nb] += dt; r.nb_count[nb] += 1; }
     }
 };
 
@@ -205,6 +225,16 @@ inline void report(MPI_Comm comm, int root, bool active, int rank, int level,
     }
     double gmax[NV] = {0.0};
     MPI_Reduce(local, gmax, NV, MPI_DOUBLE, MPI_MAX, root, comm);
+    // the box time by neighbourhood, summed over the ranks
+    double nb_local[2 * kNbBins] = {0.0}, nb_sum[2 * kNbBins] = {0.0};
+    if (active) {
+        std::lock_guard<std::mutex> lock(registry_mutex());
+        for (ThreadRecord* r : registry())
+            for (int b = 0; b < kNbBins; ++b) { nb_local[b] += r->nb_time[b]; nb_local[kNbBins + b] += static_cast<double>(r->nb_count[b]); }
+        const auto& R = retired_totals();
+        for (int b = 0; b < kNbBins; ++b) { nb_local[b] += R.nb_time[b]; nb_local[kNbBins + b] += static_cast<double>(R.nb_count[b]); }
+    }
+    MPI_Reduce(nb_local, nb_sum, 2 * kNbBins, MPI_DOUBLE, MPI_SUM, root, comm);
     if (!(verbose && rank == root)) return;
 
     auto line = [&](const char* tag, const double* v) {
@@ -231,6 +261,20 @@ inline void report(MPI_Comm comm, int root, bool active, int rank, int level,
     };
     line("rank-root", local);
     line("max-ranks", gmax);
+    {
+        // boxes within two of a box: count of boxes, ms each (all ranks, boxes
+        // eliminated one per thread)
+        std::string bins;
+        for (int b = kNbBins - 1; b >= 0; --b) {
+            if (nb_sum[kNbBins + b] <= 0) continue;
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), " %d: %.0f, %.2f ms |", b, nb_sum[kNbBins + b], 1e3 * nb_sum[b] / nb_sum[kNbBins + b]);
+            bins += buf;
+        }
+        if (!bins.empty())
+            std::printf("  [phase] level %d box time by neighbourhood (boxes within two: boxes, time each; all ranks):%s\n",
+                        level, bins.c_str());
+    }
     std::fflush(stdout);
 }
 
@@ -243,6 +287,7 @@ inline void report(MPI_Comm comm, int root, bool active, int rank, int level,
 #if FMM_PHASE_TIMERS
 #define FMM_PHASE_SCOPE(P) ::fmm::prof::Scope FMM_PHASE_CAT(fmm_phase_scope_, __LINE__)(::fmm::prof::P)
 #define FMM_PHASE_BOX_SCOPE() ::fmm::prof::BoxScope FMM_PHASE_CAT(fmm_phase_box_, __LINE__)
+#define FMM_PHASE_BOX_SCOPE_NB(n) ::fmm::prof::BoxScope FMM_PHASE_CAT(fmm_phase_box_, __LINE__)(n)
 #define FMM_PHASE_LAP_BEGIN(name) ::fmm::prof::Lap name
 #define FMM_PHASE_LAP(name, P) name(::fmm::prof::P)
 #define FMM_PHASE_NOTE_WAVE(n) ::fmm::prof::note_wave(static_cast<int64_t>(n))
@@ -253,6 +298,7 @@ inline void report(MPI_Comm comm, int root, bool active, int rank, int level,
 #else
 #define FMM_PHASE_SCOPE(P) ((void)0)
 #define FMM_PHASE_BOX_SCOPE() ((void)0)
+#define FMM_PHASE_BOX_SCOPE_NB(n) ((void)0)
 #define FMM_PHASE_LAP_BEGIN(name) ((void)0)
 #define FMM_PHASE_LAP(name, P) ((void)0)
 #define FMM_PHASE_NOTE_WAVE(n) ((void)0)

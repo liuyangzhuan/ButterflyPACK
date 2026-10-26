@@ -1263,6 +1263,7 @@ contains
       option%level_check = 10000
       option%precon = DIRECT
       option%iter_solver = GMRES
+      option%gmres_restart = 30
       option%xyzsort = TM
       option%lnoBP = 40000
       option%TwoLayerOnly = 1
@@ -1445,6 +1446,8 @@ contains
                   endif
                else if (trim(strings) == '--iter_solver') then
                   read (strings1, *) option%iter_solver
+               else if (trim(strings) == '--gmres_restart') then
+                  read (strings1, *) option%gmres_restart
                else if (trim(strings) == '--xyzsort') then
                   read (strings1, *) option%xyzsort
                else if (trim(strings) == '--schulzorder') then
@@ -1594,6 +1597,7 @@ contains
       option1%level_check = option%level_check
       option1%precon = option%precon
       option1%iter_solver = option%iter_solver
+      option1%gmres_restart = option%gmres_restart
       option1%xyzsort = option%xyzsort
       option1%lnoBP = option%lnoBP
       option1%bp_cnt_lr = option%bp_cnt_lr
@@ -1691,6 +1695,7 @@ contains
             write (*, '(A18,I8)') 'verbosity', option%verbosity
             write (*, '(A18,I8)') 'elem_extract', option%elem_extract
             write (*, '(A18,I8)') 'iter_solver', option%iter_solver
+            write (*, '(A18,I8)') 'gmres_restart', option%gmres_restart
             write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp
             write (*, '(A18,Es14.7)') 'tol_itersol', option%tol_itersol
             write (*, *) '***************************'
@@ -1729,6 +1734,7 @@ contains
                write (*, '(A18,I8)') 'fftw_plan_mode', option%fftw_plan_mode
                write (*, '(A18,I8)') 'use_parsec', option%use_parsec
                write (*, '(A18,I8)') 'iter_solver', option%iter_solver
+               write (*, '(A18,I8)') 'gmres_restart', option%gmres_restart
 
                write (*, '(A18,Es14.7)') 'rankrate', option%rankrate
                write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp
@@ -1777,6 +1783,7 @@ contains
                write (*, '(A18,I8)') 'fftw_plan_mode', option%fftw_plan_mode
                write (*, '(A18,I8)') 'use_parsec', option%use_parsec
                write (*, '(A18,I8)') 'iter_solver', option%iter_solver
+               write (*, '(A18,I8)') 'gmres_restart', option%gmres_restart
 
                write (*, '(A18,Es14.7)') 'rankrate', option%rankrate
                write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp
@@ -1826,6 +1833,7 @@ contains
                write (*, '(A18,I8)') 'hodlr_use_gpu', option%HODLR_use_gpu
                write (*, '(A18,I8)') 'hodlr_gpu_pieces', option%HODLR_gpu_pieces
                write (*, '(A18,I8)') 'iter_solver', option%iter_solver
+               write (*, '(A18,I8)') 'gmres_restart', option%gmres_restart
 
                write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp
                write (*, '(A18,Es14.7)') 'tol_Rdetect', option%tol_Rdetect
@@ -1875,6 +1883,7 @@ contains
                write (*, '(A18,I8)') 'fftw_plan_mode', option%fftw_plan_mode
                write (*, '(A18,I8)') 'use_parsec', option%use_parsec
                write (*, '(A18,I8)') 'iter_solver', option%iter_solver
+               write (*, '(A18,I8)') 'gmres_restart', option%gmres_restart
 
                write (*, '(A18,Es14.7)') 'rankrate', option%rankrate
                write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp
@@ -1926,6 +1935,7 @@ contains
                write (*, '(A18,I8)') 'fftw_plan_mode', option%fftw_plan_mode
                write (*, '(A18,I8)') 'use_parsec', option%use_parsec
                write (*, '(A18,I8)') 'iter_solver', option%iter_solver
+               write (*, '(A18,I8)') 'gmres_restart', option%gmres_restart
 
                write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp
                write (*, '(A18,Es14.7)') 'tol_Rdetect', option%tol_Rdetect
@@ -1973,6 +1983,7 @@ contains
                write (*, '(A18,I8)') 'fftw_plan_mode', option%fftw_plan_mode
                write (*, '(A18,I8)') 'use_parsec', option%use_parsec
                write (*, '(A18,I8)') 'iter_solver', option%iter_solver
+               write (*, '(A18,I8)') 'gmres_restart', option%gmres_restart
 
                write (*, '(A18,Es14.7)') 'rankrate', option%rankrate
                write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp
@@ -2034,6 +2045,7 @@ contains
                write (*, '(A18,I8)') 'fftw_plan_mode', option%fftw_plan_mode
                write (*, '(A18,I8)') 'use_parsec', option%use_parsec
                write (*, '(A18,I8)') 'iter_solver', option%iter_solver
+               write (*, '(A18,I8)') 'gmres_restart', option%gmres_restart
 
                write (*, '(A18,Es14.7)') 'rankrate', option%rankrate
                write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp
@@ -2084,6 +2096,7 @@ contains
                write (*, '(A18,I8)') 'fftw_plan_mode', option%fftw_plan_mode
                write (*, '(A18,I8)') 'use_parsec', option%use_parsec
                write (*, '(A18,I8)') 'iter_solver', option%iter_solver
+               write (*, '(A18,I8)') 'gmres_restart', option%gmres_restart
                write (*, '(A18,I8)') 'use_qtt', option%use_qtt
 
                write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp
@@ -2128,6 +2141,7 @@ contains
                write (*, '(A18,I8)') 'fftw_plan_mode', option%fftw_plan_mode
             write (*, '(A18,I8)') 'use_parsec', option%use_parsec
             write (*, '(A18,I8)') 'iter_solver', option%iter_solver
+            write (*, '(A18,I8)') 'gmres_restart', option%gmres_restart
             write (*, '(A18,I8)') 'use_qtt', option%use_qtt
 
             write (*, '(A18,Es14.7)') 'rankrate', option%rankrate

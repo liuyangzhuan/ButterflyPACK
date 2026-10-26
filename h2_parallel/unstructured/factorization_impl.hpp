@@ -12,6 +12,7 @@
 #include "verification.hpp"
 #include "partial.hpp"
 #include "h2_gpu/factorization_driver.hpp"
+#include "core/omp_region.hpp"
 
 namespace butterfly {
 namespace color_unstructured {
@@ -104,28 +105,30 @@ void form_nonsymmetric_wave_views(
     run_entry_phase(kernel_entries(kernel, 0), std::move(pair_items), [&](const std::vector<int64_t>& items) {
         std::vector<int64_t> abandoned;
         std::mutex abandoned_mutex;
-        #pragma omp parallel for schedule(dynamic) if (items.size() > 1)
-        for (int64_t item = 0; item < static_cast<int64_t>(items.size()); ++item) {
-            const int64_t p = items[static_cast<size_t>(item)];
-            try {
-                entry_item_begin();
-                auto& pair = pairs[static_cast<size_t>(p)];
-                pair.block = directed_view_kernel_block(
-                    level, kernel, pair.lg, current_count(pair.lg), pair.rg, current_count(pair.rg));
-                entry_item_end();
-            } catch (const H2EntryMiss&) {
-                std::lock_guard<std::mutex> lock(abandoned_mutex);
-                abandoned.push_back(p);
-            } catch (...) {
-                if (entry_item_abandoned()) {
+        omp_parallel_if(items.size() > 1, [&] {
+            #pragma omp for schedule(dynamic)
+            for (int64_t item = 0; item < static_cast<int64_t>(items.size()); ++item) {
+                const int64_t p = items[static_cast<size_t>(item)];
+                try {
+                    entry_item_begin();
+                    auto& pair = pairs[static_cast<size_t>(p)];
+                    pair.block = directed_view_kernel_block(
+                        level, kernel, pair.lg, current_count(pair.lg), pair.rg, current_count(pair.rg));
+                    entry_item_end();
+                } catch (const H2EntryMiss&) {
                     std::lock_guard<std::mutex> lock(abandoned_mutex);
                     abandoned.push_back(p);
-                    continue;
+                } catch (...) {
+                    if (entry_item_abandoned()) {
+                        std::lock_guard<std::mutex> lock(abandoned_mutex);
+                        abandoned.push_back(p);
+                        continue;
+                    }
+                    std::lock_guard<std::mutex> lock(failure_mutex);
+                    if (!failure) failure = std::current_exception();
                 }
-                std::lock_guard<std::mutex> lock(failure_mutex);
-                if (!failure) failure = std::current_exception();
             }
-        }
+        });
         if (failure) std::rethrow_exception(failure);
         return abandoned;
     });
@@ -1147,8 +1150,7 @@ void hierarchical_factorization_unstructured(
                     std::mutex candidate_exception_mutex;
                     std::atomic<bool> candidate_failed{false};
 
-                    #pragma omp parallel default(shared) if (color_list.size() > 1)
-                    {
+                    omp_parallel_if(color_list.size() > 1, [&] {
                         const int tid = omp_get_thread_num();
                         auto& local_candidates =
                             thread_xnn_candidate_boxes[static_cast<size_t>(tid)];
@@ -1182,7 +1184,7 @@ void hierarchical_factorization_unstructured(
                                 }
                             }
                         }
-                    }
+                    });
 
                     if (candidate_exception) {
                         std::rethrow_exception(candidate_exception);
@@ -1343,8 +1345,7 @@ void hierarchical_factorization_unstructured(
                             level, wave_xnn_mirror_targets);
                     }
 
-                    #pragma omp parallel default(shared) if (wave_xnn_candidate_boxes.size() > 1)
-                    {
+                    omp_parallel_if(wave_xnn_candidate_boxes.size() > 1, [&] {
                         #pragma omp for schedule(static)
                         for (int64_t idx = 0; idx < static_cast<int64_t>(wave_xnn_candidate_boxes.size()); ++idx) {
                             if (mirror_failed.load(std::memory_order_relaxed)) {
@@ -1379,7 +1380,7 @@ void hierarchical_factorization_unstructured(
                                 }
                             }
                         }
-                    }
+                    });
 
                     if (mirror_exception) {
                         std::rethrow_exception(mirror_exception);
@@ -1415,8 +1416,7 @@ void hierarchical_factorization_unstructured(
                     std::mutex finalize_exception_mutex;
                     std::atomic<bool> finalize_failed{false};
 
-                    #pragma omp parallel default(shared) if (color_list.size() > 1)
-                    {
+                    omp_parallel_if(color_list.size() > 1, [&] {
                         #pragma omp for schedule(static)
                         for (int64_t bi = 0; bi < static_cast<int64_t>(color_list.size()); ++bi) {
                             if (finalize_failed.load(std::memory_order_relaxed)) {
@@ -1442,7 +1442,7 @@ void hierarchical_factorization_unstructured(
                                 }
                             }
                         }
-                    }
+                    });
 
                     if (finalize_exception) {
                         std::rethrow_exception(finalize_exception);

@@ -12,6 +12,7 @@
  *                     Helmholtz plus a diagonal table on the device
  *   emsurf_gpu.cu     block evaluators: EFIE and CFIE of RWG edges by
  *                     triangle pairs
+ *   butterfly_gpu.cu  entry evaluators (C++) of a butterfly block
  *
  * The Python example (EXAMPLE/user_block_funcs_gp_gpu.py) shows the two
  * routes from Python: entry source text compiled with NVRTC, and an
@@ -58,6 +59,19 @@ void vie3d_gpu_register_coefficient(void** bmat, double k, double a_re, double a
 void vie3d_gpu_register_diagonal(void** bmat, double k, double a_re, double a_im, double self_re, double self_im,
                                  double four_pi, const double* diag, int64_t n);
 void vie3d_gpu_release(void);
+
+/* Butterfly_Driver.cpp, for a butterfly block (bf: the handle of
+ * c_bf_construct_init): cos(2 pi s x_i xi_j), and 1 / (4 pi |p_i - q_j|) with
+ * 3 coordinates a point; the tables by row id (m values or points) and by
+ * column id (n), copied to the device until butterfly_gpu_release (real, not
+ * symmetric).  The _complex forms register with a z_ butterfly:
+ * exp(2 pi i s x_i xi_j), and the Laplace kernel's real values. */
+void butterfly_gpu_register_dft(void** bf, const double* x, int64_t m, const double* xi, int64_t n, double s);
+void butterfly_gpu_register_laplace(void** bf, const double* rows_xyz, int64_t m, const double* cols_xyz, int64_t n);
+void butterfly_gpu_register_dft_complex(void** bf, const double* x, int64_t m, const double* xi, int64_t n, double s);
+void butterfly_gpu_register_laplace_complex(void** bf, const double* rows_xyz, int64_t m, const double* cols_xyz,
+                                            int64_t n);
+void butterfly_gpu_release(void);
 
 /* EMSURF_Driver.cpp: the EFIE (cfie_alpha == 1: complex symmetric) or CFIE
  * (not symmetric) entry of RWG edges, a block evaluator either way, from the

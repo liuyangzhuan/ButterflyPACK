@@ -871,6 +871,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         real(kind=8) tol_rand     !< tolerance for randomized contruction, mostly used in matrix inversion
         real(kind=8) jitter     !< jittering for dense diagonal blocks
         integer iter_solver     !< the choice of iterative solvers (GMRES, TFQMR, IterativeRefinement or CG)
+        integer gmres_restart   !< the restart length of GMRES (iter_solver 2)
         integer powiter     !< order of power iteration in randomized LR
         integer less_adapt     !< 0 for rank adaptation for all BF levels, 1 for rank adaptation for the outtermost BF levels
         integer::schulzorder !< order (>=2) of schultz iteration
@@ -916,6 +917,13 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         real(kind=8) Time_Direct_LU, Time_Add_Multiply, Time_Multiply, Time_XLUM, Time_Split, Time_Comm, Time_Idle, Time_Factor
         real(kind=8) Mem_Current, Mem_peak, Mem_Sblock, Mem_SMW, Mem_Direct_inv, Mem_Direct_for, Mem_int_vec, Mem_Comp_for, Mem_Fill, Mem_Factor
         real(kind=8) Flop_Fill, Flop_Factor, Flop_Sol, Flop_C_Mult, Flop_C_Extract, Flop_BF_MVP_Gemm_Leaf, Flop_BF_MVP_Gemm_Kernel, Flop_Tmp
+        !< the butterfly extraction's gemms (BF_block_extraction): how many
+        !< and the seconds inside them, to separate the arithmetic from the
+        !< per-block work around it.  Reset with Flop_Tmp.
+        real(kind=8) :: Cnt_Extract_Gemm = 0d0, Time_Extract_Gemm = 0d0
+        !< the GPU backend's first-use costs a construction paid (a GPU evaluator's
+        !< warm-up: an NVRTC compile, a first launch), left out of Time_Fill
+        real(kind=8) :: Time_GPU_Warmup = 0d0
         integer, allocatable:: rankmax_of_level(:), rankmin_of_level(:) !< maximum and minimum ranks observed at each level of BPACK during matrix fill
         integer, allocatable:: rankmax_of_level_global(:) !< maximum ranks among all processes observed at each level of BPACK during matrix fill
         integer, allocatable:: rankmax_of_level_global_factor(:) !< maximum ranks among all processes observed at each level of BPACK during matrix factorization
@@ -965,6 +973,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
 
         DT, allocatable :: matZ_glo(:, :) !< Full Matrix: the full matrix to sample its entries
         type(entry_addend), allocatable :: addend !< a low-rank term added to every entry the matrix's construction takes (c_bpack_set_entry_addend)
+        type(c_ptr) :: gpu_entries = c_null_ptr !< a butterfly's GPU evaluator (c_bf_set_gpu_*), bound by its construction: element_Zmn_blocklist_user takes the entries from the device
 
         class(*), pointer :: QuantApp => null() !< Kernels Defined in Fortran: pointer to the user-supplied derived type for computing one element of Z
         procedure(F_Zelem), nopass, pointer :: FuncZmn => null() !< Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing one element of Z

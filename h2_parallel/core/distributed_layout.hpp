@@ -10,6 +10,7 @@
 #include <mpi.h>
 
 #include "runtime_thread_support.hpp"
+#include "omp_region.hpp"
 
 namespace butterfly {
 
@@ -172,14 +173,16 @@ private:
             const int64_t count = point_send_counts[static_cast<size_t>(process)];
             DataType* chunk = send_buffer.data() + first * nrhs;
             const int64_t* slots = send_slots.data() + first;
-#pragma omp parallel for collapse(2) schedule(static) if (count * nrhs > 65536)
-            for (int rhs = 0; rhs < nrhs; ++rhs) {
-                for (int64_t i = 0; i < count; ++i) {
-                    chunk[static_cast<size_t>(rhs) * count + i] =
-                        source[static_cast<size_t>(slots[i]) +
-                               static_cast<size_t>(rhs) * source_size];
+            fmm::omp_parallel_if(count * nrhs > 65536, [&] {
+                #pragma omp for collapse(2) schedule(static)
+                for (int rhs = 0; rhs < nrhs; ++rhs) {
+                    for (int64_t i = 0; i < count; ++i) {
+                        chunk[static_cast<size_t>(rhs) * count + i] =
+                            source[static_cast<size_t>(slots[i]) +
+                                   static_cast<size_t>(rhs) * source_size];
+                    }
                 }
-            }
+            });
         }
 
         MPI_Alltoallv(
@@ -193,14 +196,16 @@ private:
             const int64_t count = point_recv_counts[static_cast<size_t>(process)];
             const DataType* chunk = recv_buffer.data() + first * nrhs;
             const int64_t* slots = recv_slots.data() + first;
-#pragma omp parallel for collapse(2) schedule(static) if (count * nrhs > 65536)
-            for (int rhs = 0; rhs < nrhs; ++rhs) {
-                for (int64_t i = 0; i < count; ++i) {
-                    destination[static_cast<size_t>(slots[i]) +
-                                static_cast<size_t>(rhs) * destination_size] =
-                        chunk[static_cast<size_t>(rhs) * count + i];
+            fmm::omp_parallel_if(count * nrhs > 65536, [&] {
+                #pragma omp for collapse(2) schedule(static)
+                for (int rhs = 0; rhs < nrhs; ++rhs) {
+                    for (int64_t i = 0; i < count; ++i) {
+                        destination[static_cast<size_t>(slots[i]) +
+                                    static_cast<size_t>(rhs) * destination_size] =
+                            chunk[static_cast<size_t>(rhs) * count + i];
+                    }
                 }
-            }
+            });
         }
     }
 };

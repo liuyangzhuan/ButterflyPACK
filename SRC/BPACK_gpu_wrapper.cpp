@@ -20,6 +20,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <map>
 #include <memory>
 #include <stdexcept>
 #include <utility>
@@ -33,6 +34,37 @@
 #endif
 #define BPACK_GPU_ENABLED 1
 #include "hodlr_gpu/gpu_state.hpp"
+// the butterfly backend, on the precision copy's scalar (BfScalar below)
+#define BPACK_BF_GPU_ENABLED 1
+#include "bf_gpu/bf_id.hpp"
+#include "bf_gpu/bf_randomized.hpp"
+#include "bf_gpu/bf_store.hpp"
+#endif
+
+#include "bpack_gpu.h"  // bpack_gpu_bf_matvec (GPU_INTERFACE)
+
+#ifdef BPACK_BF_GPU_ENABLED
+#include <sys/mman.h>
+
+extern "C" {
+void c_bf_get_layout(void* bf, int* level_butterfly, int* level_half, int* M, int* N, int* M_loc,
+                     int* N_loc, int* nlevels, int* nblocks);
+void c_bf_get_blocks(void* bf, int* nr, int* nc, int* idx_r, int* idx_c, int* inc_r, int* inc_c,
+                     int* rows, int* cols, void** ptrs);
+void c_bf_get_vec_ranges(void* bf, void* ptree, char dir, int* idx_r, int* inc_r, int* nr, int* idx_c,
+                         int* inc_c, int* nc);
+void c_bf_get_mvp_vec_ranges(void* bf, void* ptree, char chara, int* idx_r, int* inc_r, int* nr,
+                             int* idx_c, int* inc_c, int* nc);
+void c_bf_get_sub_head(void* bf, void* ptree, int* is_head, int* comm, int* nproc);
+void c_bf_get_exchange_dest(void* bf, void* ptree, int level, char mode, char collect, int nr, int nc,
+                            int idx_r, int inc_r, int idx_c, int inc_c, int* pid);
+void c_bf_get_all2all_dest(void* bf, void* ptree, int level, char mode_new, int nr, int nc, int idx_r,
+                           int inc_r, int idx_c, int inc_c, int* pid);
+void c_bf_get_all2all_range(void* bf, void* ptree, int level, char mode_new, int* idx_r, int* inc_r,
+                            int* nr, int* idx_c, int* inc_c, int* nc);
+void c_bf_get_block_group(void* bf, void* ptree, int level, int index_i, int index_j, char mode,
+                          int* nproc, int* comm, int* is_head);
+}
 #endif
 
 namespace {
@@ -53,6 +85,8 @@ using Scalar = double;
 using Scalar = fmm::gpu::dcomplex;
 #endif
 using State = bpack::gpu::GpuState<Scalar>;
+// the butterfly backend's scalar (bf_gpu's templates), the same
+using BfScalar = Scalar;
 
 State* state_of(void* gpu, const char* where) {
   if (gpu == nullptr) gpu_fail(where, "the matrix has no GPU state");
@@ -1156,6 +1190,1162 @@ void c_bpack_hodlr_gpu_baca_end(void* gpu, double* out) {
 #else
   (void)gpu;
   for (int i = 0; i < 6; ++i) out[i] = 0.0;
+#endif
+}
+
+#ifdef BPACK_BF_GPU_ENABLED
+namespace {
+
+// The butterfly's helpers are static: they sit inside the extern "C" block,
+// whose functions GCC links externally even in an unnamed namespace, and each
+// precision copy has its own.
+
+// The device's setup for a butterfly's ranks, before the device pool is
+// first reserved: ranks of a node that share a GPU split its memory
+// (fmm::gpu::share_device), and a run of several ranks takes its exchange
+// arena.  Collective over comm.  Both take effect once per process, as for an
+// H2 (begin_operator_build) and a HODLR (BPACK_gpu_bind).
+static void bf_device_setup(MPI_Comm comm, int nproc) {
+  const int share = fmm::gpu::share_device(comm);
+  fmm::gpu::reserve_exchange_arena(nproc, share);
+}
+
+// A butterfly's GPU evaluator of its entries (c_bf_set_gpu_*): the
+// application's evaluator, and the points it is evaluated over - the
+// butterfly's own index order, rows 0..M-1 then columns M..M+N-1, with ids
+// the CPU callbacks' indices minus one (a row's in the row mesh's order, a
+// column's in the column mesh's) and the coordinates of a mesh with geometry.
+struct BfEntries {
+  std::shared_ptr<fmm::gpu::Evaluator> evaluator;
+  int M = -1, N = -1, dim = 0;
+  int64_t* d_ids = nullptr;
+  double* d_xyz = nullptr;
+  fmm::gpu::MetaBuilder meta;
+  fmm::gpu::DeviceBuffer meta_device;
+  double warm_seconds = 0.0;
+  // a level's entries an evaluation left on the device (c_bf_gpu_eval_blocks
+  // with keep), for the rank-reveal that follows (c_bf_gpu_level_id_kept)
+  BfScalar* kept = nullptr;
+  int64_t kept_elements = 0;
+
+  ~BfEntries() {
+    drop_kept();
+    drop_points();
+  }
+  void drop_kept() {
+    if (kept != nullptr) fmm::gpu::DeviceHeap::instance().free(kept);
+    kept = nullptr;
+    kept_elements = 0;
+  }
+  void drop_points() {
+    auto& heap = fmm::gpu::DeviceHeap::instance();
+    if (d_ids != nullptr) heap.free(d_ids);
+    if (d_xyz != nullptr) heap.free(d_xyz);
+    d_ids = nullptr;
+    d_xyz = nullptr;
+    M = N = -1;
+    dim = 0;
+  }
+  fmm::gpu::PointTable points() const {
+    fmm::gpu::PointTable p;
+    p.xyz = d_xyz;
+    p.ids = d_ids;
+    p.dim = std::max(dim, 1);
+    return p;
+  }
+};
+
+static std::map<const void*, std::unique_ptr<BfEntries>>& bf_entries() {
+  static std::map<const void*, std::unique_ptr<BfEntries>> registry;
+  return registry;
+}
+
+// A butterfly's black box on the device (c_bf_set_gpu_matvec), for its
+// construction from matvecs (c_bf_gpu_randomized).
+struct BfMatvec {
+  bpack_gpu_bf_matvec fn = nullptr;
+  void* user = nullptr;
+};
+
+static std::map<const void*, BfMatvec>& bf_matvecs() {
+  static std::map<const void*, BfMatvec> registry;
+  return registry;
+}
+
+// The C callback matvec of C_BF_Construct_Matvec_Compute, called as
+// Bmatvec_user_C calls it: (trans, Nin, Nout, nvec, Vin, Vout, quant, a, b).
+using BfHostMatvec = void (*)(const char*, int*, int*, int*, const BfScalar*, BfScalar*, void*, BfScalar*, BfScalar*);
+
+// A construction from matvecs between c_bf_gpu_randomized and its fetch, and
+// the pinned staging of a host black box.
+struct BfRandomizedRun {
+  std::unique_ptr<bf::gpu::Randomized<BfScalar>> run;
+  fmm::gpu::PinnedBuffer hx, hy;
+};
+
+// The grids a butterfly's sweeps run over, from the Fortran: GetLocalBlockRange
+// in both orderings (levels 0 .. L+1) and the vector grids of each
+// orientation (vector levels 0 .. L+2), into out (bf_ranges.hpp).
+static void bf_read_ranges(void* bf, void* ptree, int L, int nproc, int myid, bf::gpu::BfDevice<BfScalar>& out) {
+  auto ranges = [&](char which, int levels) {
+    bf::gpu::SweepRanges g;
+    g.resize(levels);
+    if (which == 'R' || which == 'C') {
+      c_bf_get_vec_ranges(bf, ptree, which, g.idx_r.data(), g.inc_r.data(), g.nr.data(),
+                          g.idx_c.data(), g.inc_c.data(), g.nc.data());
+    } else {
+      c_bf_get_mvp_vec_ranges(bf, ptree, which, g.idx_r.data(), g.inc_r.data(), g.nr.data(),
+                              g.idx_c.data(), g.inc_c.data(), g.nc.data());
+    }
+    return g;
+  };
+  bf::gpu::set_ranges(out, ranges('R', L + 2), ranges('C', L + 2), ranges('N', L + 3), ranges('T', L + 3), nproc,
+                      myid);
+}
+
+// The closures through which bf_gpu asks the Fortran for a butterfly's
+// distribution decisions (bf_ranges.hpp explains why they are closures).
+static bf::gpu::BfBridge bf_bridge(void* bf, void* ptree, MPI_Comm comm, int nproc) {
+  bf::gpu::BfBridge b;
+  b.comm = comm;
+  b.nproc = nproc;
+  b.exchange_dest = [bf, ptree](int level, char mode, char collect, const bf::gpu::VecGrid& src, int* dest) {
+    c_bf_get_exchange_dest(bf, ptree, level, mode, collect, src.nr, src.nc, src.idx_r, src.inc_r,
+                           src.idx_c, src.inc_c, dest);
+  };
+  b.all2all_dest = [bf, ptree](int level, char mode_new, const bf::gpu::VecGrid& src, int* dest) {
+    c_bf_get_all2all_dest(bf, ptree, level, mode_new, src.nr, src.nc, src.idx_r, src.inc_r,
+                          src.idx_c, src.inc_c, dest);
+  };
+  b.all2all_range = [bf, ptree](int level, char mode_new) {
+    bf::gpu::Range2 g;
+    c_bf_get_all2all_range(bf, ptree, level, mode_new, &g.idx_r, &g.inc_r, &g.nr, &g.idx_c, &g.inc_c, &g.nc);
+    return g;
+  };
+  b.block_group = [bf, ptree](int level, int index_i, int index_j, char mode) {
+    bf::gpu::BfBridge::Group g;
+    int np = 1, cf = 0, head = 0;
+    c_bf_get_block_group(bf, ptree, level, index_i, index_j, mode, &np, &cf, &head);
+    g.nproc = np;
+    g.comm = MPI_Comm_f2c(static_cast<MPI_Fint>(cf));
+    g.is_head = head != 0;
+    return g;
+  };
+  return b;
+}
+
+// Make a butterfly resident: upload its factors, read the grids the sweep
+// needs, and wire the closures through which bf_gpu asks the Fortran for its
+// distribution decisions.  Returns nullptr when the device has no room for
+// the factors.  Collective over the butterfly's ranks the first time, as its
+// matvec is.
+static bf::gpu::BfResident<BfScalar>* bf_resident(void* bf, void* ptree) {
+  bf::gpu::BfFingerprint print;
+  c_bf_get_layout(bf, &print.level_butterfly, &print.level_half, &print.M, &print.N, &print.M_loc,
+                  &print.N_loc, &print.nlevels, &print.nblocks);
+  if (bf::gpu::BfResident<BfScalar>* hit = bf::gpu::bf_store_find<BfScalar>(bf, print)) return hit;
+  if (print.nlevels <= 0 || print.nblocks <= 0) return nullptr;
+
+  // the factor layout and the host pointers of every block
+  const int nlev = print.nlevels, nblk = print.nblocks;
+  std::vector<int> nr(nlev), nc(nlev), ir(nlev), ic(nlev), er(nlev), ec(nlev);
+  std::vector<int> brows(nblk), bcols(nblk);
+  std::vector<void*> bptr(nblk);
+  c_bf_get_blocks(bf, nr.data(), nc.data(), ir.data(), ic.data(), er.data(), ec.data(), brows.data(),
+                  bcols.data(), bptr.data());
+
+  std::vector<bf::gpu::LevelDesc> lv(nlev);
+  std::vector<std::vector<const BfScalar*>> up(nlev);
+  std::vector<std::vector<std::pair<int, int>>> shp(nlev);
+  int at = 0;
+  for (int l = 0; l < nlev; ++l) {
+    lv[l].nr = nr[l]; lv[l].nc = nc[l];
+    lv[l].idx_r = ir[l]; lv[l].idx_c = ic[l];
+    lv[l].inc_r = er[l]; lv[l].inc_c = ec[l];
+    const int want = nr[l] * nc[l];
+    for (int b = 0; b < want; ++b) {
+      up[l].push_back(reinterpret_cast<const BfScalar*>(bptr[at + b]));
+      shp[l].push_back({brows[at + b], bcols[at + b]});
+    }
+    at += want;
+  }
+
+  int is_head = 0, comm_f = 0, nproc = 1, myid = 0;
+  c_bf_get_sub_head(bf, ptree, &is_head, &comm_f, &nproc);
+  MPI_Comm comm = MPI_Comm_f2c(static_cast<MPI_Fint>(comm_f));
+  if (nproc > 1) MPI_Comm_rank(comm, &myid);
+  bf_device_setup(comm, nproc);
+
+  bf::gpu::BfResident<BfScalar>& r = bf::gpu::bf_store_add<BfScalar>(bf, print);
+  int uploaded = bf::gpu::upload(lv, up, shp, print.level_butterfly, print.level_half, print.M, print.N,
+                                 print.M_loc, print.N_loc, r.dev) ? 1 : 0;
+  // every rank declines together, or those that went on would wait in the
+  // plan's collectives for those that did not
+  if (nproc > 1) MPI_Allreduce(MPI_IN_PLACE, &uploaded, 1, MPI_INT, MPI_MIN, comm);
+  if (!uploaded) {
+    bf::gpu::bf_store_release<BfScalar>(bf);  // no room: the caller stays on the host
+    return nullptr;
+  }
+
+  bf_read_ranges(bf, ptree, print.level_butterfly, nproc, myid, r.dev);
+  r.bridge = bf_bridge(bf, ptree, comm, nproc);
+  return &r;
+}
+
+}  // namespace
+#endif
+
+#ifdef BPACK_BF_GPU_ENABLED
+namespace {
+
+// The batched ID of a level's panels, d_entries on the device laid out as the
+// host's buffer at host_base (panel b at blk[b]).  False when the device has
+// no room for the batch.
+static bool level_id_on_device(const BfScalar* d_entries, int count, const int* rows, const int* cols, void* const* blk,
+                        int transposed, const BfScalar* host_base, int64_t nnz, double rtol, double atol, int* rank,
+                        int* jpvt, BfScalar* host_x) {
+  bf::gpu::IdBatch<BfScalar> batch;
+  batch.panels.resize(static_cast<size_t>(count));
+  for (int b = 0; b < count; ++b) {
+    bf::gpu::IdPanel& p = batch.panels[static_cast<size_t>(b)];
+    p.rows = rows[b];
+    p.cols = cols[b];
+    p.transposed = transposed;
+    p.entry_offset = static_cast<const BfScalar*>(blk[b]) - host_base;
+    if (p.entry_offset < 0 || p.entry_offset + static_cast<int64_t>(p.rows) * p.cols > nnz) {
+      gpu_fail("c_bf_gpu_level_id", "a panel lies outside the level's entry buffer");
+    }
+  }
+  if (!bf::gpu::plan_id_batch(batch)) return false;
+  bf::gpu::run_id_batch(d_entries, batch, rtol, atol, nullptr);
+  fmm::gpu::check_cuda(cudaMemcpy(rank, batch.d_rank, static_cast<size_t>(count) * sizeof(int),
+                                  cudaMemcpyDeviceToHost), "c_bf_gpu_level_id rank");
+  fmm::gpu::check_cuda(cudaMemcpy(jpvt, batch.d_jpvt, static_cast<size_t>(batch.jpvt_elements) * sizeof(int),
+                                  cudaMemcpyDeviceToHost), "c_bf_gpu_level_id jpvt");
+  fmm::gpu::check_cuda(cudaMemcpy(host_x, batch.d_x, static_cast<size_t>(batch.mat_elements) * sizeof(BfScalar),
+                                  cudaMemcpyDeviceToHost), "c_bf_gpu_level_id X");
+  // the Fortran's pivots are one based
+  for (int64_t t = 0; t < batch.jpvt_elements; ++t) jpvt[t] += 1;
+  bf::gpu::release_id_batch(batch);
+  return true;
+}
+
+}  // namespace
+#endif
+
+// The rank-reveal of one level of a butterfly construction, on the device
+// (GPU_BACKEND/bf_gpu).  BF_compress_NlogN does it per block under OpenMP -
+// a truncated QRCP, Q^H applied to the panel, a triangular solve - and the
+// level's panels already sit in one contiguous buffer, because
+// element_Zmn_blocklist_user filled alldat_loc_in for the whole level.  So
+// the level goes to the device as one copy and comes back as one batch.
+//
+// `entries` is the level's buffer and `blk` each panel's pointer into it; the
+// offsets are taken by subtraction here rather than recomputed in the Fortran,
+// because the fill compacts masked rows and skips empty blocks, so its block
+// order is not a reliable cumulative sum.  `transposed` is 1 for the 'C' half,
+// which factorizes the transpose.
+//
+// The results come back in the layout the batch lays out: `rank` one per
+// block, `jpvt` the cumulative sum of each panel's column count, `xout` the
+// cumulative sum of m * n, both in block order.  info 0 on success, 1 when the
+// device had no room, so the caller runs the CPU path instead.
+void c_bf_gpu_level_id(const int* nblk, const int* rows, const int* cols, void* const* blk,
+                       const int* transposed, const void* entries, const int64_t* nnz,
+                       const double* rtol, const double* atol, int* rank, int* jpvt, void* xout,
+                       int* info) {
+#ifdef BPACK_BF_GPU_ENABLED
+  *info = 0;
+  const int count = *nblk;
+  if (count <= 0) return;
+  const BfScalar* host_entries = static_cast<const BfScalar*>(entries);
+  BfScalar* host_x = static_cast<BfScalar*>(xout);
+  try {
+    auto& heap = fmm::gpu::DeviceHeap::instance();
+    heap.ensure_initialized();
+    BfScalar* d_entries = reinterpret_cast<BfScalar*>(
+        heap.try_alloc(static_cast<size_t>(*nnz) * sizeof(BfScalar), fmm::gpu::ResidentKind::Adaptive));
+    if (d_entries == nullptr) { *info = 1; return; }
+    fmm::gpu::check_cuda(cudaMemcpy(d_entries, host_entries, static_cast<size_t>(*nnz) * sizeof(BfScalar),
+                                    cudaMemcpyHostToDevice), "c_bf_gpu_level_id entries");
+    if (!level_id_on_device(d_entries, count, rows, cols, blk, *transposed, host_entries, *nnz, *rtol, *atol, rank,
+                            jpvt, host_x)) {
+      *info = 1;
+    }
+    heap.free(reinterpret_cast<char*>(d_entries));
+  } catch (const std::exception& e) {
+    gpu_fail("c_bf_gpu_level_id", e.what());
+  }
+#else
+  (void)nblk; (void)rows; (void)cols; (void)blk; (void)transposed; (void)entries; (void)nnz;
+  (void)rtol; (void)atol; (void)rank; (void)jpvt; (void)xout;
+  *info = 1;   // no butterfly backend in this precision: the caller stays on the host
+#endif
+}
+
+// c_bf_gpu_level_id on the level's entries the GPU evaluator `handle` left on
+// the device (c_bf_gpu_eval_blocks with keep): no copy of the entries either
+// way.  `entries` is only the host buffer they mirror, for the panels' offsets.
+// info 1: no room for the batch - the entries are then copied into `entries`,
+// so the host path that follows finds them there.
+void c_bf_gpu_level_id_kept(void* handle, const int* nblk, const int* rows, const int* cols, void* const* blk,
+                            const int* transposed, void* entries, const int64_t* nnz, const double* rtol,
+                            const double* atol, int* rank, int* jpvt, void* xout, int* info) {
+#ifdef BPACK_BF_GPU_ENABLED
+  *info = 0;
+  try {
+    BfEntries& e = *static_cast<BfEntries*>(handle);
+    if (e.kept == nullptr || e.kept_elements != *nnz) gpu_fail("c_bf_gpu_level_id_kept", "no entries kept on the device");
+    if (*nblk > 0 && !level_id_on_device(e.kept, *nblk, rows, cols, blk, *transposed,
+                                         static_cast<const BfScalar*>(entries), *nnz, *rtol, *atol, rank, jpvt,
+                                         static_cast<BfScalar*>(xout))) {
+      fmm::gpu::check_cuda(cudaMemcpy(entries, e.kept, static_cast<size_t>(*nnz) * sizeof(BfScalar),
+                                      cudaMemcpyDeviceToHost), "c_bf_gpu_level_id_kept entries");
+      *info = 1;
+    }
+    e.drop_kept();
+  } catch (const std::exception& ex) {
+    gpu_fail("c_bf_gpu_level_id_kept", ex.what());
+  }
+#else
+  (void)handle; (void)nblk; (void)rows; (void)cols; (void)blk; (void)transposed; (void)entries; (void)nnz;
+  (void)rtol; (void)atol; (void)rank; (void)jpvt; (void)xout;
+  *info = 1;
+#endif
+}
+
+// A butterfly matvec on device-resident vectors (GPU_BACKEND/bf_gpu):
+// y = alpha op(bf) x + beta y, with x and y already in device memory.  This
+// is the device-pointer overload STRUMPACK's Schur sampling needs: it applies
+// F12, then F11's inverse, then F21, and with host intermediates every stage
+// pays a transfer - which is what made enabling the GPU for an H2 front a
+// regression before this existed.
+//
+// The factors and the sweep plans stay resident between calls (bf_store.hpp),
+// so the tens of thousands of samples per front upload nothing and build no
+// plan.  info 1 means the device declined - no room for the factors, or a
+// case the sweep does not handle yet, such as the closing factor's sub-group
+// spanning several ranks - and the caller runs its host path instead.
+void c_bf_gpu_mult(void* bf, void* ptree, const char* op, const int* nrhs, const void* x,
+                   const int* ldx, void* y, const int* ldy, const void* alpha,
+                   const void* beta, double* flops, int* info) {
+#ifdef BPACK_BF_GPU_ENABLED
+  *info = 1;
+  if (flops != nullptr) *flops = 0.0;
+  try {
+    fmm::gpu::HostRange range("bf matvec, device vectors");
+    bf::gpu::BfResident<BfScalar>* r = bf_resident(bf, ptree);
+    if (r == nullptr) return;
+    const char o = (*op == 'N' || *op == 'n') ? 'N' : 'T';
+    bf::gpu::SweepPlan<BfScalar>& plan = r->plan(o);
+    if (!plan.built) {
+      // two small collectives per level, once per block and orientation
+      bf::gpu::build_sweep_plan(r->bridge, r->dev, o, *nrhs, plan);
+    }
+    // everything on the backend's stream, and the product complete on return
+    cudaStream_t stream = fmm::gpu::Context::instance().stream();
+    const BfScalar* xs = static_cast<const BfScalar*>(x);
+    BfScalar* ys = static_cast<BfScalar*>(y);
+    BfScalar al = *static_cast<const BfScalar*>(alpha), be = *static_cast<const BfScalar*>(beta);
+    int lx = *ldx;
+    // 'C' on complex data: y = alpha conj(bf^T conj(x)) + beta y, as conj of the 'T' sweep of
+    // conj(x) into conj(y) with the scalars conjugated; x is the caller's, so its conjugate
+    // goes into a scratch copy (a rank without room must not leave the others in the sweep)
+    const bool conj = (*op == 'C' || *op == 'c') && fmm::gpu::is_complex_scalar<BfScalar>;
+    auto& heap = fmm::gpu::DeviceHeap::instance();
+    char* xc = nullptr;
+    const int nin = r->dev.M_loc, nout = r->dev.N_loc;
+    if (conj) {
+      xc = heap.try_alloc(static_cast<size_t>(std::max(nin, 1)) * *nrhs * sizeof(BfScalar),
+                          fmm::gpu::ResidentKind::Matvec);
+      int room = xc != nullptr ? 1 : 0;
+      if (r->bridge.nproc > 1) MPI_Allreduce(MPI_IN_PLACE, &room, 1, MPI_INT, MPI_MIN, r->bridge.comm);
+      if (!room) {
+        if (xc != nullptr) heap.free(xc);
+        return;
+      }
+      BfScalar* xcs = reinterpret_cast<BfScalar*>(xc);
+      bf::gpu::launch_conj(xcs, nin, xs, lx, nin, *nrhs, stream);
+      if (be != BfScalar(0.0)) bf::gpu::launch_conj(ys, *ldy, ys, *ldy, nout, *nrhs, stream);
+      using fmm::gpu::conj;
+      al = conj(al);
+      be = conj(be);
+      xs = xcs;
+      lx = std::max(nin, 1);
+    }
+    const double f = bf::gpu::sweep(r->dev, plan, *nrhs, xs, lx, ys, *ldy, al, be, r->scratch, stream);
+    if (conj) bf::gpu::launch_conj(ys, *ldy, ys, *ldy, nout, *nrhs, stream);
+    fmm::gpu::check_cuda(cudaStreamSynchronize(stream), "c_bf_gpu_mult");
+    if (xc != nullptr) heap.free(xc);
+    if (flops != nullptr) *flops = f;
+    *info = 0;
+  } catch (const std::exception&) {
+    // a case the sweep refuses: leave info 1 and let the caller use the host
+    *info = 1;
+  }
+#else
+  (void)bf; (void)ptree; (void)op; (void)nrhs; (void)x; (void)ldx; (void)y; (void)ldy;
+  (void)alpha; (void)beta;
+  if (flops != nullptr) *flops = 0.0;
+  *info = 1;
+#endif
+}
+
+#ifdef BPACK_BF_GPU_ENABLED
+namespace {
+
+// The host vectors of c_bf_gpu_mult_host: the columns in chunks, each copied
+// by every OpenMP thread into pinned memory, sent on one copy stream, swept on
+// the backend's stream, and returned on another copy stream - so chunk i+1
+// comes in and chunk i-1 goes out while chunk i is swept.  Measured on one
+// A100 (65536^2 butterfly, 256 columns): pageable copies, one after another,
+// ~7 GB/s; pinned chunks without the overlap 23 ms a call, overlapped 15.5 ms,
+// against 5.5 ms on device vectors.  What is left is the host's memory
+// bandwidth: x and y each pass through the stage once.  Two chunks each way
+// at most, kept for the process; one caller at a time, as for the rest of the
+// store.
+//
+// Grow-only pinned host memory whose pages the OpenMP threads fault in, each
+// the part of it parallel_copy's static schedule gives that thread, so the
+// pages lie on the NUMA domains of the threads that copy through them.  From
+// cudaMallocHost all of it lay on the calling thread's domain: one rank of 64
+// threads on the node's four domains (262144^2, 256 columns) took 114 ms a
+// call against 80 ms spread.  Streaming stores gained 8% at most here and
+// nothing with a rank a domain; into the caller's y they ran up to 2x slower
+// (the kernel's NUMA balancing then left y's pages where they were).
+class SpreadPinned {
+ public:
+  void* reserve(size_t bytes) {
+    if (bytes <= capacity_) return ptr_;
+    constexpr size_t granule = size_t{64} << 20;
+    const size_t grown = (std::max(bytes, 2 * capacity_) + granule - 1) / granule * granule;
+    release();
+    void* p = mmap(nullptr, grown, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) throw std::runtime_error("bf host stage: no host memory");
+    madvise(p, grown, MADV_HUGEPAGE);
+    const int64_t pages = static_cast<int64_t>(grown / 4096);
+#pragma omp parallel for schedule(static)
+    for (int64_t i = 0; i < pages; ++i) static_cast<volatile char*>(p)[i * 4096] = 0;
+    fmm::gpu::check_cuda(cudaHostRegister(p, grown, cudaHostRegisterDefault), "bf host stage: register");
+    ptr_ = p;
+    capacity_ = grown;
+    return ptr_;
+  }
+  void release() {
+    if (ptr_ == nullptr) return;
+    cudaHostUnregister(ptr_);
+    munmap(ptr_, capacity_);
+    ptr_ = nullptr;
+    capacity_ = 0;
+  }
+
+ private:
+  void* ptr_ = nullptr;
+  size_t capacity_ = 0;
+};
+
+struct HostStage {
+  static constexpr size_t kChunkBytes = size_t{32} << 20;
+  static constexpr int kMinColumns = 64;  // a chunk this wide keeps the sweep's GEMMs efficient
+  SpreadPinned in[2], out[2];
+  cudaEvent_t in_sent[2] = {nullptr, nullptr}, out_back[2] = {nullptr, nullptr};
+  cudaEvent_t swept = nullptr;
+  cudaStream_t up = nullptr, down = nullptr;
+};
+
+static HostStage& host_stage() {
+  static HostStage* stage = [] {
+    auto* h = new HostStage;  // never freed, as fmm::gpu::pinned_pool
+    for (cudaEvent_t* e : {&h->in_sent[0], &h->in_sent[1], &h->out_back[0], &h->out_back[1], &h->swept}) {
+      fmm::gpu::check_cuda(cudaEventCreateWithFlags(e, cudaEventDisableTiming), "bf host stage");
+    }
+    fmm::gpu::check_cuda(cudaStreamCreateWithFlags(&h->up, cudaStreamNonBlocking), "bf host stage");
+    fmm::gpu::check_cuda(cudaStreamCreateWithFlags(&h->down, cudaStreamNonBlocking), "bf host stage");
+    return h;
+  }();
+  return *stage;
+}
+
+// rows x cols of src (ld lds) into dst (ld ldd), host memory, by the OpenMP
+// threads in pieces of at most 64K elements
+static void parallel_copy(BfScalar* dst, int64_t ldd, const BfScalar* src, int64_t lds, int64_t rows, int64_t cols) {
+  if (rows <= 0 || cols <= 0) return;
+  const int64_t piece = std::min<int64_t>(rows, int64_t{1} << 16);
+  const int64_t per_col = (rows + piece - 1) / piece;
+  const int64_t n = per_col * cols;
+#pragma omp parallel for schedule(static)
+  for (int64_t t = 0; t < n; ++t) {
+    const int64_t c = t / per_col, r0 = (t % per_col) * piece, r1 = std::min(rows, r0 + piece);
+    std::memcpy(dst + c * ldd + r0, src + c * lds + r0, static_cast<size_t>(r1 - r0) * sizeof(BfScalar));
+  }
+}
+
+// y = op(bf) x for host x (nin x nrhs, ld ldx) and y (nout x nrhs, ld ldy),
+// through the device buffers dx (nin x nrhs) and dy (nout x nrhs), chunk by
+// chunk as described above; conj: each chunk conjugated on the device before
+// the sweep and after it ('C' on complex data).  Returns the flops.
+static double pipelined_mult(bf::gpu::BfResident<BfScalar>& r, bf::gpu::SweepPlan<BfScalar>& plan, int nrhs, const BfScalar* x,
+                      int64_t ldx, BfScalar* y, int64_t ldy, BfScalar* dx, BfScalar* dy, int64_t nin, int64_t nout,
+                      cudaStream_t stream, bool conj) {
+  HostStage& h = host_stage();
+  const int64_t rows = std::max<int64_t>({nin, nout, 1});
+  const int64_t step = std::min<int64_t>(
+      nrhs, std::max<int64_t>(HostStage::kMinColumns, static_cast<int64_t>(HostStage::kChunkBytes / sizeof(BfScalar)) / rows));
+  const size_t in_bytes = static_cast<size_t>(std::max<int64_t>(nin, 1) * step) * sizeof(BfScalar);
+  const size_t out_bytes = static_cast<size_t>(std::max<int64_t>(nout, 1) * step) * sizeof(BfScalar);
+  const int64_t chunks = (nrhs + step - 1) / step;
+  BfScalar *bin[2] = {nullptr, nullptr}, *bout[2] = {nullptr, nullptr};
+  for (int s = 0; s < std::min<int64_t>(chunks, 2); ++s) {
+    bin[s] = static_cast<BfScalar*>(h.in[s].reserve(in_bytes));
+    bout[s] = static_cast<BfScalar*>(h.out[s].reserve(out_bytes));
+  }
+  auto cols_of = [&](int64_t k) { return std::min<int64_t>(step, nrhs - k * step); };
+  // unpack chunk k from its pinned buffer into y, once it is back
+  auto unpack = [&](int64_t k) {
+    const int s = static_cast<int>(k & 1);
+    fmm::gpu::check_cuda(cudaEventSynchronize(h.out_back[s]), "bf host stage out");
+    parallel_copy(y + k * step * ldy, ldy, bout[s], nout, nout, cols_of(k));
+  };
+  double flops = 0.0;
+  for (int64_t k = 0; k < chunks; ++k) {
+    const int s = static_cast<int>(k & 1);
+    const int64_t nc = cols_of(k);
+    // in: the pinned buffer two chunks back has been sent
+    if (k >= 2) fmm::gpu::check_cuda(cudaEventSynchronize(h.in_sent[s]), "bf host stage in");
+    parallel_copy(bin[s], nin, x + k * step * ldx, ldx, nin, nc);
+    fmm::gpu::check_cuda(cudaMemcpyAsync(dx + k * step * nin, bin[s], static_cast<size_t>(nin * nc) * sizeof(BfScalar),
+                                         cudaMemcpyHostToDevice, h.up),
+                         "bf host stage in");
+    fmm::gpu::check_cuda(cudaEventRecord(h.in_sent[s], h.up), "bf host stage in");
+    // swept once it has arrived
+    fmm::gpu::check_cuda(cudaStreamWaitEvent(stream, h.in_sent[s], 0), "bf host stage");
+    if (conj) bf::gpu::launch_conj(dx + k * step * nin, nin, dx + k * step * nin, nin, nin, nc, stream);
+    flops += bf::gpu::sweep(r.dev, plan, static_cast<int>(nc), dx + k * step * nin, static_cast<int>(std::max<int64_t>(nin, 1)),
+                            dy + k * step * nout, static_cast<int>(std::max<int64_t>(nout, 1)), BfScalar(1.0),
+                            BfScalar(0.0), r.scratch, stream);
+    if (conj) bf::gpu::launch_conj(dy + k * step * nout, nout, dy + k * step * nout, nout, nout, nc, stream);
+    fmm::gpu::check_cuda(cudaEventRecord(h.swept, stream), "bf host stage");
+    // out: the pinned buffer two chunks back has been unpacked (below)
+    fmm::gpu::check_cuda(cudaStreamWaitEvent(h.down, h.swept, 0), "bf host stage");
+    fmm::gpu::check_cuda(cudaMemcpyAsync(bout[s], dy + k * step * nout, static_cast<size_t>(nout * nc) * sizeof(BfScalar),
+                                         cudaMemcpyDeviceToHost, h.down),
+                         "bf host stage out");
+    fmm::gpu::check_cuda(cudaEventRecord(h.out_back[s], h.down), "bf host stage out");
+    // the chunk before comes out of its buffer while this one is swept
+    if (k >= 1) unpack(k - 1);
+  }
+  unpack(chunks - 1);
+  return flops;
+}
+
+}  // namespace
+#endif
+
+// The same product on the caller's host arrays (C_BF_Mult): x goes to the
+// device, the resident sweep runs, y = op(bf) x comes back, chunk by chunk
+// through pinned memory (pipelined_mult).  For a caller that keeps its vectors
+// on the host; one that can keep them on the device saves both copies with
+// c_bf_gpu_mult.  The device copies of x and y are taken per call from the
+// arena, which is a bump of a pointer.  info 1: the device declined, and the
+// caller runs its host path.
+void c_bf_gpu_mult_host(void* bf, void* ptree, const char* op, const int* nrhs, const void* x,
+                        const int* ldx, void* y, const int* ldy, double* flops, int* info) {
+#ifdef BPACK_BF_GPU_ENABLED
+  *info = 1;
+  *flops = 0.0;
+  try {
+    fmm::gpu::HostRange range("bf matvec, host vectors");
+    bf::gpu::BfResident<BfScalar>* r = bf_resident(bf, ptree);
+    if (r == nullptr) return;
+    const char o = (*op == 'N' || *op == 'n') ? 'N' : 'T';
+    const int nin = o == 'N' ? r->dev.N_loc : r->dev.M_loc;
+    const int nout = o == 'N' ? r->dev.M_loc : r->dev.N_loc;
+    bf::gpu::SweepPlan<BfScalar>& plan = r->plan(o);
+    if (!plan.built) bf::gpu::build_sweep_plan(r->bridge, r->dev, o, *nrhs, plan);
+
+    auto& heap = fmm::gpu::DeviceHeap::instance();
+    const size_t bin = static_cast<size_t>(std::max(nin, 1)) * *nrhs * sizeof(BfScalar);
+    const size_t bout = static_cast<size_t>(std::max(nout, 1)) * *nrhs * sizeof(BfScalar);
+    char* dx = heap.try_alloc(bin, fmm::gpu::ResidentKind::Matvec);
+    char* dy = heap.try_alloc(bout, fmm::gpu::ResidentKind::Matvec);
+    // a rank without room must not leave the others in the sweep's exchanges
+    int room = (dx != nullptr && dy != nullptr) ? 1 : 0;
+    if (r->bridge.nproc > 1) MPI_Allreduce(MPI_IN_PLACE, &room, 1, MPI_INT, MPI_MIN, r->bridge.comm);
+    if (!room) {
+      if (dx != nullptr) heap.free(dx);
+      if (dy != nullptr) heap.free(dy);
+      return;
+    }
+    cudaStream_t stream = fmm::gpu::Context::instance().stream();
+    const bool conj = (*op == 'C' || *op == 'c') && fmm::gpu::is_complex_scalar<BfScalar>;
+    const double f = pipelined_mult(*r, plan, *nrhs, static_cast<const BfScalar*>(x), *ldx, static_cast<BfScalar*>(y),
+                                    *ldy, reinterpret_cast<BfScalar*>(dx), reinterpret_cast<BfScalar*>(dy), nin, nout,
+                                    stream, conj);
+    fmm::gpu::check_cuda(cudaStreamSynchronize(stream), "c_bf_gpu_mult_host");
+    heap.free(dx);
+    heap.free(dy);
+    *flops = f;
+    *info = 0;
+  } catch (const std::exception&) {
+    *info = 1;
+  }
+#else
+  (void)bf; (void)ptree; (void)op; (void)nrhs; (void)x; (void)ldx; (void)y; (void)ldy;
+  *flops = 0.0;
+  *info = 1;
+#endif
+}
+
+// The entries of a list of intersections of a butterfly, on the device
+// (bf_extract.hpp), for C_BF_ExtractElement: the intersections as it receives
+// them (rows 1..M and columns 1..N in the butterfly's order, stacked; pgidx,
+// 0 based, and pmaps the process grid of each), every block into alldat_loc
+// in order, column major.  A butterfly on one process whose every block this
+// rank owns in a 1 x 1 grid; otherwise info 1, and the host path runs.  Not
+// collective, except for the device's setup at a butterfly's first use, which
+// on one process involves no other rank.
+void c_bf_gpu_extract(void* bf, void* ptree, const int* ninter, const int* allrows, const int* allcols,
+                      const int* rowidx, const int* colidx, const int* pgidx, const int* npmap,
+                      const int* pmaps, void* alldat_loc, const int64_t* nalldat_loc, double* flops,
+                      int* info) {
+#ifdef BPACK_BF_GPU_ENABLED
+  *info = 1;
+  *flops = 0.0;
+  try {
+    const int count = *ninter;
+    int is_head = 0, comm_f = 0, nproc = 1;
+    c_bf_get_sub_head(bf, ptree, &is_head, &comm_f, &nproc);
+    if (nproc != 1) return;
+    int64_t want = 0, nr = 0, nc = 0;
+    for (int k = 0; k < count; ++k) {
+      const int pg = pgidx[k];
+      if (pmaps[pg] != 1 || pmaps[pg + *npmap] != 1 || pmaps[pg + 2 * *npmap] != 0) return;
+      want += static_cast<int64_t>(rowidx[k]) * colidx[k];
+      nr += rowidx[k];
+      nc += colidx[k];
+    }
+    if (want != *nalldat_loc) return;
+    bf::gpu::BfResident<BfScalar>* r = bf_resident(bf, ptree);
+    if (r == nullptr) return;
+    std::vector<int> rows(allrows, allrows + nr), cols(allcols, allcols + nc);
+    for (int& i : rows) i -= 1;
+    for (int& j : cols) j -= 1;
+    bf::gpu::ExtractProfile prof;
+    if (!bf::gpu::extract(r->dev, r->leaves, count, rowidx, colidx, rows.data(), cols.data(),
+                          static_cast<BfScalar*>(alldat_loc), prof, r->extract_meta, r->extract_meta_device)) {
+      return;  // no room on the device for the partial products
+    }
+    *flops = prof.flops;
+    *info = 0;
+    if (fmm::env::trace("phase")) {
+      std::printf("BF GPU extract: %d intersections, %lld entries, %lld GEMMs, %.3e flops: plan %.4f s, "
+                  "run %.4f s\n",
+                  count, static_cast<long long>(prof.entries), static_cast<long long>(prof.items), prof.flops,
+                  prof.plan, prof.run);
+      std::fflush(stdout);
+    }
+  } catch (const std::exception& e) {
+    gpu_fail("c_bf_gpu_extract", e.what());
+  }
+#else
+  (void)bf; (void)ptree; (void)ninter; (void)allrows; (void)allcols; (void)rowidx; (void)colidx;
+  (void)pgidx; (void)npmap; (void)pmaps; (void)alldat_loc; (void)nalldat_loc;
+  *flops = 0.0;
+  *info = 1;
+#endif
+}
+
+// This rank's rows of a butterfly's intersections, on the device, for
+// BF_ExtractElement on a process group: BF_block_extraction's part, whose
+// blocks the host's redistribution then sends where they are wanted
+// (bf_extract.hpp, extract_dist).  ninter intersections of nr and nc rows and
+// columns; each row's leaf and position in it (row_leaf, row_pos, zero based,
+// stacked), each column's likewise; nloc: this rank's rows of each, local:
+// their positions in its rows (zero based, stacked, in dat_loc's order);
+// row_owner and col_owner: the rank in the block's communicator holding each
+// leaf (2^L each, -1 for one several ranks share).  out: each
+// intersection's dat_loc, nloc x nc column major, stacked (host).  info 1:
+// the device declined, on every rank of the group, and the host runs.
+// Collective over the group.
+void c_bf_gpu_extract_dist(void* bf, void* ptree, const int* ninter, const int* nr, const int* nc,
+                           const int* row_leaf, const int* row_pos, const int* col_leaf, const int* col_pos,
+                           const int* nloc, const int* local, const int* row_owner, const int* col_owner,
+                           void* out, double* flops, int* info) {
+#ifdef BPACK_BF_GPU_ENABLED
+  *info = 1;
+  *flops = 0.0;
+  try {
+    // BF_ExtractElement may call from any of its OpenMP threads
+    fmm::gpu::Context::instance().activate();
+    bf::gpu::BfResident<BfScalar>* r = bf_resident(bf, ptree);
+    if (r == nullptr || r->bridge.nproc <= 1) return;
+    bf::gpu::ExtractRequest q;
+    q.count = *ninter;
+    q.nr = nr;
+    q.nc = nc;
+    q.row_leaf = row_leaf;
+    q.row_pos = row_pos;
+    q.col_leaf = col_leaf;
+    q.col_pos = col_pos;
+    q.nloc = nloc;
+    q.local = local;
+    q.row_owner = row_owner;
+    q.col_owner = col_owner;
+    bf::gpu::ExtractProfile prof;
+    if (bf::gpu::extract_dist(r->dev, r->bridge.comm, q, static_cast<BfScalar*>(out), prof, r->extract_meta,
+                              r->extract_meta_device) != 0) {
+      return;
+    }
+    *flops = prof.flops;
+    *info = 0;
+    if (fmm::env::trace("phase") && r->dev.myid == 0) {
+      std::printf("BF GPU extract (rank 0 of %d): %d intersections, %lld local entries, %lld GEMMs, %.3e flops: "
+                  "plan %.4f s, run %.4f s (midpoint %.4f s; %d exchanges, %lld sent, %lld received)\n",
+                  r->bridge.nproc, q.count, static_cast<long long>(prof.entries), static_cast<long long>(prof.items),
+                  prof.flops, prof.plan, prof.run, prof.mid, prof.exchanges, static_cast<long long>(prof.sent),
+                  static_cast<long long>(prof.received));
+      std::fflush(stdout);
+    }
+  } catch (const std::exception& e) {
+    gpu_fail("c_bf_gpu_extract_dist", e.what());
+  }
+#else
+  (void)bf; (void)ptree; (void)ninter; (void)nr; (void)nc; (void)row_leaf; (void)row_pos; (void)col_leaf;
+  (void)col_pos; (void)nloc; (void)local; (void)row_owner; (void)col_owner; (void)out;
+  *flops = 0.0;
+  *info = 1;
+#endif
+}
+
+// The registration of a butterfly's GPU evaluator (C_BPACK_wrapper.cpp's
+// c_bf_set_gpu_*), before its construction: `evaluator` points to a
+// std::shared_ptr<fmm::gpu::Evaluator>, an empty one clearing it.
+void c_bf_gpu_set_evaluator(void* bf, const void* evaluator) {
+#ifdef BPACK_BF_GPU_ENABLED
+  if (bf == nullptr || evaluator == nullptr) gpu_fail("c_bf_gpu_set_evaluator", "null argument");
+  const auto& ev = *static_cast<const std::shared_ptr<fmm::gpu::Evaluator>*>(evaluator);
+  if (!ev) {
+    bf_entries().erase(bf);
+    return;
+  }
+  auto& slot = bf_entries()[bf];
+  if (!slot) slot = std::make_unique<BfEntries>();
+  slot->evaluator = ev;
+#else
+  (void)bf;
+  (void)evaluator;
+#endif
+}
+
+// For C_BF_Construct_Element_Compute: the handle of the butterfly's GPU
+// evaluator, null when it has none, with its points laid out for M rows and
+// N columns.  xyz: the butterfly mesh's coordinates as the Fortran holds them,
+// xyz(1:dim, -N:M) - row i at i, column j at -j - or null for a mesh without
+// geometry.  The evaluator's first-use costs (an NVRTC compile, a first
+// launch) are paid here, outside the construction's own work, and returned.
+void c_bf_gpu_entries(void* bf, const int* M, const int* N, const int* dim, const double* xyz, void** handle,
+                      double* warm_seconds) {
+  *handle = nullptr;
+  *warm_seconds = 0.0;
+#ifdef BPACK_BF_GPU_ENABLED
+  try {
+    auto it = bf_entries().find(bf);
+    if (it == bf_entries().end() || !it->second->evaluator) return;
+    BfEntries& e = *it->second;
+    if (e.evaluator->needs_coordinates() && xyz == nullptr) {
+      gpu_fail("c_bf_gpu_entries",
+               "the GPU evaluator reads coordinates, but the butterfly has none (built with nogeo 0 or 4 it has)");
+    }
+    if (e.M != *M || e.N != *N) {
+      e.drop_points();
+      auto& heap = fmm::gpu::DeviceHeap::instance();
+      heap.ensure_initialized();
+      const int64_t np = static_cast<int64_t>(*M) + *N;
+      std::vector<int64_t> ids(static_cast<size_t>(np));
+      for (int64_t p = 0; p < np; ++p) ids[p] = p < *M ? p : p - *M;
+      e.d_ids = heap.alloc<int64_t>(ids.size() * sizeof(int64_t), fmm::gpu::ResidentKind::Matvec);
+      fmm::gpu::check_cuda(cudaMemcpy(e.d_ids, ids.data(), ids.size() * sizeof(int64_t), cudaMemcpyHostToDevice),
+                           "c_bf_gpu_entries ids");
+      if (xyz != nullptr && *dim > 0) {
+        const int d = *dim;
+        std::vector<double> table(static_cast<size_t>(np) * d);
+        for (int64_t r = 0; r < *M; ++r)
+          for (int q = 0; q < d; ++q) table[r * d + q] = xyz[(r + 1 + *N) * d + q];
+        for (int64_t c = 0; c < *N; ++c)
+          for (int q = 0; q < d; ++q) table[(*M + c) * d + q] = xyz[(*N - c - 1) * d + q];
+        e.d_xyz = heap.alloc<double>(table.size() * sizeof(double), fmm::gpu::ResidentKind::Matvec);
+        fmm::gpu::check_cuda(cudaMemcpy(e.d_xyz, table.data(), table.size() * sizeof(double),
+                                        cudaMemcpyHostToDevice),
+                             "c_bf_gpu_entries coordinates");
+        e.dim = d;
+      }
+      e.M = *M;
+      e.N = *N;
+    }
+    const int count = std::max(1, std::min(64, std::min(*M, *N)));
+    e.warm_seconds = e.evaluator->warm_up<BfScalar>(e.points(), count, fmm::gpu::Context::instance().stream());
+    *warm_seconds = e.warm_seconds;
+    *handle = &e;
+  } catch (const std::exception& ex) {
+    gpu_fail("c_bf_gpu_entries", ex.what());
+  }
+#else
+  (void)bf; (void)M; (void)N; (void)dim; (void)xyz;
+#endif
+}
+
+// The entries of nblk blocks by the GPU evaluator `handle` (c_bf_gpu_entries),
+// for element_Zmn_blocklist_user: block b's rowidx[b] rows and colidx[b]
+// columns, stacked in rows and cols as the butterfly's mesh numbers them
+// (rows 1..M, columns M+1..M+N), into out (host), each block column major,
+// stacked in order.  keep 1: left on the device instead, for the level's
+// rank-reveal (c_bf_gpu_level_id_kept), and out is not written.  info 1: no
+// room on the device; the caller computes them on the host instead.
+void c_bf_gpu_eval_blocks(void* handle, const int* nblk, const int* rows, const int* cols, const int* rowidx,
+                          const int* colidx, void* out, const int64_t* nout, const int* keep, int* info) {
+  *info = 1;
+#ifdef BPACK_BF_GPU_ENABLED
+  try {
+    BfEntries& e = *static_cast<BfEntries*>(handle);
+    const int count = *nblk;
+    std::vector<int64_t> r_at(static_cast<size_t>(count) + 1, 0), c_at(r_at.size(), 0), o_at(r_at.size(), 0);
+    int max_m = 0, max_n = 0;
+    for (int k = 0; k < count; ++k) {
+      r_at[k + 1] = r_at[k] + rowidx[k];
+      c_at[k + 1] = c_at[k] + colidx[k];
+      o_at[k + 1] = o_at[k] + static_cast<int64_t>(rowidx[k]) * colidx[k];
+      max_m = std::max(max_m, rowidx[k]);
+      max_n = std::max(max_n, colidx[k]);
+    }
+    if (o_at[count] != *nout) gpu_fail("c_bf_gpu_eval_blocks", "the blocks do not fill the output");
+    if (o_at[count] == 0) {
+      *info = 0;
+      return;
+    }
+    const int64_t nr = r_at[count], nc = c_at[count];
+    auto& heap = fmm::gpu::DeviceHeap::instance();
+    char* d_out = heap.try_alloc(static_cast<size_t>(o_at[count]) * sizeof(BfScalar), fmm::gpu::ResidentKind::Matvec);
+    if (d_out == nullptr) return;
+    // the points (the mesh's index minus one, rows then columns) and the
+    // blocks, in one image; the blocks name their points by offset into it
+    e.meta.clear();
+    const size_t at_pts = e.meta.alloc(static_cast<size_t>(nr + nc) * sizeof(int));
+    int* pts = reinterpret_cast<int*>(e.meta.host(at_pts));
+    for (int64_t i = 0; i < nr; ++i) pts[i] = rows[i] - 1;
+    for (int64_t j = 0; j < nc; ++j) pts[nr + j] = cols[j] - 1;
+    BfScalar* dout = reinterpret_cast<BfScalar*>(d_out);
+    std::vector<fmm::gpu::EvalItemT<BfScalar>> items(static_cast<size_t>(count));
+    for (int k = 0; k < count; ++k) {
+      fmm::gpu::EvalItemT<BfScalar>& it = items[k];
+      it.out = dout + o_at[k];
+      it.ld = std::max(rowidx[k], 1);
+      it.m = rowidx[k];
+      it.n = colidx[k];
+      it.rows = fmm::gpu::IndexList{static_cast<int64_t>(at_pts + r_at[k] * sizeof(int)), 0, nullptr};
+      it.cols = fmm::gpu::IndexList{static_cast<int64_t>(at_pts + (nr + c_at[k]) * sizeof(int)), 0, nullptr};
+    }
+    const size_t at_items = e.meta.append(items);
+    cudaStream_t stream = fmm::gpu::Context::instance().stream();
+    char* dm = e.meta.upload(e.meta_device, stream);
+    e.evaluator->eval<BfScalar>(items, reinterpret_cast<const fmm::gpu::EvalItemT<BfScalar>*>(dm + at_items), max_m,
+                              max_n, dm, e.points(), stream);
+    if (*keep != 0) {
+      // for the rank-reveal that follows: no copy to the host
+      fmm::gpu::check_cuda(cudaStreamSynchronize(stream), "c_bf_gpu_eval_blocks");
+      e.drop_kept();
+      e.kept = dout;
+      e.kept_elements = o_at[count];
+      *info = 0;
+      return;
+    }
+    fmm::gpu::check_cuda(cudaMemcpyAsync(out, d_out, static_cast<size_t>(o_at[count]) * sizeof(BfScalar),
+                                         cudaMemcpyDeviceToHost, stream),
+                         "c_bf_gpu_eval_blocks entries");
+    fmm::gpu::check_cuda(cudaStreamSynchronize(stream), "c_bf_gpu_eval_blocks");
+    heap.free(d_out);
+    *info = 0;
+  } catch (const std::exception& ex) {
+    gpu_fail("c_bf_gpu_eval_blocks", ex.what());
+  }
+#else
+  (void)handle; (void)nblk; (void)rows; (void)cols; (void)rowidx; (void)colidx; (void)out; (void)nout;
+#endif
+}
+
+// The registration of a butterfly's black box on the device (bpack_gpu.h),
+// before its construction from matvecs; a null matvec clears it.
+void c_bf_set_gpu_matvec(void** bf, bpack_gpu_bf_matvec matvec, void* user) {
+#ifdef BPACK_BF_GPU_ENABLED
+  if (bf == nullptr || *bf == nullptr) gpu_fail("c_bf_set_gpu_matvec", "null butterfly handle");
+  if (matvec == nullptr) {
+    bf_matvecs().erase(*bf);
+    return;
+  }
+  bf_matvecs()[*bf] = BfMatvec{matvec, user};
+#else
+  (void)bf; (void)matvec; (void)user;
+#endif
+}
+
+// BF_randomized (less_adapt 1) on the device, for BF_randomized_gpu
+// (bf_gpu/bf_randomized.hpp): a butterfly of L >= 1 levels on its process
+// group, laid out as bf_rand - BF_Init_randomized's structure, no factors yet
+// - gives it: this rank's blocks of every level, its leaves' ends ms and ns
+// (one based, cumulative, over its U and its V blocks) and the global index,
+// zero based, of its first row and column (row0, col0).  The black box is the
+// device one registered for bf, else `matvec`, the C callback, on pinned host
+// copies of this rank's part of the vectors.  On success the shapes of this
+// rank's blocks - V's, Kerl(1..L)'s row by row, U's - are in rows and cols,
+// the blocks wait on the device under `handle` for c_bf_gpu_randomized_fetch,
+// and prof holds the seconds of all, the black box, the sweeps, the range
+// finding and solves, the error test; the black box's calls and columns, the
+// tries of the rank guess and the test's error.  info 1: the device declined,
+// on every rank of the group together (no room, a rank guess that never
+// settled, a leaf several ranks share).  Collective over the group.
+void c_bf_gpu_randomized(void* bf, void* bf_rand, void* ptree, const int* L, const int* level_half, const int* M,
+                         const int* N, const int* ms, const int* ns, const int* row0, const int* col0,
+                         const int* rank0, const double* rankrate, const int* itermax, const int* nbundle,
+                         const double* tol_rdetect, const double* tol_ls, void* matvec, void* quant, void** handle,
+                         int* rows, int* cols, double* prof, int* info) {
+  *info = 1;
+  *handle = nullptr;
+#ifdef BPACK_BF_GPU_ENABLED
+  try {
+    if (*L < 1) return;
+    int is_head = 0, comm_f = 0, nproc = 1, myid = 0;
+    c_bf_get_sub_head(bf_rand, ptree, &is_head, &comm_f, &nproc);
+    const MPI_Comm comm = MPI_Comm_f2c(static_cast<MPI_Fint>(comm_f));
+    if (nproc > 1) MPI_Comm_rank(comm, &myid);
+    bf_device_setup(comm, nproc);
+
+    bf::gpu::RandomizedConfig<BfScalar> c;
+    c.L = *L;
+    c.level_half = *level_half;
+    c.M = *M;
+    c.N = *N;
+    // this rank's grids, and its leaves: U's blocks (the last level) and V's
+    int Lb = 0, half = 0, Mb = 0, Nb = 0, Ml = 0, Nl = 0, nlev = 0, nblk = 0;
+    c_bf_get_layout(bf_rand, &Lb, &half, &Mb, &Nb, &Ml, &Nl, &nlev, &nblk);
+    if (Lb != *L || nlev != *L + 2) gpu_fail("c_bf_gpu_randomized", "the block's layout does not match its levels");
+    std::vector<int> nr(nlev), nc(nlev), ir(nlev), ic(nlev), er(nlev), ec(nlev);
+    std::vector<int> brows(std::max(nblk, 1)), bcols(brows.size());
+    std::vector<void*> bptr(brows.size());
+    c_bf_get_blocks(bf_rand, nr.data(), nc.data(), ir.data(), ic.data(), er.data(), ec.data(), brows.data(),
+                    bcols.data(), bptr.data());
+    const int nu = nr[nlev - 1], nv = nc[0];
+    c.row_off.assign(static_cast<size_t>(nu) + 1, 0);
+    c.col_off.assign(static_cast<size_t>(nv) + 1, 0);
+    for (int k = 0; k < nu; ++k) c.row_off[k + 1] = ms[k];
+    for (int k = 0; k < nv; ++k) c.col_off[k + 1] = ns[k];
+    c.nproc = nproc;
+    c.comm = comm;
+    c.M_loc = Ml;
+    c.N_loc = Nl;
+    c.row0 = *row0;
+    c.col0 = *col0;
+    if (nproc > 1) {
+      bf::gpu::BfDevice<BfScalar>& d = c.layout;
+      d.level_butterfly = *L;
+      d.level_half = *level_half;
+      d.M = *M;
+      d.N = *N;
+      d.M_loc = Ml;
+      d.N_loc = Nl;
+      d.levels.resize(static_cast<size_t>(nlev));
+      for (int l = 0; l < nlev; ++l) {
+        bf::gpu::LevelDesc& v = d.levels[static_cast<size_t>(l)];
+        v.nr = nr[l];
+        v.nc = nc[l];
+        v.idx_r = ir[l];
+        v.idx_c = ic[l];
+        v.inc_r = er[l];
+        v.inc_c = ec[l];
+      }
+      bf_read_ranges(bf_rand, ptree, *L, nproc, myid, d);
+      c.bridge = bf_bridge(bf_rand, ptree, comm, nproc);
+      // a leaf several ranks share stays on the host: ButterflyPACK's trees
+      // give every rank at least two leaf boxes, so no butterfly has one
+      int shared = 0;
+      if (nv == 1 && c.bridge.block_group(0, 1, ic[0], 'R').nproc > 1) shared = 1;
+      if (nu == 1 && c.bridge.block_group(*L + 1, ir[nlev - 1], 1, 'C').nproc > 1) shared = 1;
+      MPI_Allreduce(MPI_IN_PLACE, &shared, 1, MPI_INT, MPI_MAX, comm);
+      if (shared) return;
+    }
+    if (c.row_off.back() != c.M_loc || c.col_off.back() != c.N_loc ||
+        (nproc == 1 && (nu != (1 << *L) || nv != (1 << *L)))) {
+      gpu_fail("c_bf_gpu_randomized", "the leaves do not cover the block");
+    }
+    c.rank0 = *rank0;
+    c.rankrate = *rankrate;
+    c.itermax = *itermax;
+    c.nbundle = std::max(*nbundle, 1);
+    c.tol_rdetect = *tol_rdetect;
+    c.tol_ls = *tol_ls;
+
+    auto state = std::make_unique<BfRandomizedRun>();
+    BfRandomizedRun* s = state.get();
+    cudaStream_t stream = fmm::gpu::Context::instance().stream();
+    bf::gpu::BlackBox<BfScalar> box;
+    auto dev = bf_matvecs().find(bf);
+    if (dev != bf_matvecs().end()) {
+      const BfMatvec m = dev->second;
+      box = [m, c, stream](char op, int nvec, const BfScalar* x, BfScalar* y) {
+        const int nin = static_cast<int>(op == 'N' ? c.N_loc : c.M_loc);
+        const int nout = static_cast<int>(op == 'N' ? c.M_loc : c.N_loc);
+        // x is ready for a black box on a stream of its own too
+        fmm::gpu::check_cuda(cudaStreamSynchronize(stream), "the butterfly's device black box");
+        m.fn(op, nin, nout, nvec, x, y, stream, m.user);
+        fmm::gpu::check_cuda(cudaStreamSynchronize(stream), "the butterfly's device black box");
+      };
+    } else {
+      if (matvec == nullptr) return;
+      const BfHostMatvec fn = reinterpret_cast<BfHostMatvec>(matvec);
+      box = [s, fn, quant, c, stream](char op, int nvec, const BfScalar* x, BfScalar* y) {
+        int nin = static_cast<int>(op == 'N' ? c.N_loc : c.M_loc), nout = static_cast<int>(op == 'N' ? c.M_loc : c.N_loc);
+        const size_t bin = static_cast<size_t>(nin) * nvec * sizeof(BfScalar);
+        const size_t bout = static_cast<size_t>(nout) * nvec * sizeof(BfScalar);
+        BfScalar* hx = static_cast<BfScalar*>(s->hx.reserve(std::max<size_t>(bin, 1)));
+        BfScalar* hy = static_cast<BfScalar*>(s->hy.reserve(std::max<size_t>(bout, 1)));
+        fmm::gpu::check_cuda(cudaMemcpyAsync(hx, x, bin, cudaMemcpyDeviceToHost, stream), "the butterfly's black box x");
+        fmm::gpu::check_cuda(cudaStreamSynchronize(stream), "the butterfly's black box x");
+        std::memset(hy, 0, bout);
+        const char trans[2] = {op, '\0'};
+        BfScalar one(1.0), zero(0.0);
+        fn(trans, &nin, &nout, &nvec, hx, hy, quant, &one, &zero);
+        fmm::gpu::check_cuda(cudaMemcpyAsync(y, hy, bout, cudaMemcpyHostToDevice, stream), "the butterfly's black box y");
+        fmm::gpu::check_cuda(cudaStreamSynchronize(stream), "the butterfly's black box y");
+      };
+    }
+    s->run = std::make_unique<bf::gpu::Randomized<BfScalar>>(c, box);
+    if (!s->run->run()) return;
+    std::vector<int> r, k;
+    s->run->shapes(r, k);
+    std::copy(r.begin(), r.end(), rows);
+    std::copy(k.begin(), k.end(), cols);
+    const bf::gpu::RandomizedProfile& p = s->run->prof;
+    prof[0] = p.total;
+    prof[1] = p.matvec;
+    prof[2] = p.sweep;
+    prof[3] = p.range;
+    prof[4] = p.test;
+    prof[5] = static_cast<double>(p.calls);
+    prof[6] = static_cast<double>(p.columns);
+    prof[7] = p.tries;
+    prof[8] = p.error;
+    // the pinned staging goes now; the factors stay for the fetch
+    s->hx.release();
+    s->hy.release();
+    *handle = state.release();
+    *info = 0;
+  } catch (const std::exception& e) {
+    gpu_fail("c_bf_gpu_randomized", e.what());
+  }
+#else
+  (void)bf; (void)bf_rand; (void)ptree; (void)L; (void)level_half; (void)M; (void)N; (void)ms; (void)ns;
+  (void)row0; (void)col0; (void)rank0; (void)rankrate; (void)itermax; (void)nbundle; (void)tol_rdetect;
+  (void)tol_ls; (void)matvec; (void)quant; (void)rows; (void)cols; (void)prof;
+#endif
+}
+
+// The blocks of a c_bf_gpu_randomized into ptrs, in its order (null: not
+// wanted), and the handle released.  seconds: the copy's time.
+void c_bf_gpu_randomized_fetch(void* handle, void* const* ptrs, double* seconds) {
+  *seconds = 0.0;
+#ifdef BPACK_BF_GPU_ENABLED
+  if (handle == nullptr) return;
+  std::unique_ptr<BfRandomizedRun> state(static_cast<BfRandomizedRun*>(handle));
+  try {
+    const double t0 = MPI_Wtime();
+    std::vector<int> r, k;
+    state->run->shapes(r, k);
+    std::vector<BfScalar*> dst(r.size());
+    for (size_t b = 0; b < dst.size(); ++b) dst[b] = static_cast<BfScalar*>(ptrs[b]);
+    state->run->download(dst);
+    state->run->release();
+    *seconds = MPI_Wtime() - t0;
+  } catch (const std::exception& e) {
+    gpu_fail("c_bf_gpu_randomized_fetch", e.what());
+  }
+#else
+  (void)handle; (void)ptrs;
+#endif
+}
+
+// Drop what a butterfly holds on the device.  The caller must do this before
+// the block is freed: the store is keyed on its address, and although every
+// lookup re-checks the block's layout, releasing is what keeps the device
+// memory from being held by a block that no longer exists.
+void c_bf_gpu_release(void* bf) {
+#ifdef BPACK_BF_GPU_ENABLED
+  try {
+    bf::gpu::bf_store_release<BfScalar>(bf);
+    bf_entries().erase(bf);  // and its GPU evaluator, if it had one
+    bf_matvecs().erase(bf);  // and its device black box
+  } catch (const std::exception& e) {
+    gpu_fail("c_bf_gpu_release", e.what());
+  }
+#else
+  (void)bf;
+#endif
+}
+
+// Device memory for a caller that holds vectors across several backend calls
+// (STRUMPACK's Schur sampling chain: F12's product, F11's solve, F21's
+// product, without a host hop between them).
+//
+// It comes from the backend's own arena rather than a cudaMalloc of the
+// caller's, because the arena takes most of what the device had free when it
+// was reserved (BPACK_GPU_HEAP_FRACTION, 0.85 by default): a separate
+// allocation would be competing with it for what little is left, and would
+// fail unpredictably.  `elements` counts matrix entries, not bytes, so the
+// caller does not need to know the precision.  ptr is null when the arena has
+// no room, and the caller keeps its host path.
+void c_bpack_gpu_workspace_alloc(const int64_t* elements, void** ptr) {
+#ifdef BPACK_GPU_ENABLED
+  *ptr = nullptr;
+  try {
+    if (*elements <= 0) return;
+    auto& heap = fmm::gpu::DeviceHeap::instance();
+    heap.ensure_initialized();
+    *ptr = heap.try_alloc(static_cast<size_t>(*elements) * sizeof(Scalar),
+                          fmm::gpu::ResidentKind::Matvec);
+  } catch (const std::exception& e) {
+    gpu_fail("c_bpack_gpu_workspace_alloc", e.what());
+  }
+#else
+  (void)elements;
+  *ptr = nullptr;
+#endif
+}
+
+void c_bpack_gpu_workspace_free(void* ptr) {
+#ifdef BPACK_GPU_ENABLED
+  try {
+    if (ptr != nullptr) fmm::gpu::DeviceHeap::instance().free(reinterpret_cast<char*>(ptr));
+  } catch (const std::exception& e) {
+    gpu_fail("c_bpack_gpu_workspace_free", e.what());
+  }
+#else
+  (void)ptr;
+#endif
+}
+
+// Copy between the caller's host memory and such a workspace.  `elements`
+// counts matrix entries; `to_device` selects the direction.
+void c_bpack_gpu_workspace_copy(void* device, void* host, const int64_t* elements,
+                                const int* to_device) {
+#ifdef BPACK_GPU_ENABLED
+  try {
+    if (device == nullptr || host == nullptr || *elements <= 0) return;
+    const size_t bytes = static_cast<size_t>(*elements) * sizeof(Scalar);
+    fmm::gpu::check_cuda(*to_device ? cudaMemcpy(device, host, bytes, cudaMemcpyHostToDevice)
+                                    : cudaMemcpy(host, device, bytes, cudaMemcpyDeviceToHost),
+                         "c_bpack_gpu_workspace_copy");
+  } catch (const std::exception& e) {
+    gpu_fail("c_bpack_gpu_workspace_copy", e.what());
+  }
+#else
+  (void)device; (void)host; (void)elements; (void)to_device;
 #endif
 }
 

@@ -114,6 +114,7 @@
 #include <omp.h>
 
 #include "owner_exchange.hpp"
+#include "omp_region.hpp"
 
 namespace fmm {
 
@@ -1434,8 +1435,7 @@ void owner_schedule_run_passes(OwnerScheduleState<CoordType, DataType>& st, Tree
         std::exception_ptr ex;
         std::mutex ex_mutex;
         std::atomic<bool> failed{false};
-        #pragma omp parallel default(shared) if (sources.size() > 1)
-        {
+        omp_parallel_if(sources.size() > 1, [&] {
             auto& local = thread_candidates[static_cast<size_t>(omp_get_thread_num())];
             #pragma omp for schedule(static)
             for (int64_t i = 0; i < static_cast<int64_t>(sources.size()); ++i) {
@@ -1451,7 +1451,7 @@ void owner_schedule_run_passes(OwnerScheduleState<CoordType, DataType>& st, Tree
                     if (!failed.exchange(true)) { std::lock_guard<std::mutex> l(ex_mutex); ex = std::current_exception(); }
                 }
             }
-        }
+        });
         if (ex) std::rethrow_exception(ex);
     }
     std::vector<int64_t> candidates;
@@ -1496,8 +1496,7 @@ void owner_schedule_run_passes(OwnerScheduleState<CoordType, DataType>& st, Tree
         std::exception_ptr ex;
         std::mutex ex_mutex;
         std::atomic<bool> failed{false};
-        #pragma omp parallel default(shared) if (candidates.size() > 1)
-        {
+        omp_parallel_if(candidates.size() > 1, [&] {
             #pragma omp for schedule(static)
             for (int64_t i = 0; i < static_cast<int64_t>(candidates.size()); ++i) {
                 if (failed.load(std::memory_order_relaxed)) continue;
@@ -1512,7 +1511,7 @@ void owner_schedule_run_passes(OwnerScheduleState<CoordType, DataType>& st, Tree
                     if (!failed.exchange(true)) { std::lock_guard<std::mutex> l(ex_mutex); ex = std::current_exception(); }
                 }
             }
-        }
+        });
         if (ex) std::rethrow_exception(ex);
     }
     FMM_PHASE_LAP(pass_lap, WALL_MIRROR);
@@ -2144,12 +2143,15 @@ bool owner_schedule_batch_wave(OwnerScheduleState<CoordType, DataType>& st, Tree
                     try {
                         const int64_t m = wave_owned[static_cast<size_t>(i)];
                         owner_current_sketch_comp = st.comp_of(m);
-                        FMM_PHASE_BOX_SCOPE();
-                        FMM_PHASE_LAP_BEGIN(box_lap);
                         BoxData<CoordType, DataType>* box_ptr = level.find_local_box(m);
                         if (box_ptr == nullptr) box_ptr = level.find_ghost_box(m);
                         if (box_ptr == nullptr) throw std::runtime_error("owner_schedule: owned box missing at elimination");
                         auto& box = *box_ptr;
+                        // (binned by its neighbourhood when it has the thread to itself)
+                        FMM_PHASE_BOX_SCOPE_NB(scratch.split_threads == 1
+                                                   ? static_cast<int>(box.one_hop.size() + box.two_hop.size())
+                                                   : -1);
+                        FMM_PHASE_LAP_BEGIN(box_lap);
                         {
                             auto& f = pre[static_cast<size_t>(i)];
                             f.assign(box.one_hop.size(), BLOCK_KERNEL);
@@ -2538,6 +2540,85 @@ void owner_schedule_print_timing(const OwnerScheduleState<CoordType, DataType>& 
                 st.xnr_bytes_shipped / 1048576.0, st.xnr_bytes_regen_kernel / 1048576.0, st.xnr_bytes_regen_partner / 1048576.0,
                 OwnerBufferPool::instance().held_bytes() / (1024.0 * 1024.0 * 1024.0));
     std::fflush(stdout);
+}
+
+/// Collective over the level's ranks (BPACK_TRACE=skew on a component-owner
+/// level): every rank's schedule timings, gathered on the level's first rank,
+/// printed as averages by number of neighbour ranks and written to
+/// owner_<job>.<step>_level<L>.csv in the working directory.  Owned boxes on
+/// the domain's surface are counted apart: they have fewer neighbours, so
+/// they cost less than the boxes inside.
+template<typename CoordType, typename DataType>
+void owner_schedule_rank_report(const OwnerScheduleState<CoordType, DataType>& st, int level_index, MPI_Comm comm,
+                                int tree_rank, int neighbours, double elim_ms, bool print) {
+    int P = 1, me = 0;
+    MPI_Comm_size(comm, &P);
+    MPI_Comm_rank(comm, &me);
+    static const char* const kField[] = {"tree_rank", "neighbours", "elim_ms", "owned_boxes", "owned_surface_boxes",
+                                         "owned_comps", "installed_comps", "box_region_ms", "passes_ms", "r2_replay_ms",
+                                         "final_ms", "pack_ms", "install_ms", "idle_wait_ms", "landing_wait_ms", "sent_mb",
+                                         "recv_mb", "temp2_solve_thread_ms", "block_rebuild_thread_ms"};
+    constexpr int F = static_cast<int>(sizeof(kField) / sizeof(kField[0]));
+    double v[F] = {0};
+    v[0] = tree_rank;
+    v[1] = neighbours;
+    v[2] = elim_ms;
+    if (st.active) {
+        int64_t owned = 0, surface = 0;
+        const uint32_t g = st.grid.grid_size;
+        for (int32_t id : st.rt.owned()) {
+            for (int64_t m : st.graph.comps[static_cast<size_t>(id)].boxes) {
+                ++owned;
+                const auto c = st.grid.decode(m);
+                bool on_surface = false;
+                for (int d = 0; d < st.grid.dimension; ++d) on_surface = on_surface || c[d] == 0 || c[d] + 1 == g;
+                if (on_surface) ++surface;
+            }
+        }
+        v[3] = static_cast<double>(owned);
+        v[4] = static_cast<double>(surface);
+        v[5] = static_cast<double>(st.comps_eliminated);
+        v[6] = static_cast<double>(st.comps_installed);
+        v[7] = st.t_elim_ms; v[8] = st.t_passes_ms; v[9] = st.t_replay_ms; v[10] = st.t_final_ms;
+        v[11] = st.t_pack_ms; v[12] = st.t_install_ms; v[13] = st.t_wait_ms; v[14] = st.t_recv_ms;
+        v[15] = st.bytes_sent / 1048576.0; v[16] = st.bytes_recv / 1048576.0;
+        v[17] = st.t_rebuild_temp2_ms; v[18] = st.t_rebuild_blocks_ms;
+    }
+    std::vector<double> all(me == 0 ? static_cast<size_t>(F) * static_cast<size_t>(P) : 0);
+    MPI_Gather(v, F, MPI_DOUBLE, all.data(), F, MPI_DOUBLE, 0, comm);
+    if (me != 0) return;
+    auto at = [&](int r, int i) { return all[static_cast<size_t>(r) * F + static_cast<size_t>(i)]; };
+    if (print) {
+        std::map<int, std::vector<int>> by;   // neighbour ranks -> gathered indices
+        for (int r = 0; r < P; ++r) by[static_cast<int>(at(r, 1))].push_back(r);
+        for (const auto& [n, rs] : by) {
+            double mean[F] = {0};
+            for (int r : rs)
+                for (int i = 2; i < F; ++i) mean[i] += at(r, i) / static_cast<double>(rs.size());
+            std::printf("  [owner-ranks] level %d, %d neighbours (%zu ranks): elimination %.0f ms | owned %.0f boxes "
+                        "(%.0f on the domain surface), %.1f comps, installed %.1f comps | ms: box-region %.0f, passes %.0f, "
+                        "R2 replay %.0f, final %.0f, pack %.0f, install %.0f, idle-wait %.0f, landing-wait %.0f, rest %.0f | "
+                        "sent %.0f MB, recv %.0f MB\n",
+                        level_index, n, rs.size(), mean[2], mean[3], mean[4], mean[5], mean[6], mean[7], mean[8], mean[9],
+                        mean[10], mean[11], mean[12], mean[13], mean[14],
+                        mean[2] - (mean[7] + mean[8] + mean[9] + mean[10] + mean[11] + mean[12] + mean[13] + mean[14]),
+                        mean[15], mean[16]);
+        }
+        std::fflush(stdout);
+    }
+    const char* job = std::getenv("SLURM_JOB_ID");
+    const char* step = std::getenv("SLURM_STEP_ID");
+    const std::string name = std::string("owner_") + (job ? job : "run") + "." + (step ? step : "0") + "_level" +
+                             std::to_string(level_index) + ".csv";
+    if (FILE* f = std::fopen(name.c_str(), "w")) {
+        for (int i = 0; i < F; ++i) std::fprintf(f, i == 0 ? "%s" : ",%s", kField[i]);
+        std::fprintf(f, "\n");
+        for (int r = 0; r < P; ++r) {
+            for (int i = 0; i < F; ++i) std::fprintf(f, i == 0 ? "%.6g" : ",%.6g", at(r, i));
+            std::fprintf(f, "\n");
+        }
+        std::fclose(f);
+    }
 }
 
 /// Collective: the slowest rank's view of the same fields (MPI_MAX per field,

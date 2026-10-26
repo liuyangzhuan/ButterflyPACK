@@ -9,6 +9,7 @@
 #include <iomanip>
 #include <memory>
 #include <algorithm>
+#include <climits>
 #include <pthread.h>
 #include <unordered_map>
 
@@ -169,6 +170,208 @@ int plot_slice_index(int n){
   return std::min(n, std::max(1, (n-1)/2 + 1));
 }
 
+// The diagonal blocks of the block-diagonal preconditioner, distributed: the 2^level groups of the scatterer points
+// that c_bpack_construct_init_diaglevel_simple's KD split makes (a group of m points is split along the axis of its
+// largest extent into its ceil(m/2) lowest and floor(m/2) highest points), computed from the points' grid indices
+// on the ranks that own them, with per-level reductions over all ranks instead of a sort of all points on rank 0.
+// A cut that falls inside a grid plane takes the plane's points in the order of their second, then third index
+// (the serial sort breaks such ties arbitrarily).  Any scatterer shape works; for a box of 2^k-divisible sides the
+// blocks are its boxes.  Then each block's root orders its points by tensor id, which gives each point its position.
+// In: the scatterer points of this rank (tensor ids, 1-based in dims), and block_info of the first call of
+// c_bpack_construct_init_diaglevel_simple (its local blocks, stride 8: head, tail+1, -, -, root, nproc, -, gid).
+// Out: diag_tensor_perm (the local blocks' tensor ids, in block_info order and in position order) and, per point,
+// the root, gid and position of its block (what the library's second call returns).
+void discover_diag_blocks(int ndim, int* dims, int level, const vector<int>& tensor_ids, const vector<int>& block_info,
+                          int nblock, vector<int>& diag_tensor_perm, vector<int>& point_root, vector<int>& point_gid,
+                          vector<int>& point_pos, MPI_Comm comm){
+  int myrank = 0, nproc = 1;
+  MPI_Comm_rank(comm, &myrank);
+  MPI_Comm_size(comm, &nproc);
+  const int stride = 8;
+  const size_t np = tensor_ids.size();
+  auto fail = [&](const char* what){
+    cout<<"Rank "<<myrank<<": diagonal block discovery: "<<what<<endl;
+    MPI_Abort(comm, 1);
+  };
+  vector<int> md(3*np);
+  for(size_t p=0; p<np; p++){
+    int ts = tensor_ids[p];
+    z_c_bpack_singleindex_to_multiindex(&ndim, dims, &ts, &md[3*p]);
+  }
+  // group sizes: the library's balanced ranges (left ceil(m/2), right floor(m/2)), by group number from 1
+  long long ntot = 0, nloc = static_cast<long long>(np);
+  MPI_Allreduce(&nloc, &ntot, 1, MPI_LONG_LONG, MPI_SUM, comm);
+  const int ngroup = 1 << level;
+  vector<long long> gsize(2*static_cast<size_t>(ngroup), 0);
+  gsize[1] = ntot;
+  for(int g=1; g<ngroup; g++){
+    gsize[2*g] = (gsize[g] + 1)/2;
+    gsize[2*g+1] = gsize[g]/2;
+  }
+
+  vector<int> q(np, 0);  // each point's group, numbered from 0 at its level
+  for(int l=0; l<level; l++){
+    const int G = 1 << l;
+    vector<int> lo(3*G, INT_MAX), hi(3*G, INT_MIN);
+    for(size_t p=0; p<np; p++){
+      for(int d=0; d<3; d++){
+        lo[3*q[p]+d] = min(lo[3*q[p]+d], md[3*p+d]);
+        hi[3*q[p]+d] = max(hi[3*q[p]+d], md[3*p+d]);
+      }
+    }
+    MPI_Allreduce(MPI_IN_PLACE, lo.data(), 3*G, MPI_INT, MPI_MIN, comm);
+    MPI_Allreduce(MPI_IN_PLACE, hi.data(), 3*G, MPI_INT, MPI_MAX, comm);
+    vector<int> axis(G);
+    for(int g=0; g<G; g++){
+      if(hi[3*g] < lo[3*g]) fail("an empty group");
+      int a = 0;
+      for(int d=1; d<3; d++) if(hi[3*g+d]-lo[3*g+d] > hi[3*g+a]-lo[3*g+a]) a = d;  // (the first of equal extents)
+      axis[g] = a;
+    }
+    // three histograms per group: along the split axis; in the cut plane along the next axis; in the cut line
+    // along the last one.  cut[3*g+j]: the cut index at stage j; need: the points still to take at that stage.
+    vector<int> cut(3*G, 0);
+    vector<long long> need(G);
+    for(int g=0; g<G; g++) need[g] = gsize[2*(G+g)];  // (the left child's size)
+    for(int j=0; j<3; j++){
+      vector<size_t> off(G+1, 0);
+      for(int g=0; g<G; g++){
+        int d = (axis[g]+j)%3;
+        off[g+1] = off[g] + static_cast<size_t>(hi[3*g+d]-lo[3*g+d]+1);
+      }
+      vector<long long> hist(off[G], 0);
+      for(size_t p=0; p<np; p++){
+        int g = q[p], a = axis[g];
+        bool in = true;  // (in the cut plane, then in the cut line)
+        for(int jj=0; jj<j; jj++) in = in && md[3*p+(a+jj)%3] == cut[3*g+jj];
+        if(!in) continue;
+        int d = (a+j)%3;
+        hist[off[g] + static_cast<size_t>(md[3*p+d]-lo[3*g+d])]++;
+      }
+      MPI_Allreduce(MPI_IN_PLACE, hist.data(), static_cast<int>(off[G]), MPI_LONG_LONG, MPI_SUM, comm);
+      for(int g=0; g<G; g++){
+        int d = (axis[g]+j)%3;
+        long long below = 0;
+        size_t b = off[g];
+        for(; b<off[g+1]; b++){
+          if(below + hist[b] >= need[g]) break;
+          below += hist[b];
+        }
+        if(b == off[g+1]) fail("a cut beyond its group");
+        cut[3*g+j] = lo[3*g+d] + static_cast<int>(b - off[g]);
+        need[g] -= below;  // (taken from the cut slice at the next stage)
+        if(j == 2 && hist[b] != need[g]) fail("two points at one grid index");
+      }
+    }
+    for(size_t p=0; p<np; p++){
+      int g = q[p], a = axis[g];
+      int x0 = md[3*p+a], x1 = md[3*p+(a+1)%3], x2 = md[3*p+(a+2)%3];
+      bool left = x0 < cut[3*g] || (x0 == cut[3*g] && (x1 < cut[3*g+1] || (x1 == cut[3*g+1] && x2 <= cut[3*g+2])));
+      q[p] = 2*g + (left ? 0 : 1);
+    }
+  }
+
+  // the roots of all blocks
+  vector<int> mine;
+  for(int bb=0; bb<nblock; bb++){
+    const int* info = block_info.data() + bb*stride;
+    if(info[4] == myrank){ mine.push_back(info[7]); mine.push_back(myrank); }
+  }
+  int nmine = static_cast<int>(mine.size());
+  vector<int> cnts(nproc), dsp(nproc, 0);
+  MPI_Allgather(&nmine, 1, MPI_INT, cnts.data(), 1, MPI_INT, comm);
+  for(int rr=1; rr<nproc; rr++) dsp[rr] = dsp[rr-1] + cnts[rr-1];
+  vector<int> all(dsp[nproc-1] + cnts[nproc-1]);
+  MPI_Allgatherv(mine.data(), nmine, MPI_INT, all.data(), cnts.data(), dsp.data(), MPI_INT, comm);
+  vector<int> root_of(ngroup+1, -1);
+  for(size_t k=0; k+1<all.size(); k+=2) root_of[all[k]] = all[k+1];
+  for(int gid=1; gid<=ngroup; gid++) if(root_of[gid] < 0) fail("a block without a root");
+
+  // the points to their blocks' roots: (gid, tensor id); back: positions
+  vector<vector<int> > req(nproc);
+  vector<vector<size_t> > req_point(nproc);
+  for(size_t p=0; p<np; p++){
+    int gid = q[p] + 1, r = root_of[gid];
+    req[r].push_back(gid); req[r].push_back(tensor_ids[p]);
+    req_point[r].push_back(p);
+  }
+  vector<int> sc(nproc), rc(nproc), sd(nproc, 0), rd(nproc, 0);
+  for(int rr=0; rr<nproc; rr++) sc[rr] = static_cast<int>(req[rr].size());
+  MPI_Alltoall(sc.data(), 1, MPI_INT, rc.data(), 1, MPI_INT, comm);
+  for(int rr=1; rr<nproc; rr++){ sd[rr] = sd[rr-1] + sc[rr-1]; rd[rr] = rd[rr-1] + rc[rr-1]; }
+  vector<int> sendbuf, recvbuf(rd[nproc-1] + rc[nproc-1]);
+  sendbuf.reserve(sd[nproc-1] + sc[nproc-1]);
+  for(int rr=0; rr<nproc; rr++) sendbuf.insert(sendbuf.end(), req[rr].begin(), req[rr].end());
+  vector<vector<int> >().swap(req);
+  MPI_Alltoallv(sendbuf.data(), sc.data(), sd.data(), MPI_INT, recvbuf.data(), rc.data(), rd.data(), MPI_INT, comm);
+  unordered_map<int,int> local_block;  // gid -> index in block_info
+  vector<long long> block_off(nblock+1, 0);
+  for(int bb=0; bb<nblock; bb++){
+    const int* info = block_info.data() + bb*stride;
+    local_block[info[7]] = bb;
+    block_off[bb+1] = block_off[bb] + (info[1] - info[0]);
+  }
+  vector<vector<int> > members(nblock);
+  for(size_t k=0; k<recvbuf.size(); k+=2){
+    auto it = local_block.find(recvbuf[k]);
+    if(it == local_block.end() || block_info[it->second*stride+4] != myrank) fail("a point sent to a rank that is not its block's root");
+    members[it->second].push_back(recvbuf[k+1]);
+  }
+  for(int bb=0; bb<nblock; bb++){
+    const int* info = block_info.data() + bb*stride;
+    if(info[4] != myrank) continue;
+    sort(members[bb].begin(), members[bb].end());
+    if(static_cast<long long>(members[bb].size()) != block_off[bb+1] - block_off[bb]) fail("a block's size differs from the library's");
+  }
+  vector<int> pos_reply(recvbuf.size()/2);
+  for(size_t k=0; k<recvbuf.size(); k+=2){
+    const vector<int>& m = members[local_block[recvbuf[k]]];
+    pos_reply[k/2] = static_cast<int>(lower_bound(m.begin(), m.end(), recvbuf[k+1]) - m.begin());
+  }
+  vector<int> sc2(nproc), rc2(nproc), sd2(nproc), rd2(nproc);
+  for(int rr=0; rr<nproc; rr++){ sc2[rr] = rc[rr]/2; sd2[rr] = rd[rr]/2; rc2[rr] = sc[rr]/2; rd2[rr] = sd[rr]/2; }
+  vector<int> pos_recv(np);
+  MPI_Alltoallv(pos_reply.data(), sc2.data(), sd2.data(), MPI_INT, pos_recv.data(), rc2.data(), rd2.data(), MPI_INT, comm);
+  point_root.assign(np, -1); point_gid.assign(np, -1); point_pos.assign(np, -1);
+  for(int rr=0; rr<nproc; rr++){
+    for(size_t k=0; k<req_point[rr].size(); k++){
+      size_t p = req_point[rr][k];
+      point_root[p] = rr;
+      point_gid[p] = q[p] + 1;
+      point_pos[p] = pos_recv[rd2[rr] + k];
+    }
+  }
+
+  // diag_tensor_perm; a block's other ranks get its points from its root: records (gid, n, ids)
+  diag_tensor_perm.assign(block_off[nblock], 0);
+  vector<vector<int> > lists(nproc);
+  for(int bb=0; bb<nblock; bb++){
+    const int* info = block_info.data() + bb*stride;
+    if(info[4] != myrank) continue;
+    copy(members[bb].begin(), members[bb].end(), diag_tensor_perm.begin() + block_off[bb]);
+    for(int rr=info[4]+1; rr<info[4]+info[5]; rr++){
+      lists[rr].push_back(info[7]);
+      lists[rr].push_back(static_cast<int>(members[bb].size()));
+      lists[rr].insert(lists[rr].end(), members[bb].begin(), members[bb].end());
+    }
+  }
+  for(int rr=0; rr<nproc; rr++) sc[rr] = static_cast<int>(lists[rr].size());
+  MPI_Alltoall(sc.data(), 1, MPI_INT, rc.data(), 1, MPI_INT, comm);
+  sd[0] = rd[0] = 0;
+  for(int rr=1; rr<nproc; rr++){ sd[rr] = sd[rr-1] + sc[rr-1]; rd[rr] = rd[rr-1] + rc[rr-1]; }
+  sendbuf.clear();
+  for(int rr=0; rr<nproc; rr++) sendbuf.insert(sendbuf.end(), lists[rr].begin(), lists[rr].end());
+  recvbuf.assign(rd[nproc-1] + rc[nproc-1], 0);
+  MPI_Alltoallv(sendbuf.data(), sc.data(), sd.data(), MPI_INT, recvbuf.data(), rc.data(), rd.data(), MPI_INT, comm);
+  for(size_t k=0; k<recvbuf.size(); ){
+    int gid = recvbuf[k], n = recvbuf[k+1];
+    auto it = local_block.find(gid);
+    if(it == local_block.end() || n != block_off[it->second+1] - block_off[it->second]) fail("a block's points sent to a rank without it");
+    copy(recvbuf.begin()+k+2, recvbuf.begin()+k+2+n, diag_tensor_perm.begin() + block_off[it->second]);
+    k += 2 + n;
+  }
+}
+
 size_t tensor_slice_size(int nx, int ny, int nz){
   return static_cast<size_t>(ny)*nz + static_cast<size_t>(nx)*nz + static_cast<size_t>(nx)*ny;
 }
@@ -240,6 +443,9 @@ void write_tensor_slices_file(const string& filename, int nx, int ny, int nz, do
 
 
 
+// ivelo 9: factor on the velocity gradient (g1, g2, g3) below; 1 keeps the profile (--ivelo9_grad_scale)
+double ivelo9_grad_scale = 1.0;
+
 double slowness(double x,double y, double z, double slow_x0, double slow_y0,double slow_z0, int ivelo, const double* slowness_array, double h, int I, int J, int K)
 {
   double g1, g2, g3, s0;
@@ -252,7 +458,7 @@ double slowness(double x,double y, double z, double slow_x0, double slow_y0,doub
       s0 = 1.0;
   #else
       s0 = 1.68;
-      s0 =1/((1.0/s0+g1*(x-slow_x0)+g2*(y-slow_y0)+g3*(z-slow_z0)));
+      s0 =1/((1.0/s0+ivelo9_grad_scale*(g1*(x-slow_x0)+g2*(y-slow_y0)+g3*(z-slow_z0))));
   #endif
   }else if(ivelo==10){
       s0=2.0*sqrt(1+A*z);
@@ -571,6 +777,12 @@ public:
   int _bdiag_format = 1; // diagonal blocks: 1 HODLR, 7 H2 (format 7, needs a GPU evaluator for H2_use_gpu)
   double _precon_time = 0.0; // wall time spent applying the block-diagonal preconditioner
   long _precon_calls = 0;
+  // restricted additive Schwarz (bdiag_overlap > 0): per local block, the tensor ids of its halo points (after its
+  // own points in the block's ordering); per routing entry, a local point that is in another block's halo: its local
+  // position, the block's root rank, global id and the point's position in the block
+  int _bdiag_overlap = 0;
+  std::vector<std::vector<int> > _halo_tensor;
+  std::vector<int> _halo_local, _halo_dest, _halo_gid, _halo_pos;
   int _nscatter = 0;
   double _background_s0 = 2.0;
   double _scatterer_tol = 1e-12;
@@ -768,7 +980,9 @@ void assemble_fromD1D2Tau(double x1,double x2,double y1,double y2,double z1,doub
 void assemble_fromD1D2Tau_s2s(double x1,double x2,double y1,double y2, double z1,double z2, int col_index_1based, _Complex double* output, C_QuantApp_BF* Q){
 
     double s0=2;
-    int self = sqrt(pow(x1-x2,2)+pow(y1-y2,2)+pow(z1-z2,2))<1e-20? 1:0;
+    const double dx = x1-x2, dy = y1-y2, dz = z1-z2;
+    const double r2 = dx*dx + dy*dy + dz*dz;
+    int self = r2<1e-40? 1:0;
     if(self==1){
       Q->SampleSelf(x1, y1, z1, x2, y2, z2, output);
       if(Q->_scaleGreen==0){
@@ -783,10 +997,18 @@ void assemble_fromD1D2Tau_s2s(double x1,double x2,double y1,double y2, double z1
       }else{
         *output = -*output ;
       }
+    }else if(Q->_d==3){
+      // -Babich(3, w, s0/(2 pi), 0, s0 r) in closed form, -e^{i k r}/(4 pi r) with k = s0 w.  Babich evaluates two
+      // Hankel functions (orders -1/2 and 1/2, the second for a zero coefficient) and about ten transcendental
+      // functions an entry.  The GPU evaluator's HelmholtzEntry is the same expression.
+      const double r = sqrt(r2);
+      const double amp = -1.0/(4.0*pi*r);
+      const double kr = s0*Q->_w*r;
+      *output = amp*cos(kr) + Im*(amp*sin(kr));
     }else{
       double D1 =s0/2.0/pi; //fr[nr*nc + idxr+idxc*nr];
       double D2 =0;// fr[nr*nc*2 + idxr+idxc*nr];
-      double tau = sqrt(pow(s0,2)* (pow(x1-x2,2) + pow(y1-y2,2) + pow(z1-z2,2)));
+      double tau = sqrt(pow(s0,2)*r2);
       *output =-Babich(Q->_d, Q->_w, D1, D2, tau);
     }
 }
@@ -820,6 +1042,19 @@ void assemble_fromD1D2Tau_block_s2s(int nth, int nr, int nc, double* x1,double* 
       int col_index_1based = col_indices_1based ? col_indices_1based[idxc] : -1;
       assemble_fromD1D2Tau_s2s(x1[idxr],x2[idxc],y1[idxr],y2[idxc],z1[idxr],z2[idxc],col_index_1based,&valtmp, Q);
       alldat_loc[idx_val_map[nth]+idxr+idxc*nr]=valtmp;
+    }
+}
+
+
+// assemble_fromD1D2Tau_block_s2s without its inner parallel loop, for C_FuncZmnBlock_BF_S2S (its caller's loop over
+// blocks is the parallel one)
+void assemble_diag_block_block(int nth, int nr, int nc, double* x1,double* x2,double* y1,double* y2,double* z1,double* z2, const int* col_indices_1based, _Complex double* alldat_loc, int64_t* idx_val_map, C_QuantApp_BF* Q){
+    for (int idxc=0;idxc<nc;idxc++){
+      int col_index_1based = col_indices_1based ? col_indices_1based[idxc] : -1;
+      for (int idxr=0;idxr<nr;idxr++){
+        assemble_fromD1D2Tau_s2s(x1[idxr],x2[idxc],y1[idxr],y2[idxc],z1[idxr],z2[idxc],col_index_1based,
+                                 &alldat_loc[idx_val_map[nth]+idxr+idxc*nr], Q);
+      }
     }
 }
 
@@ -1272,7 +1507,7 @@ inline void C_FuncZmnBlock_BF_S2S(int* Ninter, int* Nallrows, int* Nallcols, int
         z2[idxc] = Q->_data[(n-1) * Q->_d+2];
       }
 
-      assemble_fromD1D2Tau_block_s2s(nn1,nr,nc,x1,x2,y1,y2,z1,z2,allcols+idx_col_map[nn1],alldat_loc,idx_val_map.data(),fr,Q);
+      assemble_diag_block_block(nn1,nr,nc,x1,x2,y1,y2,z1,z2,allcols+idx_col_map[nn1],alldat_loc,idx_val_map.data(),Q);
       free(x1);
       free(y1);
       free(z1);
@@ -1333,6 +1568,18 @@ inline void C_FuncApplyDiagPrecond(int* Ndim_p, char const *trans, int *nin, int
           send_meta_by_rank[dest].push_back(i0);
           send_vals_by_rank[dest].push_back(xin[i0+nth*Npo]);
         }
+      }
+    }
+    // restricted additive Schwarz: the local points in other blocks' halos go to those blocks too (no return)
+    for(size_t hh=0; hh<Q->_halo_local.size(); hh++){
+      int i0 = Q->_halo_local[hh];
+      int dest = Q->_halo_dest[hh];
+      for (int nth=0; nth<*nvec; nth++){
+        send_meta_by_rank[dest].push_back(Q->_halo_gid[hh]);
+        send_meta_by_rank[dest].push_back(Q->_halo_pos[hh]);
+        send_meta_by_rank[dest].push_back(nth);
+        send_meta_by_rank[dest].push_back(-1);
+        send_vals_by_rank[dest].push_back(xin[i0+nth*Npo]);
       }
     }
 
@@ -1408,7 +1655,9 @@ inline void C_FuncApplyDiagPrecond(int* Ndim_p, char const *trans, int *nin, int
         cout<<"inconsistent diagonal block size in C_FuncApplyDiagPrecond"<<endl;
         exit(1);
       }
-      int cnt_block = (*nvec)*Npo_diag;
+      // the grown block (restricted additive Schwarz): own points, then halo; only own points are returned
+      int Npo_ext = Npo_diag + (Q->_halo_tensor.empty() ? 0 : static_cast<int>(Q->_halo_tensor[bb].size()));
+      int cnt_block = (*nvec)*Npo_ext;
       int cnt_diag = (*nvec)*Nloc_diag;
       vector<_Complex double> block_in(cnt_block,{0.0,0.0});
       vector<_Complex double> block_out(cnt_block,{0.0,0.0});
@@ -1422,8 +1671,8 @@ inline void C_FuncApplyDiagPrecond(int* Ndim_p, char const *trans, int *nin, int
             int item = it->second[qq];
             int pos = recv_meta[4*item+1];
             int nth = recv_meta[4*item+2];
-            if(pos >= 0 && pos < Npo_diag && nth >= 0 && nth < *nvec){
-              block_in[pos+nth*Npo_diag] = recv_vals[item];
+            if(pos >= 0 && pos < Npo_ext && nth >= 0 && nth < *nvec){
+              block_in[pos+nth*Npo_ext] = recv_vals[item];
             }
           }
         }
@@ -1435,7 +1684,7 @@ inline void C_FuncApplyDiagPrecond(int* Ndim_p, char const *trans, int *nin, int
         int ii;
         z_c_bpack_new2old(Q->quant_ptr_diags[bb]->msh_bf,&i_new_diag_scalar,&ii);
         for (int nth=0; nth<*nvec; nth++){
-          xin_diag[i0+nth*Nloc_diag] = block_in[(ii-1)+nth*Npo_diag];
+          xin_diag[i0+nth*Nloc_diag] = block_in[(ii-1)+nth*Npo_ext];
         }
       }
 
@@ -1451,7 +1700,7 @@ inline void C_FuncApplyDiagPrecond(int* Ndim_p, char const *trans, int *nin, int
         int ii;
         z_c_bpack_new2old(Q->quant_ptr_diags[bb]->msh_bf,&i_new_diag_scalar,&ii);
         for (int nth=0; nth<*nvec; nth++){
-          block_out[(ii-1)+nth*Npo_diag] = xout_diag[i0+nth*Nloc_diag];
+          block_out[(ii-1)+nth*Npo_ext] = xout_diag[i0+nth*Nloc_diag];
         }
       }
 
@@ -1472,10 +1721,10 @@ inline void C_FuncApplyDiagPrecond(int* Ndim_p, char const *trans, int *nin, int
             int pos = recv_meta[4*item+1];
             int nth = recv_meta[4*item+2];
             int local_i0 = recv_meta[4*item+3];
-            if(pos >= 0 && pos < Npo_diag && nth >= 0 && nth < *nvec){
+            if(pos >= 0 && pos < Npo_diag && local_i0 >= 0 && nth >= 0 && nth < *nvec){
               ret_meta_by_rank[src].push_back(local_i0);
               ret_meta_by_rank[src].push_back(nth);
-              ret_vals_by_rank[src].push_back(block_out_sum[pos+nth*Npo_diag]);
+              ret_vals_by_rank[src].push_back(block_out_sum[pos+nth*Npo_ext]);
             }
           }
         }
@@ -1703,6 +1952,7 @@ if(myrank==master_rank){
   int bdiag_knn = 20;
   int bdiag_elem_extract = 2;
   int bdiag_format = 1; // diagonal blocks: 1 HODLR, 7 H2
+  int bdiag_overlap = 0; // 0: block Jacobi; > 0: restricted additive Schwarz, blocks grown by this many grid layers
   bool bdiag_gpu = false; // diagonal blocks on the GPU (H2_use_gpu / HODLR_use_gpu): register their GPU entry evaluator
   double bdiag_tol_rand = 1e-2;
   double bdiag_tol_Rdetect = 1e-3;
@@ -1767,6 +2017,8 @@ if(myrank==master_rank){
       {"bdiag_sample_para_outer",        required_argument, 0, 42},
       {"bdiag_elem_extract",        required_argument, 0, 43},
       {"bdiag_format",        required_argument, 0, 44},
+      {"bdiag_overlap",        required_argument, 0, 45},
+      {"ivelo9_grad_scale",        required_argument, 0, 46},
       {"use_fft_circulant",        required_argument, 0, 100},
       {"fftw_plan_mode",        required_argument, 0, 101},
       {"fft_plan_mode",        required_argument, 0, 102},
@@ -1955,6 +2207,14 @@ if(myrank==master_rank){
     case 44: {
       std::istringstream iss(optarg);
       iss >> bdiag_format;
+    } break;
+    case 45: {
+      std::istringstream iss(optarg);
+      iss >> bdiag_overlap;
+    } break;
+    case 46: {
+      std::istringstream iss(optarg);
+      iss >> ivelo9_grad_scale;
     } break;
     case 100: {
       // BPACK consumes this option from the original argv below.
@@ -2220,8 +2480,6 @@ if(myrank==master_rank){
     int64_t Ntot_s2s = static_cast<int64_t>(Nx_s)*Ny_s*Nz_s;
     double background_s0 = 2.0;
     double scatterer_tol = 1e-12;
-    vector<int> scatter_tensor_root;
-    vector<double> data_geo_scatterer;
     int Nscatter = 0;
     /*****************************************************************/
     int* perms_bf_s2s = new int[Nmax_s*Ndim]; //permutation vector returned by HODLR
@@ -2241,6 +2499,7 @@ if(myrank==master_rank){
     quant_ptr_bf_s2s=new C_QuantApp_BF(data_geo, Ndim, Nx_s, Ny_s, Nz_s, static_cast<int>(Iint), static_cast<int>(Jint), static_cast<int>(Kint), 1, w, x0min, x0max, y0min, y0max, z0min, z0max, h, dl, ivelo,&slowness_array,rmax,verbose,vs, bdiag_precon, x_cheb,y_cheb,z_cheb,u1_square_int_cheb,D1_int_cheb,D2_int_cheb);
     quant_ptr_bf_s2s->_bdiag_level = bdiag_level;
     quant_ptr_bf_s2s->_bdiag_format = bdiag_format;
+    quant_ptr_bf_s2s->_bdiag_overlap = bdiag_overlap;
     quant_ptr_bf_s2s->_nscatter = Nscatter;
     quant_ptr_bf_s2s->_background_s0 = background_s0;
     quant_ptr_bf_s2s->_scatterer_tol = scatterer_tol;
@@ -2287,8 +2546,6 @@ if(myrank==master_rank){
       vector<pair<int64_t,int> >().swap(local_slowness_requests);
     }
 
-    vector<int> active_tensor_ids;
-    if(bdiag_precon==1) active_tensor_ids.reserve(nloc_s2s);
     for (int i=0; i<nloc_s2s; i++){
       double s1 = quant_ptr_bf_s2s->_local_slowness[i];
       smax_loc = max(smax_loc,s1);
@@ -2300,7 +2557,6 @@ if(myrank==master_rank){
         double k0 = background_s0*w;
         double coef = pow(k0,2.0)*(pow(s1/background_s0,2.0)-1);
         quant_ptr_bf_s2s->_local_inv_mass_coef[i] = 1.0/(pow(h,3.0)*coef);
-        if(bdiag_precon==1) active_tensor_ids.push_back(quant_ptr_bf_s2s->_local_tensor_ids[i]);
       }
     }
 
@@ -2320,43 +2576,9 @@ if(myrank==master_rank){
     if(myrank==0){
       cout<<"smax: "<<smax<<" PPW: "<<2*pi/(w*smax)/h<<" PPW(s0): "<<2*pi/(w*s0)/h<<" From: "<< Nx_s <<" x "<< Ny_s <<" x "<< Nz_s <<" To: "<< Nx_s <<" x "<< Ny_s <<" x "<< Nz_s<<endl;
       cout<<"Scatterer unknowns: "<<Nscatter_glo<<" out of "<<Ntot_s2s<<endl;
+      if(ivelo==9 && ivelo9_grad_scale != 1.0) cout<<"ivelo 9 velocity gradient scaled by "<<ivelo9_grad_scale<<endl;
     }
 
-    if(bdiag_precon==1){
-      int active_count = static_cast<int>(active_tensor_ids.size());
-      vector<int> active_counts(size,0), active_displs(size,0);
-      MPI_Gather(&active_count, 1, MPI_INT, active_counts.data(), 1, MPI_INT, master_rank, MPI_COMM_WORLD);
-      vector<int> gathered_tensor_ids;
-      if(myrank==master_rank){
-        int total_active = 0;
-        for(int rr=0; rr<size; rr++){
-          active_displs[rr] = total_active;
-          total_active += active_counts[rr];
-        }
-        gathered_tensor_ids.resize(total_active);
-      }
-      MPI_Gatherv(active_tensor_ids.empty() ? nullptr : active_tensor_ids.data(), active_count, MPI_INT,
-                  myrank==master_rank ? gathered_tensor_ids.data() : nullptr,
-                  active_counts.data(), active_displs.data(), MPI_INT, master_rank, MPI_COMM_WORLD);
-      if(myrank==master_rank){
-        std::sort(gathered_tensor_ids.begin(), gathered_tensor_ids.end());
-        gathered_tensor_ids.erase(std::unique(gathered_tensor_ids.begin(), gathered_tensor_ids.end()), gathered_tensor_ids.end());
-        if(static_cast<int>(gathered_tensor_ids.size()) != Nscatter){
-          cout<<"Gathered "<<gathered_tensor_ids.size()<<" unique scatterer ids but expected "<<Nscatter<<endl;
-          exit(1);
-        }
-        scatter_tensor_root.swap(gathered_tensor_ids);
-        data_geo_scatterer.resize(static_cast<size_t>(Ndim)*scatter_tensor_root.size());
-        for(size_t ii=0; ii<scatter_tensor_root.size(); ii++){
-          int tensor_scalar = scatter_tensor_root[ii];
-          int tensor_md[Ndim];
-          z_c_bpack_singleindex_to_multiindex(&Ndim,Ns_s,&tensor_scalar,tensor_md);
-          data_geo_scatterer[ii*Ndim] = data_geo[(tensor_md[0]-1) * Ndim];
-          data_geo_scatterer[ii*Ndim+1] = data_geo[(tensor_md[1]-1) * Ndim+1];
-          data_geo_scatterer[ii*Ndim+2] = data_geo[(tensor_md[2]-1) * Ndim+2];
-        }
-      }
-    }
 	  z_c_bpack_printoption(&option_bf,&ptree_bf);
     z_c_bpack_md_construct_element_compute(&Ndim,&bmat_bf_s2s, &option_bf, &stats_bf_s2s, &msh_bf_s2s, &kerquant_bf_s2s, &ptree_bf, &C_FuncZmn_BF_S2S_MD, &C_FuncZmnBlock_BF_S2S_MD, quant_ptr_bf_s2s);
 
@@ -2475,9 +2697,11 @@ if(myrank==master_rank){
 	    int nlocal_active = static_cast<int>(active_tensor_old.size());
 	    double dummy_geo_scatterer = 0.0;
 	    int dummy_scatter_tensor_root = 0;
-	    double* data_geo_scatterer_ptr = (myrank==master_rank && !data_geo_scatterer.empty()) ? data_geo_scatterer.data() : &dummy_geo_scatterer;
-	    int* scatter_tensor_root_ptr = (myrank==master_rank && !scatter_tensor_root.empty()) ? scatter_tensor_root.data() : &dummy_scatter_tensor_root;
+	    // (the library's split is not run: no coordinates or scatterer ids on rank 0)
+	    double* data_geo_scatterer_ptr = &dummy_geo_scatterer;
+	    int* scatter_tensor_root_ptr = &dummy_scatter_tensor_root;
 
+	    double t_discovery0 = MPI_Wtime();
 	    z_c_bpack_construct_init_diaglevel_simple(&Nscatter, &Ndim, data_geo_scatterer_ptr, scatter_tensor_root_ptr,
 	        &(quant_ptr_bf_s2s->_bdiag_level), &nlocal_active, active_tensor_old.data(),
 	        &nblock, dummy_block_info, &diag_perm_size, dummy_diag_perm, mesh_range,
@@ -2491,7 +2715,9 @@ if(myrank==master_rank){
 	    vector<int> active_diag_pos(nlocal_active,-1);
 	    int nblock_capacity = nblock;
 	    int diag_perm_capacity = diag_perm_size;
-	    route_capacity = nlocal_active;
+	    // the second call fills block_info and mesh_range; with route_capacity -1 every rank returns before the
+	    // library's serial split (all points sorted on rank 0), which discover_diag_blocks does distributed
+	    route_capacity = -1;
 	    z_c_bpack_construct_init_diaglevel_simple(&Nscatter, &Ndim, data_geo_scatterer_ptr, scatter_tensor_root_ptr,
 	        &(quant_ptr_bf_s2s->_bdiag_level), &nlocal_active, active_tensor_old.data(),
 	        &nblock_capacity, quant_ptr_bf_s2s->_diag_block_info.data(),
@@ -2502,8 +2728,14 @@ if(myrank==master_rank){
 	      cout<<"diagonal block metadata changed between simple constructor calls"<<endl;
 	      exit(1);
 	    }
-	    vector<double>().swap(data_geo_scatterer);
-	    vector<int>().swap(scatter_tensor_root);
+	    discover_diag_blocks(Ndim, Ns_s, quant_ptr_bf_s2s->_bdiag_level, active_tensor_old,
+	                         quant_ptr_bf_s2s->_diag_block_info, nblock, diag_tensor_perm, active_diag_root,
+	                         active_diag_gid, active_diag_pos, MPI_COMM_WORLD);
+	    {
+	      double t_disc = MPI_Wtime() - t_discovery0, t_max = 0.0;
+	      MPI_Reduce(&t_disc, &t_max, 1, MPI_DOUBLE, MPI_MAX, master_rank, MPI_COMM_WORLD);
+	      if(myrank==master_rank) std::cout<<"Diagonal block discovery: "<<nblock<<" local blocks on rank 0, "<<t_max<<" s"<<std::endl;
+	    }
 
     // The lightweight scatterer tree above is used only to discover diagonal blocks.
     // Enable the high-frequency HODBF options only for the smaller blocks.
@@ -2547,6 +2779,125 @@ if(myrank==master_rank){
 	      quant_ptr_bf_s2s->_local_diag_pos[i] = active_diag_pos[ii];
 	    }
 
+    // Restricted additive Schwarz (bdiag_overlap > 0): a block's matrix is built on its points and a halo, the
+    // points of other blocks within bdiag_overlap grid layers of its box (the bounding box of its grid indices;
+    // the blocks' boxes do not overlap, as the bisection's cells do not); the preconditioner solves on the grown
+    // block and keeps the solution on the block's own points.  A halo point's value goes to the block's root with
+    // the block's input, from the rank that owns the point.
+    quant_ptr_bf_s2s->_halo_tensor.assign(nblock, vector<int>());
+    if(bdiag_overlap > 0){
+      // the boxes of the blocks this rank is the root of, gathered on every rank: gid, root, lo[3], hi[3]
+      vector<int> mine;
+      for(int bb=0, off=0; bb<nblock; bb++){
+        int* info = quant_ptr_bf_s2s->_diag_block_info.data() + bb*quant_ptr_bf_s2s->_diag_block_stride;
+        int n = info[1] - info[0];
+        if(myrank == info[4]){
+          int lo[3] = {INT_MAX, INT_MAX, INT_MAX}, hi[3] = {0, 0, 0};
+          for(int ii=0; ii<n; ii++){
+            int ts = diag_tensor_perm[off+ii], md[3];
+            z_c_bpack_singleindex_to_multiindex(&Ndim,Ns_s,&ts,md);
+            for(int d=0; d<3; d++){ lo[d] = min(lo[d],md[d]); hi[d] = max(hi[d],md[d]); }
+          }
+          mine.insert(mine.end(), {info[7], info[4], lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]});
+        }
+        off += n;
+      }
+      int nmine = static_cast<int>(mine.size());
+      vector<int> box_counts(size), box_displs(size);
+      MPI_Allgather(&nmine, 1, MPI_INT, box_counts.data(), 1, MPI_INT, MPI_COMM_WORLD);
+      int box_total = 0;
+      for(int rr=0; rr<size; rr++){ box_displs[rr] = box_total; box_total += box_counts[rr]; }
+      vector<int> boxes(box_total);
+      MPI_Allgatherv(mine.data(), nmine, MPI_INT, boxes.data(), box_counts.data(), box_displs.data(), MPI_INT, MPI_COMM_WORLD);
+
+      // this rank's points: tensor id -> local position, and the bounds of their grid indices
+      unordered_map<int,int> local_of;
+      local_of.reserve(2*static_cast<size_t>(nlocal_active));
+      int llo[3] = {INT_MAX, INT_MAX, INT_MAX}, lhi[3] = {0, 0, 0};
+      for(int ii=0; ii<nlocal_active; ii++){
+        int ts = active_tensor_old[ii], md[3];
+        local_of[ts] = active_local_pos[ii];
+        z_c_bpack_singleindex_to_multiindex(&Ndim,Ns_s,&ts,md);
+        for(int d=0; d<3; d++){ llo[d] = min(llo[d],md[d]); lhi[d] = max(lhi[d],md[d]); }
+      }
+
+      // this rank's points in each block's halo: (gid, tensor id) to the block's root
+      vector<vector<int> > req_by_rank(size), req_local_by_rank(size);
+      for(int b=0; b<box_total/8 && nlocal_active>0; b++){
+        const int* B = boxes.data() + 8*b;
+        int glo[3], ghi[3];
+        bool empty = false;
+        for(int d=0; d<3; d++){
+          glo[d] = max(max(B[2+d]-bdiag_overlap, 1), llo[d]);
+          ghi[d] = min(min(B[5+d]+bdiag_overlap, Ns_s[d]), lhi[d]);
+          if(glo[d] > ghi[d]) empty = true;
+        }
+        if(empty) continue;
+        for(int z=glo[2]; z<=ghi[2]; z++) for(int y=glo[1]; y<=ghi[1]; y++) for(int x=glo[0]; x<=ghi[0]; x++){
+          if(x>=B[2] && x<=B[5] && y>=B[3] && y<=B[6] && z>=B[4] && z<=B[7]) continue;  // (the block's own)
+          int md[3] = {x, y, z}, ts;
+          z_c_bpack_multiindex_to_singleindex(&Ndim,Ns_s,&ts,md);
+          auto it = local_of.find(ts);
+          if(it == local_of.end()) continue;  // (another rank's, or not a scatterer point)
+          req_by_rank[B[1]].push_back(B[0]);
+          req_by_rank[B[1]].push_back(ts);
+          req_local_by_rank[B[1]].push_back(it->second);
+        }
+      }
+      vector<int> req_send_counts(size), req_recv_counts(size), req_send_displs(size), req_recv_displs(size);
+      for(int rr=0; rr<size; rr++) req_send_counts[rr] = static_cast<int>(req_by_rank[rr].size());
+      MPI_Alltoall(req_send_counts.data(), 1, MPI_INT, req_recv_counts.data(), 1, MPI_INT, MPI_COMM_WORLD);
+      int req_send_total = 0, req_recv_total = 0;
+      for(int rr=0; rr<size; rr++){
+        req_send_displs[rr] = req_send_total; req_send_total += req_send_counts[rr];
+        req_recv_displs[rr] = req_recv_total; req_recv_total += req_recv_counts[rr];
+      }
+      vector<int> req_send, req_recv(req_recv_total);
+      req_send.reserve(req_send_total);
+      for(int rr=0; rr<size; rr++) req_send.insert(req_send.end(), req_by_rank[rr].begin(), req_by_rank[rr].end());
+      MPI_Alltoallv(req_send.data(), req_send_counts.data(), req_send_displs.data(), MPI_INT,
+                    req_recv.data(), req_recv_counts.data(), req_recv_displs.data(), MPI_INT, MPI_COMM_WORLD);
+
+      // at the roots: a block's halo is its requested points in tensor-id order, after its own points
+      unordered_map<int,int> local_block_of;  // gid -> bb, the blocks this rank is the root of
+      vector<int> own_size(nblock, 0);
+      for(int bb=0; bb<nblock; bb++){
+        int* info = quant_ptr_bf_s2s->_diag_block_info.data() + bb*quant_ptr_bf_s2s->_diag_block_stride;
+        own_size[bb] = info[1] - info[0];
+        if(myrank == info[4]) local_block_of[info[7]] = bb;
+      }
+      for(int k=0; k<req_recv_total/2; k++) quant_ptr_bf_s2s->_halo_tensor[local_block_of.at(req_recv[2*k])].push_back(req_recv[2*k+1]);
+      for(auto& h : quant_ptr_bf_s2s->_halo_tensor){
+        sort(h.begin(), h.end());
+        h.erase(unique(h.begin(), h.end()), h.end());
+      }
+      vector<int> pos_reply(req_recv_total/2);
+      for(int k=0; k<req_recv_total/2; k++){
+        int bb = local_block_of.at(req_recv[2*k]);
+        const vector<int>& h = quant_ptr_bf_s2s->_halo_tensor[bb];
+        pos_reply[k] = own_size[bb] + static_cast<int>(lower_bound(h.begin(), h.end(), req_recv[2*k+1]) - h.begin());
+      }
+      // back to the owners: each requested point's position in its block
+      vector<int> pos_send_counts(size), pos_send_displs(size), pos_recv_counts(size), pos_recv_displs(size);
+      for(int rr=0; rr<size; rr++){
+        pos_send_counts[rr] = req_recv_counts[rr]/2; pos_send_displs[rr] = req_recv_displs[rr]/2;
+        pos_recv_counts[rr] = req_send_counts[rr]/2; pos_recv_displs[rr] = req_send_displs[rr]/2;
+      }
+      vector<int> pos_recv(req_send_total/2);
+      MPI_Alltoallv(pos_reply.data(), pos_send_counts.data(), pos_send_displs.data(), MPI_INT,
+                    pos_recv.data(), pos_recv_counts.data(), pos_recv_displs.data(), MPI_INT, MPI_COMM_WORLD);
+      quant_ptr_bf_s2s->_halo_local.clear(); quant_ptr_bf_s2s->_halo_dest.clear();
+      quant_ptr_bf_s2s->_halo_gid.clear(); quant_ptr_bf_s2s->_halo_pos.clear();
+      for(int rr=0; rr<size; rr++){
+        for(size_t k=0; k<req_local_by_rank[rr].size(); k++){
+          quant_ptr_bf_s2s->_halo_local.push_back(req_local_by_rank[rr][k]);
+          quant_ptr_bf_s2s->_halo_dest.push_back(rr);
+          quant_ptr_bf_s2s->_halo_gid.push_back(req_by_rank[rr][2*k]);
+          quant_ptr_bf_s2s->_halo_pos.push_back(pos_recv[pos_recv_displs[rr]+k]);
+        }
+      }
+    }
+
     quant_ptr_bf_s2s->_diag_block_offsets.assign(nblock+1,0);
     for (int bb=0; bb<nblock; bb++){
       int* block_info = quant_ptr_bf_s2s->_diag_block_info.data() + bb*quant_ptr_bf_s2s->_diag_block_stride;
@@ -2574,9 +2925,10 @@ if(myrank==master_rank){
       int* block_info = quant_ptr_bf_s2s->_diag_block_info.data() + bb*quant_ptr_bf_s2s->_diag_block_stride;
       int head_g = block_info[0];
       int tail_g = block_info[1];
-      int Npo = tail_g - head_g;
+      int Npo_own = tail_g - head_g;
+      int Npo = Npo_own;  // (with bdiag_overlap > 0, its halo too, below)
       int block_offset = quant_ptr_bf_s2s->_diag_block_offsets[bb];
-      quant_ptr_bf_s2s->_diag_npo[bb] = Npo;
+      quant_ptr_bf_s2s->_diag_npo[bb] = Npo_own;
       data_geo_diag.resize(Ndim*Npo);
       vector<double> point_slowness(Npo,background_s0);
       vector<pair<int64_t,int> > diag_slowness_requests;
@@ -2599,14 +2951,29 @@ if(myrank==master_rank){
       }
       MPI_Fint Fcomm_diag = MPI_Comm_c2f(quant_ptr_bf_s2s->_diag_comms[bb]);
       z_c_bpack_createptree(&pgrp_nproc, groups_diag.data(), &Fcomm_diag, &(quant_ptr_bf_s2s->ptree_diags[bb]));
+      if(bdiag_overlap > 0){
+        // the grown block: its own points, then its halo (the block's other ranks get it from its root)
+        vector<int>& halo = quant_ptr_bf_s2s->_halo_tensor[bb];
+        if(pgrp_nproc > 1){
+          int nh = static_cast<int>(halo.size());
+          MPI_Bcast(&nh, 1, MPI_INT, 0, quant_ptr_bf_s2s->_diag_comms[bb]);
+          halo.resize(nh);
+          MPI_Bcast(halo.data(), nh, MPI_INT, 0, quant_ptr_bf_s2s->_diag_comms[bb]);
+        }
+        Npo = Npo_own + static_cast<int>(halo.size());
+        data_geo_diag.resize(Ndim*Npo);
+        point_slowness.assign(Npo, background_s0);
+      }
 
       if(myrank == pgrp_head && (bdiag_format!=7 || global_block_id <= 4)){
-        std::cout<<"Rank "<< myrank <<": Constructing "<<(bdiag_format==7?"H2":"HODBF")<<" for diagonal block: "<< bb+1 << " out of " << nblock <<". Npo: "<< Npo << " MPI ranks: " << pgrp_nproc <<std::endl;
+        std::cout<<"Rank "<< myrank <<": Constructing "<<(bdiag_format==7?"H2":"HODBF")<<" for diagonal block: "<< bb+1 << " out of " << nblock <<". Npo: "<< Npo_own;
+        if(Npo > Npo_own) std::cout<<" + "<<Npo-Npo_own<<" halo";
+        std::cout<<" MPI ranks: " << pgrp_nproc <<std::endl;
       }
 
       for(int ii=0;ii<Npo;ii++){
-        int tensor_scalar = diag_tensor_perm[block_offset + ii];
-        quant_ptr_bf_s2s->_diag_tensor_ids[block_offset + ii] = tensor_scalar;
+        int tensor_scalar = ii < Npo_own ? diag_tensor_perm[block_offset + ii] : quant_ptr_bf_s2s->_halo_tensor[bb][ii-Npo_own];
+        if(ii < Npo_own) quant_ptr_bf_s2s->_diag_tensor_ids[block_offset + ii] = tensor_scalar;
 
         int tensor_scalar_tmp = tensor_scalar;
         int tensor_md[Ndim];
@@ -2683,6 +3050,13 @@ if(myrank==master_rank){
   	z_c_bpack_construct_element_compute(&(quant_ptr_bf_s2s->bmat_diags[bb]), &(quant_ptr_bf_s2s->option_diag), &(quant_ptr_bf_s2s->stats_diags[bb]), &(quant_ptr_bf_s2s->msh_diags[bb]), &(quant_ptr_bf_s2s->kerquant_diags[bb]), &(quant_ptr_bf_s2s->ptree_diags[bb]), &C_FuncZmn_BF_S2S, &C_FuncZmnBlock_BF_S2S, quant_ptr_bf_s2s->quant_ptr_diags[bb]);
     z_c_bpack_factor(&(quant_ptr_bf_s2s->bmat_diags[bb]),&(quant_ptr_bf_s2s->option_diag),&(quant_ptr_bf_s2s->stats_diags[bb]),&(quant_ptr_bf_s2s->ptree_diags[bb]),&(quant_ptr_bf_s2s->msh_diags[bb]));
     t_block_setup += MPI_Wtime() - t_block0;
+    if(global_block_id == 1 && myrank == pgrp_head){
+      // the share of the block's entries (the GPU evaluator, or the C callbacks on the CPU) in its setup
+      double t_entry = 0.0;
+      z_c_bpack_getstats(&(quant_ptr_bf_s2s->stats_diags[bb]), "Time_Entry", &t_entry);
+      std::cout<<"Diagonal block 1: construction+factorization "<<MPI_Wtime() - t_block0<<" s, of which entry evaluation "
+               <<t_entry<<" s"<<std::endl;
+    }
 
     quant_ptr_bf_s2s->quant_ptr_diags[bb]->msh_bf = &(quant_ptr_bf_s2s->msh_diags[bb]);
 
@@ -2697,6 +3071,21 @@ if(myrank==master_rank){
         MPI_Reduce(&nblock, &nbsum, 1, MPI_INT, MPI_SUM, master_rank, MPI_COMM_WORLD);
         if(myrank==master_rank) std::cout<<"Block-diagonal preconditioner ("<<(bdiag_format==7?"H2":"HODBF")<<"): "<<nbsum<<" blocks, up to "<<nbmax
           <<" per rank; construction+factorization max "<<tmax<<" s, mean "<<tsum/size<<" s per rank"<<std::endl;
+        if(bdiag_overlap > 0){
+          // the halos, counted at the blocks' roots
+          double own_halo[2] = {0.0, 0.0}, halo_max = 0.0;
+          for(int bb=0; bb<nblock; bb++){
+            int* info = quant_ptr_bf_s2s->_diag_block_info.data() + bb*quant_ptr_bf_s2s->_diag_block_stride;
+            if(myrank != info[4]) continue;
+            own_halo[0] += info[1] - info[0];
+            own_halo[1] += quant_ptr_bf_s2s->_halo_tensor[bb].size();
+            halo_max = max(halo_max, static_cast<double>(quant_ptr_bf_s2s->_halo_tensor[bb].size()));
+          }
+          MPI_Allreduce(MPI_IN_PLACE, own_halo, 2, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+          MPI_Allreduce(MPI_IN_PLACE, &halo_max, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+          if(myrank==master_rank) std::cout<<"  restricted additive Schwarz, overlap "<<bdiag_overlap<<" grid layers: halo points per block mean "
+            <<own_halo[1]/max(nbsum,1)<<", max "<<halo_max<<" ("<<100.0*own_halo[1]/max(own_halo[0],1.0)<<"% of the blocks' own points)"<<std::endl;
+        }
       }
 	  }
 
@@ -2729,6 +3118,20 @@ if(myrank==master_rank){
 
     z_c_bpack_md_iter_usermatvec_precon(&Ndim, x_s.data(),b_s.data(),myseg_s2s,&nvec,&option_bf, &stats_bf_s2s, &ptree_bf, &kerquant_s2s, &C_FuncHMatVec_MD, &C_FuncApplyDiagPrecond, quant_ptr_bf_s2s);
     z_c_bpack_deletekernelquant(&kerquant_s2s);
+    {
+      // the true relative residual ||b - A x|| / ||b|| (with bdiag_precon=1 the iteration's error is
+      // that of the preconditioned system)
+      vector<_Complex double> ax_s(x_s.size(),{0.0,0.0});
+      C_FuncHMatVec_MD(&Ndim,"N",myseg_s2s,myseg_s2s,&nvec,x_s.data(),ax_s.data(),quant_ptr_bf_s2s);
+      double sums[2] = {0.0, 0.0};
+      for(size_t i=0; i<x_s.size(); i++){
+        _Complex double r = b_s[i]-ax_s[i];
+        sums[0] += __real__ r*__real__ r + __imag__ r*__imag__ r;
+        sums[1] += __real__ b_s[i]*__real__ b_s[i] + __imag__ b_s[i]*__imag__ b_s[i];
+      }
+      MPI_Allreduce(MPI_IN_PLACE, sums, 2, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+      if(myrank==master_rank) std::cout<<"True relative residual ||b - A x|| / ||b||: "<<(sums[1]>0.0 ? sqrt(sums[0]/sums[1]) : 0.0)<<std::endl;
+    }
 
     for (int i=0; i<product(myseg_s2s,Ndim); i++){
       if(quant_ptr_bf_s2s->LocalScatterIndex(i) <= 0){

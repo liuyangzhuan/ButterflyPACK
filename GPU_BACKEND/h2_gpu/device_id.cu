@@ -373,6 +373,7 @@ __global__ void __launch_bounds__(kThreads) qrcp_kernel(const QrcpItemT<T>* item
             if (lane == 0) {
                 s_tau = tau;
                 s_beta = beta;
+                if (item.tau != nullptr) item.tau[i] = tau;
             }
         }
         __syncthreads();
@@ -638,6 +639,7 @@ qrcp_coop_kernel(const QrcpItemT<T>* items, int count, int cpb, int max_n, doubl
                         if (i == 0) box_d[3] = fabs(beta);
                         const double r00 = i == 0 ? fabs(beta) : ldg2(box_d + 3);
                         put_tau(box_d, tau);
+                        if (item.tau != nullptr) item.tau[i] = tau;
                         box_d[2] = beta;
                         if (!(fabs(beta) > fmax(tol * r00, abs_floor))) {  // rank rule of compute_id_complex
                             box_i[0] = 1;

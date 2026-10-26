@@ -127,6 +127,36 @@ typedef struct bpack_gpu_entry_launchers {
 void d_c_bpack_set_gpu_entry_launchers(void** bmat, const bpack_gpu_entry_launchers* launchers);
 void z_c_bpack_set_gpu_entry_launchers(void** bmat, const bpack_gpu_entry_launchers* launchers);
 
+/* The same registrations for a butterfly block (the bf handle of
+ * c_bf_construct_init; HODLR_use_gpu > 0): K(i, j) with i a row of its row
+ * mesh and j a column of its column mesh, the CPU callbacks' indices minus
+ * one.  Coordinates (BPACK_GPU_COORDINATES) only for a butterfly built with
+ * geometry (nogeo 0 or 4).  C++ entry evaluators: bpack::gpu::set_bf_entry_evaluator. */
+void d_c_bf_set_gpu_entry_launchers(void** bf, const bpack_gpu_entry_launchers* launchers);
+void z_c_bf_set_gpu_entry_launchers(void** bf, const bpack_gpu_entry_launchers* launchers);
+void d_c_bf_set_gpu_entry_source(void** bf, const char* source, const double* params, const int* nparams,
+                                 const int* flags);
+void z_c_bf_set_gpu_entry_source(void** bf, const char* source, const double* params, const int* nparams,
+                                 const int* flags);
+void d_c_bf_set_gpu_block_evaluator(void** bf, bpack_gpu_block_evaluator evaluate, void* user, const int* flags);
+void z_c_bf_set_gpu_block_evaluator(void** bf, bpack_gpu_block_evaluator evaluate, void* user, const int* flags);
+void d_c_bf_set_gpu_list_evaluator(void** bf, bpack_gpu_list_evaluator evaluate, void* user, const int* flags);
+void z_c_bf_set_gpu_list_evaluator(void** bf, bpack_gpu_list_evaluator evaluate, void* user, const int* flags);
+
+/* A butterfly's black box on the device, for its construction from matvecs
+ * (c_bf_construct_matvec_compute with HODLR_use_gpu > 0 and less_adapt 1, a
+ * butterfly on one process): y = op(A) x for trans 'N' (x N x nvec, y M x
+ * nvec) or 'T' (x M x nvec, y N x nvec), nin and nout the rows of x and y and
+ * their leading dimensions, all device memory of the matrix's type, the rows
+ * in the butterfly's own order as the CPU callback's.  Enqueued on `stream`
+ * (the library's, a cudaStream_t) or complete on return.  Without one, the
+ * construction calls the CPU callback on host copies of the vectors.  The
+ * d_ and z_ registrations take vectors of double and of double complex. */
+typedef void (*bpack_gpu_bf_matvec)(char trans, int nin, int nout, int nvec, const void* x, void* y, void* stream,
+                                    void* user);
+void d_c_bf_set_gpu_matvec(void** bf, bpack_gpu_bf_matvec matvec, void* user);
+void z_c_bf_set_gpu_matvec(void** bf, bpack_gpu_bf_matvec matvec, void* user);
+
 #ifdef __cplusplus
 }
 #endif

@@ -82,5 +82,30 @@ void set_entry_evaluator(void** bmat, const Entry& entry, int flags) {
     }
 }
 
+// The same for a butterfly block (the bf handle of c_bf_construct_init):
+// K(i, j) with i a row of its row mesh and j a column of its column mesh.
+template<typename Entry>
+void set_bf_entry_evaluator(void** bf, const Entry& entry, int flags) {
+    using T = typename Entry::value_type;
+    static_assert(std::is_same<T, double>::value || std::is_same<T, dcomplex>::value,
+                  "an entry evaluator's value_type is double or bpack::gpu::dcomplex");
+    static_assert(std::is_trivially_copyable<Entry>::value,
+                  "an entry evaluator is copied to the device by value: it must be trivially copyable");
+    static_assert(sizeof(Entry) <= 4000, "an entry evaluator is a kernel argument: at most 4000 bytes");
+    bpack_gpu_entry_launchers launchers;
+    launchers.version = BPACK_GPU_INTERFACE_VERSION;
+    launchers.scalar_bytes = static_cast<int>(sizeof(T));
+    launchers.flags = flags;
+    launchers.entry = &entry;
+    launchers.entry_bytes = sizeof(Entry);
+    launchers.eval = &detail::launch_eval<T, Entry>;
+    launchers.sketch = &detail::launch_sketch<T, Entry>;
+    if constexpr (std::is_same<T, double>::value) {
+        d_c_bf_set_gpu_entry_launchers(bf, &launchers);
+    } else {
+        z_c_bf_set_gpu_entry_launchers(bf, &launchers);
+    }
+}
+
 }  // namespace gpu
 }  // namespace bpack

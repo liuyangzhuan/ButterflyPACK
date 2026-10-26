@@ -493,6 +493,7 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"use_qtt",         "whether to use qtt compression"},
 		{"hextralevel",         "HMAT: extra levels for top partitioning of the H matrix based on MPI counts. BLR: Maxlevel-hextralevel is the level for defining B-LR/B-BF blocks"},
 		{"iter_solver",         "The choice of iterative solvers. 1: TFQMR, 2: GMRES, 3: IterativeRefinement, or 4: CG"},
+		{"gmres_restart",       "The restart length of GMRES (iter_solver 2), default 30"},
 		{"help",            "print this help message"}
 	};
 
@@ -547,6 +548,7 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"use_qtt",         required_argument, 0, 37},
 		{"hextralevel",         required_argument, 0, 38},
 		{"iter_solver",         required_argument, 0, 39},
+		{"gmres_restart",       required_argument, 0, 1005},
 		{"trans_invariant",         required_argument, 0, 40},
 			{"htensor_mvp_level_batch", required_argument, 0, 41},
 		{"use_fft_circulant",         required_argument, 0, 42},
@@ -589,10 +591,10 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"H2_compress_factors", required_argument, 0, 1001},
 		{"h2_s_op", required_argument, 0, 1004},
 		{"H2_s_op", required_argument, 0, 1004},
-		{"h2_partial", required_argument, 0, 1005},
-		{"H2_partial", required_argument, 0, 1005},
-		{"h2_partial_extract", required_argument, 0, 1006},
-		{"H2_partial_extract", required_argument, 0, 1006},
+		{"h2_partial", required_argument, 0, 1006},
+		{"H2_partial", required_argument, 0, 1006},
+		{"h2_partial_extract", required_argument, 0, 1007},
+		{"H2_partial_extract", required_argument, 0, 1007},
 		{"H2_use_gpu", required_argument, 0, 59},
 		{"hodlr_use_gpu", required_argument, 0, 60},
 		{"HODLR_use_gpu", required_argument, 0, 60},
@@ -923,12 +925,12 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		iss >> opt_d;
 		c_bpack_set_D_option(&option0, "H2_s_op", opt_d);
 		} break;
-		case 1005: {
+		case 1006: {
 		std::istringstream iss(optarg);
 		iss >> opt_i;
 		c_bpack_set_I_option(&option0, "H2_partial", opt_i);
 		} break;
-		case 1006: {
+		case 1007: {
 		const std::string v(optarg);
 		if (v == "auto") opt_i = 0;
 		else if (v == "device") opt_i = 1;
@@ -960,6 +962,11 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		std::istringstream iss(optarg);
 		iss >> opt_i;
 		c_bpack_set_I_option(&option0, "iter_solver", opt_i);
+		} break;
+		case 1005: {
+		std::istringstream iss(optarg);
+		iss >> opt_i;
+		c_bpack_set_I_option(&option0, "gmres_restart", opt_i);
 		} break;
 		default: break;
 		}
@@ -1546,8 +1553,11 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
 	  std::vector<int> rank_idxs(nproc_h2, 0), rank_idxe(nproc_h2, -1);
 	  MPI_Allgather(&idxs, 1, MPI_INT, rank_idxs.data(), 1, MPI_INT, H2_solver->comm);
 	  MPI_Allgather(&idxe, 1, MPI_INT, rank_idxe.data(), 1, MPI_INT, H2_solver->comm);
+	  // the index tree goes down to the leaf size this H2 was given, so a
+	  // butterfly built on this mesh has real depth (c_bpack_set_mesh_h2)
+	  int nmin_leaf_mesh = static_cast<int>(std::max<int64_t>(H2_options.nmin_leaf, 1));
 	  c_bpack_set_mesh_h2(Npo, new2old.data(), &idxs, &idxe, &nproc_h2,
-	                      rank_idxs.data(), rank_idxe.data(), msh);
+	                      rank_idxs.data(), rank_idxe.data(), &nmin_leaf_mesh, msh);
 	  *Npo_loc=idxe-idxs+1;
 	  if (perms != nullptr) {
 		std::copy(new2old.begin(), new2old.end(), perms);
@@ -1955,6 +1965,86 @@ void c_bpack_set_gpu_list_evaluator(F2Cptr* bmat, bpack_gpu_list_evaluator evalu
   });
 #else
   (void)bmat;
+  (void)evaluate;
+  (void)user;
+  (void)flags;
+#endif
+}
+
+/*
+ * The same three kinds of evaluator for a butterfly block (the bf handle of
+ * c_bf_construct_init): with HODLR_use_gpu > 0, c_bf_construct_element_compute
+ * then takes the block's entries from the device.  K(i, j): i a row and j a
+ * column, each by its own mesh - the CPU callbacks' indices minus one;
+ * coordinates only for a butterfly built with geometry (nogeo 0 or 4).
+ */
+#ifdef BPACK_GPU_EVALUATORS
+template<typename Make>
+static void bf_set_gpu_evaluator(F2Cptr* bf, const char* caller, Make make) {
+  using H2Data = typename butterfly::fmm_data<C_DT>::type;
+  if (bf == nullptr || *bf == nullptr) throw std::invalid_argument(std::string(caller) + ": null butterfly handle");
+  const std::shared_ptr<fmm::gpu::Evaluator> evaluator = make(static_cast<int>(sizeof(H2Data)));
+  c_bf_gpu_set_evaluator(*bf, &evaluator);
+}
+#endif
+
+void c_bf_set_gpu_entry_launchers(F2Cptr* bf, const bpack_gpu_entry_launchers* launchers) {
+#ifdef BPACK_GPU_EVALUATORS
+  if (launchers == nullptr) throw std::invalid_argument("c_bf_set_gpu_entry_launchers: null argument");
+  bf_set_gpu_evaluator(bf, "c_bf_set_gpu_entry_launchers", [&](int scalar_bytes) {
+    return fmm::gpu::Evaluator::from_launchers(*launchers, scalar_bytes);
+  });
+#else
+  (void)bf;
+  (void)launchers;
+#endif
+}
+
+void c_bf_set_gpu_entry_source(F2Cptr* bf, const char* source, const double* params, const int* nparams,
+                               const int* flags) {
+#ifdef BPACK_GPU_EVALUATORS
+  if (source == nullptr || flags == nullptr || (nparams != nullptr && *nparams > 0 && params == nullptr)) {
+    throw std::invalid_argument("c_bf_set_gpu_entry_source: null argument");
+  }
+  const int count = nparams != nullptr ? std::max(*nparams, 0) : 0;
+  bf_set_gpu_evaluator(bf, "c_bf_set_gpu_entry_source", [&](int scalar_bytes) {
+    return fmm::gpu::Evaluator::from_source(source, params, count, *flags, scalar_bytes);
+  });
+#else
+  (void)bf;
+  (void)source;
+  (void)params;
+  (void)nparams;
+  (void)flags;
+#endif
+}
+
+void c_bf_set_gpu_block_evaluator(F2Cptr* bf, bpack_gpu_block_evaluator evaluate, void* user, const int* flags) {
+#ifdef BPACK_GPU_EVALUATORS
+  if (evaluate == nullptr || flags == nullptr) {
+    throw std::invalid_argument("c_bf_set_gpu_block_evaluator: null argument");
+  }
+  bf_set_gpu_evaluator(bf, "c_bf_set_gpu_block_evaluator", [&](int scalar_bytes) {
+    return fmm::gpu::Evaluator::from_block(evaluate, user, *flags, scalar_bytes);
+  });
+#else
+  (void)bf;
+  (void)evaluate;
+  (void)user;
+  (void)flags;
+#endif
+}
+
+void c_bf_set_gpu_list_evaluator(F2Cptr* bf, bpack_gpu_list_evaluator evaluate, void* user, const int* flags) {
+#ifdef BPACK_GPU_EVALUATORS
+  if (evaluate == nullptr || flags == nullptr) {
+    throw std::invalid_argument("c_bf_set_gpu_list_evaluator: null argument");
+  }
+  bf_set_gpu_evaluator(bf, "c_bf_set_gpu_list_evaluator", [&](int scalar_bytes) {
+    return fmm::gpu::Evaluator::from_list(evaluate, user, *flags, scalar_bytes);
+  });
+#else
+  (void)bf;
   (void)evaluate;
   (void)user;
   (void)flags;
