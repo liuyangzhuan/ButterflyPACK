@@ -157,8 +157,9 @@ GroupPlan build_group_plan(MPI_Comm comm, bool sum, int vec, size_t block);
 
 // An all-to-all of device buffers with counts per rank (elements): send's
 // scount[p] elements from its prefix offset to rank p, recv's rcount[p] from
-// rank p.  Through NCCL on the stream when the group has it (one node, one
-// GPU a rank), else MPI_Alltoallv through pinned host memory.  Collective.
+// rank p.  Through NCCL on the stream when the group has it (a GPU a rank, on
+// one node or with NCCL's network plugin), else MPI_Alltoallv through pinned
+// host memory.  Collective.
 void alltoallv_device(MPI_Comm comm, const DataType* send, const int64_t* scount, DataType* recv,
                       const int64_t* rcount, cudaStream_t stream);
 

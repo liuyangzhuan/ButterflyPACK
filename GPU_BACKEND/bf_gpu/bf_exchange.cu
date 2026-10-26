@@ -5,6 +5,7 @@
 #include "bf_exchange.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstdint>
 #include <map>
 #include <numeric>
@@ -76,7 +77,8 @@ __global__ void __launch_bounds__(kThreads) unpack_kernel(DataType* level, const
 // when the first plan on the group is built - itself a collective.  A group
 // is known by its members' ranks in MPI_COMM_WORLD, in its own order, so two
 // communicators over the same ranks share one.  Null for a group spanning
-// several nodes, or when NCCL failed on any rank: the group then stays on MPI.
+// several nodes without a network plugin for NCCL, a group two of whose ranks
+// share a GPU, or when NCCL failed on any rank: the group then stays on MPI.
 ncclComm_t nccl_comm_of(MPI_Comm comm) {
     static auto* comms = new std::map<std::vector<int>, ncclComm_t>;  // never freed, as fmm::gpu::pinned_pool
     int nproc = 1, myid = 0;
@@ -92,33 +94,41 @@ ncclComm_t nccl_comm_of(MPI_Comm comm) {
     MPI_Group_free(&world);
     const auto it = comms->find(key);
     if (it != comms->end()) return it->second;
-    // Only where it was measured: every rank of the group on one node.  Across
-    // nodes NCCL needs the network plugin's settings (NERSC's nccl module), so
-    // a group spanning nodes stays on MPI.
+    // A group spanning nodes only when NCCL has a network plugin configured
+    // (NCCL_NET, which NERSC's nccl module sets to its Slingshot plugin):
+    // measured on two Perlmutter nodes, 8 A100, a 262144^2 butterfly's
+    // 256-column matvec took 25.4 ms through MPI and 6.1 ms through NCCL.
+    // Without one NCCL would fall back to its sockets, unmeasured, and such a
+    // group stays on MPI.
     MPI_Comm node;
     MPI_Comm_split_type(comm, MPI_COMM_TYPE_SHARED, 0, MPI_INFO_NULL, &node);
     int node_size = 0;
     MPI_Comm_size(node, &node_size);
     MPI_Comm_free(&node);
-    int one_node = node_size == nproc ? 1 : 0;
-    MPI_Allreduce(MPI_IN_PLACE, &one_node, 1, MPI_INT, MPI_MIN, comm);
-    if (!one_node) {
+    int reach = node_size == nproc || std::getenv("NCCL_NET") != nullptr ? 1 : 0;
+    MPI_Allreduce(MPI_IN_PLACE, &reach, 1, MPI_INT, MPI_MIN, comm);
+    if (!reach) {
         (*comms)[key] = nullptr;
         return nullptr;
     }
     // NCCL refuses two ranks of a communicator on one GPU ("Duplicate GPU"),
     // but only those two find out: the others wait for them in its bootstrap
-    // (seen with 5 ranks on 4 GPUs).  So the ranks compare their devices
-    // first, and a group sharing one stays on MPI.
+    // (seen with 5 ranks on 4 GPUs).  So the ranks compare their devices -
+    // host and PCI bus, since nodes repeat each other's buses - first, and a
+    // group sharing one stays on MPI.
     {
-        constexpr int kBus = 32;
-        char bus[kBus] = {0};
-        int dev = 0;
-        int ok = cudaGetDevice(&dev) == cudaSuccess && cudaDeviceGetPCIBusId(bus, kBus, dev) == cudaSuccess ? 1 : 0;
-        std::vector<char> all(static_cast<size_t>(nproc) * kBus);
-        MPI_Allgather(bus, kBus, MPI_CHAR, all.data(), kBus, MPI_CHAR, comm);
+        constexpr int kBus = 32, kId = MPI_MAX_PROCESSOR_NAME + kBus + 1;
+        char id[kId] = {0};
+        int len = 0, dev = 0;
+        MPI_Get_processor_name(id, &len);
+        id[len] = ':';
+        int ok = cudaGetDevice(&dev) == cudaSuccess && cudaDeviceGetPCIBusId(id + len + 1, kBus, dev) == cudaSuccess
+                     ? 1
+                     : 0;
+        std::vector<char> all(static_cast<size_t>(nproc) * kId);
+        MPI_Allgather(id, kId, MPI_CHAR, all.data(), kId, MPI_CHAR, comm);
         std::vector<std::string> ids;
-        for (int p = 0; p < nproc; ++p) ids.emplace_back(all.data() + static_cast<size_t>(p) * kBus);
+        for (int p = 0; p < nproc; ++p) ids.emplace_back(all.data() + static_cast<size_t>(p) * kId);
         std::sort(ids.begin(), ids.end());
         if (std::adjacent_find(ids.begin(), ids.end()) != ids.end()) ok = 0;
         MPI_Allreduce(MPI_IN_PLACE, &ok, 1, MPI_INT, MPI_MIN, comm);
