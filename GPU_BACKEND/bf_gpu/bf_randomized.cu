@@ -30,15 +30,16 @@ __device__ __forceinline__ uint64_t mix64(uint64_t z) {
     return z ^ (z >> 31);
 }
 
-// x(row0 + r, col0 + c) uniform in [-1, 1), from a counter-based hash: the
-// same numbers whatever the launch
+// x(row0 + r, col0 + c) uniform in [-1, 1), from a counter-based hash of the
+// row's global index (hash_row0 + row0 + r) and the column: the same numbers
+// whatever the launch, and whichever rank holds the row
 __global__ void fill_uniform_kernel(DataType* x, int64_t ld, int64_t row0, int64_t nrows, int64_t col0,
-                                    int64_t ncols, uint64_t seed) {
+                                    int64_t ncols, uint64_t seed, int64_t hash_row0) {
     const int64_t total = nrows * ncols;
     for (int64_t t = blockIdx.x * static_cast<int64_t>(blockDim.x) + threadIdx.x; t < total;
          t += static_cast<int64_t>(gridDim.x) * blockDim.x) {
         const int64_t r = t % nrows, c = t / nrows;
-        const uint64_t h = mix64(seed ^ mix64(static_cast<uint64_t>(row0 + r) * 0x100000001b3ull +
+        const uint64_t h = mix64(seed ^ mix64(static_cast<uint64_t>(hash_row0 + row0 + r) * 0x100000001b3ull +
                                               static_cast<uint64_t>(col0 + c)));
         const double u = static_cast<double>(h >> 11) * (1.0 / 9007199254740992.0);  // [0, 1)
         x[(row0 + r) + (col0 + c) * ld] = 2.0 * u - 1.0;
@@ -185,9 +186,10 @@ int grid_for(int64_t total) {
 }  // namespace
 
 void launch_fill_uniform(DataType* x, int64_t ld, int64_t row0, int64_t nrows, int64_t col0, int64_t ncols,
-                         uint64_t seed, cudaStream_t stream) {
+                         uint64_t seed, int64_t hash_row0, cudaStream_t stream) {
     if (nrows <= 0 || ncols <= 0) return;
-    fill_uniform_kernel<<<grid_for(nrows * ncols), kThreads, 0, stream>>>(x, ld, row0, nrows, col0, ncols, seed);
+    fill_uniform_kernel<<<grid_for(nrows * ncols), kThreads, 0, stream>>>(x, ld, row0, nrows, col0, ncols, seed,
+                                                                          hash_row0);
     check_launch("launch_fill_uniform");
 }
 

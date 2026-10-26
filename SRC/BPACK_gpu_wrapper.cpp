@@ -1279,11 +1279,62 @@ struct BfRandomizedRun {
   fmm::gpu::PinnedBuffer hx, hy;
 };
 
+// The grids a butterfly's sweeps run over, from the Fortran: GetLocalBlockRange
+// in both orderings (levels 0 .. L+1) and the vector grids of each
+// orientation (vector levels 0 .. L+2), into out (bf_ranges.hpp).
+void bf_read_ranges(void* bf, void* ptree, int L, int nproc, int myid, bf::gpu::BfDevice& out) {
+  auto ranges = [&](char which, int levels) {
+    bf::gpu::SweepRanges g;
+    g.resize(levels);
+    if (which == 'R' || which == 'C') {
+      c_bf_get_vec_ranges(bf, ptree, which, g.idx_r.data(), g.inc_r.data(), g.nr.data(),
+                          g.idx_c.data(), g.inc_c.data(), g.nc.data());
+    } else {
+      c_bf_get_mvp_vec_ranges(bf, ptree, which, g.idx_r.data(), g.inc_r.data(), g.nr.data(),
+                              g.idx_c.data(), g.inc_c.data(), g.nc.data());
+    }
+    return g;
+  };
+  bf::gpu::set_ranges(out, ranges('R', L + 2), ranges('C', L + 2), ranges('N', L + 3), ranges('T', L + 3), nproc,
+                      myid);
+}
+
+// The closures through which bf_gpu asks the Fortran for a butterfly's
+// distribution decisions (bf_ranges.hpp explains why they are closures).
+bf::gpu::BfBridge bf_bridge(void* bf, void* ptree, MPI_Comm comm, int nproc) {
+  bf::gpu::BfBridge b;
+  b.comm = comm;
+  b.nproc = nproc;
+  b.exchange_dest = [bf, ptree](int level, char mode, char collect, const bf::gpu::VecLevel& src, int* dest) {
+    c_bf_get_exchange_dest(bf, ptree, level, mode, collect, src.nr, src.nc, src.idx_r, src.inc_r,
+                           src.idx_c, src.inc_c, dest);
+  };
+  b.all2all_dest = [bf, ptree](int level, char mode_new, const bf::gpu::VecLevel& src, int* dest) {
+    c_bf_get_all2all_dest(bf, ptree, level, mode_new, src.nr, src.nc, src.idx_r, src.inc_r,
+                          src.idx_c, src.inc_c, dest);
+  };
+  b.all2all_range = [bf, ptree](int level, char mode_new) {
+    bf::gpu::Range2 g;
+    c_bf_get_all2all_range(bf, ptree, level, mode_new, &g.idx_r, &g.inc_r, &g.nr, &g.idx_c, &g.inc_c, &g.nc);
+    return g;
+  };
+  b.block_group = [bf, ptree](int level, int index_i, int index_j, char mode) {
+    bf::gpu::BfBridge::Group g;
+    int np = 1, cf = 0, head = 0;
+    c_bf_get_block_group(bf, ptree, level, index_i, index_j, mode, &np, &cf, &head);
+    g.nproc = np;
+    g.comm = MPI_Comm_f2c(static_cast<MPI_Fint>(cf));
+    g.is_head = head != 0;
+    return g;
+  };
+  return b;
+}
+
 // Make a butterfly resident: upload its factors, read the grids the sweep
 // needs, and wire the closures through which bf_gpu asks the Fortran for its
-// distribution decisions (bf_ranges.hpp explains why they are closures).
-// Returns nullptr when the device has no room for the factors.  Collective
-// over the butterfly's ranks the first time, as its matvec is.
+// distribution decisions.  Returns nullptr when the device has no room for
+// the factors.  Collective over the butterfly's ranks the first time, as its
+// matvec is.
 bf::gpu::BfResident* bf_resident(void* bf, void* ptree) {
   bf::gpu::BfFingerprint print;
   c_bf_get_layout(bf, &print.level_butterfly, &print.level_half, &print.M, &print.N, &print.M_loc,
@@ -1332,49 +1383,8 @@ bf::gpu::BfResident* bf_resident(void* bf, void* ptree) {
     return nullptr;
   }
 
-  auto ranges = [&](char which, int levels) {
-    bf::gpu::SweepRanges g;
-    g.resize(levels);
-    if (which == 'R' || which == 'C') {
-      c_bf_get_vec_ranges(bf, ptree, which, g.idx_r.data(), g.inc_r.data(), g.nr.data(),
-                          g.idx_c.data(), g.inc_c.data(), g.nc.data());
-    } else {
-      c_bf_get_mvp_vec_ranges(bf, ptree, which, g.idx_r.data(), g.inc_r.data(), g.nr.data(),
-                              g.idx_c.data(), g.inc_c.data(), g.nc.data());
-    }
-    return g;
-  };
-  const int L = print.level_butterfly;
-  bf::gpu::set_ranges(r.dev, ranges('R', L + 2), ranges('C', L + 2), ranges('N', L + 3),
-                      ranges('T', L + 3), nproc, myid);
-
-  r.bridge.comm = comm;
-  r.bridge.nproc = nproc;
-  r.bridge.exchange_dest = [bf, ptree](int level, char mode, char collect,
-                                       const bf::gpu::VecLevel& src, int* dest) {
-    c_bf_get_exchange_dest(bf, ptree, level, mode, collect, src.nr, src.nc, src.idx_r, src.inc_r,
-                           src.idx_c, src.inc_c, dest);
-  };
-  r.bridge.all2all_dest = [bf, ptree](int level, char mode_new, const bf::gpu::VecLevel& src,
-                                      int* dest) {
-    c_bf_get_all2all_dest(bf, ptree, level, mode_new, src.nr, src.nc, src.idx_r, src.inc_r,
-                          src.idx_c, src.inc_c, dest);
-  };
-  r.bridge.all2all_range = [bf, ptree](int level, char mode_new) {
-    bf::gpu::Range2 g;
-    c_bf_get_all2all_range(bf, ptree, level, mode_new, &g.idx_r, &g.inc_r, &g.nr, &g.idx_c,
-                           &g.inc_c, &g.nc);
-    return g;
-  };
-  r.bridge.block_group = [bf, ptree](int level, int index_i, int index_j, char mode) {
-    bf::gpu::BfBridge::Group g;
-    int np = 1, cf = 0, head = 0;
-    c_bf_get_block_group(bf, ptree, level, index_i, index_j, mode, &np, &cf, &head);
-    g.nproc = np;
-    g.comm = MPI_Comm_f2c(static_cast<MPI_Fint>(cf));
-    g.is_head = head != 0;
-    return g;
-  };
+  bf_read_ranges(bf, ptree, print.level_butterfly, nproc, myid, r.dev);
+  r.bridge = bf_bridge(bf, ptree, comm, nproc);
   return &r;
 }
 
@@ -1976,42 +1986,93 @@ void c_bf_set_gpu_matvec(void** bf, bpack_gpu_bf_matvec matvec, void* user) {
 }
 
 // BF_randomized (less_adapt 1) on the device, for BF_randomized_gpu
-// (bf_gpu/bf_randomized.hpp): a butterfly on one process with L levels, its
-// leaves' ends ms and ns (one based, cumulative, 2^L each).  The black box is
-// the device one registered for bf, else `matvec`, the C callback, on pinned
-// host copies of the vectors.  On success the shapes of every block - V's,
-// Kerl(1..L)'s row by row, U's - are in rows and cols, the blocks wait on the
-// device under `handle` for c_bf_gpu_randomized_fetch, and prof holds the
-// seconds of all, the black box, the sweeps, the range finding and solves,
-// the error test; the black box's calls and columns, the tries of the rank
-// guess and the test's error.  info 1: the device declined (a butterfly on
-// several processes, no room, a rank guess that never settled).
-void c_bf_gpu_randomized(void* bf, void* ptree, const int* L, const int* level_half, const int* M, const int* N,
-                         const int* ms, const int* ns, const int* rank0, const double* rankrate, const int* itermax,
-                         const int* nbundle, const double* tol_rdetect, const double* tol_ls, void* matvec,
-                         void* quant, void** handle, int* rows, int* cols, double* prof, int* info) {
+// (bf_gpu/bf_randomized.hpp): a butterfly of L >= 1 levels on its process
+// group, laid out as bf_rand - BF_Init_randomized's structure, no factors yet
+// - gives it: this rank's blocks of every level, its leaves' ends ms and ns
+// (one based, cumulative, over its U and its V blocks) and the global index,
+// zero based, of its first row and column (row0, col0).  The black box is the
+// device one registered for bf, else `matvec`, the C callback, on pinned host
+// copies of this rank's part of the vectors.  On success the shapes of this
+// rank's blocks - V's, Kerl(1..L)'s row by row, U's - are in rows and cols,
+// the blocks wait on the device under `handle` for c_bf_gpu_randomized_fetch,
+// and prof holds the seconds of all, the black box, the sweeps, the range
+// finding and solves, the error test; the black box's calls and columns, the
+// tries of the rank guess and the test's error.  info 1: the device declined,
+// on every rank of the group together (no room, a rank guess that never
+// settled, a leaf several ranks share).  Collective over the group.
+void c_bf_gpu_randomized(void* bf, void* bf_rand, void* ptree, const int* L, const int* level_half, const int* M,
+                         const int* N, const int* ms, const int* ns, const int* row0, const int* col0,
+                         const int* rank0, const double* rankrate, const int* itermax, const int* nbundle,
+                         const double* tol_rdetect, const double* tol_ls, void* matvec, void* quant, void** handle,
+                         int* rows, int* cols, double* prof, int* info) {
   *info = 1;
   *handle = nullptr;
 #ifdef BPACK_BF_GPU_ENABLED
   try {
-    int is_head = 0, comm_f = 0, nproc = 1;
-    c_bf_get_sub_head(bf, ptree, &is_head, &comm_f, &nproc);
-    if (nproc != 1 || *L < 1) return;
-    bf_device_setup(MPI_Comm_f2c(static_cast<MPI_Fint>(comm_f)), nproc);
+    if (*L < 1) return;
+    int is_head = 0, comm_f = 0, nproc = 1, myid = 0;
+    c_bf_get_sub_head(bf_rand, ptree, &is_head, &comm_f, &nproc);
+    const MPI_Comm comm = MPI_Comm_f2c(static_cast<MPI_Fint>(comm_f));
+    if (nproc > 1) MPI_Comm_rank(comm, &myid);
+    bf_device_setup(comm, nproc);
 
     bf::gpu::RandomizedConfig c;
     c.L = *L;
     c.level_half = *level_half;
     c.M = *M;
     c.N = *N;
-    const int leaves = 1 << *L;
-    c.row_off.assign(static_cast<size_t>(leaves) + 1, 0);
-    c.col_off.assign(static_cast<size_t>(leaves) + 1, 0);
-    for (int k = 0; k < leaves; ++k) {
-      c.row_off[k + 1] = ms[k];
-      c.col_off[k + 1] = ns[k];
+    // this rank's grids, and its leaves: U's blocks (the last level) and V's
+    int Lb = 0, half = 0, Mb = 0, Nb = 0, Ml = 0, Nl = 0, nlev = 0, nblk = 0;
+    c_bf_get_layout(bf_rand, &Lb, &half, &Mb, &Nb, &Ml, &Nl, &nlev, &nblk);
+    if (Lb != *L || nlev != *L + 2) gpu_fail("c_bf_gpu_randomized", "the block's layout does not match its levels");
+    std::vector<int> nr(nlev), nc(nlev), ir(nlev), ic(nlev), er(nlev), ec(nlev);
+    std::vector<int> brows(std::max(nblk, 1)), bcols(brows.size());
+    std::vector<void*> bptr(brows.size());
+    c_bf_get_blocks(bf_rand, nr.data(), nc.data(), ir.data(), ic.data(), er.data(), ec.data(), brows.data(),
+                    bcols.data(), bptr.data());
+    const int nu = nr[nlev - 1], nv = nc[0];
+    c.row_off.assign(static_cast<size_t>(nu) + 1, 0);
+    c.col_off.assign(static_cast<size_t>(nv) + 1, 0);
+    for (int k = 0; k < nu; ++k) c.row_off[k + 1] = ms[k];
+    for (int k = 0; k < nv; ++k) c.col_off[k + 1] = ns[k];
+    c.nproc = nproc;
+    c.comm = comm;
+    c.M_loc = Ml;
+    c.N_loc = Nl;
+    c.row0 = *row0;
+    c.col0 = *col0;
+    if (nproc > 1) {
+      bf::gpu::BfDevice& d = c.layout;
+      d.level_butterfly = *L;
+      d.level_half = *level_half;
+      d.M = *M;
+      d.N = *N;
+      d.M_loc = Ml;
+      d.N_loc = Nl;
+      d.levels.resize(static_cast<size_t>(nlev));
+      for (int l = 0; l < nlev; ++l) {
+        bf::gpu::LevelDesc& v = d.levels[static_cast<size_t>(l)];
+        v.nr = nr[l];
+        v.nc = nc[l];
+        v.idx_r = ir[l];
+        v.idx_c = ic[l];
+        v.inc_r = er[l];
+        v.inc_c = ec[l];
+      }
+      bf_read_ranges(bf_rand, ptree, *L, nproc, myid, d);
+      c.bridge = bf_bridge(bf_rand, ptree, comm, nproc);
+      // a leaf several ranks share stays on the host: ButterflyPACK's trees
+      // give every rank at least two leaf boxes, so no butterfly has one
+      int shared = 0;
+      if (nv == 1 && c.bridge.block_group(0, 1, ic[0], 'R').nproc > 1) shared = 1;
+      if (nu == 1 && c.bridge.block_group(*L + 1, ir[nlev - 1], 1, 'C').nproc > 1) shared = 1;
+      MPI_Allreduce(MPI_IN_PLACE, &shared, 1, MPI_INT, MPI_MAX, comm);
+      if (shared) return;
     }
-    if (c.row_off.back() != c.M || c.col_off.back() != c.N) gpu_fail("c_bf_gpu_randomized", "the leaves do not cover the block");
+    if (c.row_off.back() != c.M_loc || c.col_off.back() != c.N_loc ||
+        (nproc == 1 && (nu != (1 << *L) || nv != (1 << *L)))) {
+      gpu_fail("c_bf_gpu_randomized", "the leaves do not cover the block");
+    }
     c.rank0 = *rank0;
     c.rankrate = *rankrate;
     c.itermax = *itermax;
@@ -2027,7 +2088,8 @@ void c_bf_gpu_randomized(void* bf, void* ptree, const int* L, const int* level_h
     if (dev != bf_matvecs().end()) {
       const BfMatvec m = dev->second;
       box = [m, c, stream](char op, int nvec, const double* x, double* y) {
-        const int nin = static_cast<int>(op == 'N' ? c.N : c.M), nout = static_cast<int>(op == 'N' ? c.M : c.N);
+        const int nin = static_cast<int>(op == 'N' ? c.N_loc : c.M_loc);
+        const int nout = static_cast<int>(op == 'N' ? c.M_loc : c.N_loc);
         // x is ready for a black box on a stream of its own too
         fmm::gpu::check_cuda(cudaStreamSynchronize(stream), "the butterfly's device black box");
         m.fn(op, nin, nout, nvec, x, y, stream, m.user);
@@ -2037,7 +2099,7 @@ void c_bf_gpu_randomized(void* bf, void* ptree, const int* L, const int* level_h
       if (matvec == nullptr) return;
       const BfHostMatvec fn = reinterpret_cast<BfHostMatvec>(matvec);
       box = [s, fn, quant, c, stream](char op, int nvec, const double* x, double* y) {
-        int nin = static_cast<int>(op == 'N' ? c.N : c.M), nout = static_cast<int>(op == 'N' ? c.M : c.N);
+        int nin = static_cast<int>(op == 'N' ? c.N_loc : c.M_loc), nout = static_cast<int>(op == 'N' ? c.M_loc : c.N_loc);
         const size_t bin = static_cast<size_t>(nin) * nvec * sizeof(double);
         const size_t bout = static_cast<size_t>(nout) * nvec * sizeof(double);
         double* hx = static_cast<double*>(s->hx.reserve(std::max<size_t>(bin, 1)));
@@ -2077,9 +2139,9 @@ void c_bf_gpu_randomized(void* bf, void* ptree, const int* L, const int* level_h
     gpu_fail("c_bf_gpu_randomized", e.what());
   }
 #else
-  (void)bf; (void)ptree; (void)L; (void)level_half; (void)M; (void)N; (void)ms; (void)ns; (void)rank0;
-  (void)rankrate; (void)itermax; (void)nbundle; (void)tol_rdetect; (void)tol_ls; (void)matvec; (void)quant;
-  (void)rows; (void)cols; (void)prof;
+  (void)bf; (void)bf_rand; (void)ptree; (void)L; (void)level_half; (void)M; (void)N; (void)ms; (void)ns;
+  (void)row0; (void)col0; (void)rank0; (void)rankrate; (void)itermax; (void)nbundle; (void)tol_rdetect;
+  (void)tol_ls; (void)matvec; (void)quant; (void)rows; (void)cols; (void)prof;
 #endif
 }
 

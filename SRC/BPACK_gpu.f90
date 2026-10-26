@@ -460,23 +460,27 @@ module BPACK_GPU
          real(c_double) :: warm
       end subroutine c_bf_gpu_entries
 
-      !>**** BF_randomized (less_adapt 1) on the device (GPU_BACKEND/bf_gpu/
-      !> bf_randomized.hpp), for a butterfly on one process: L levels, the
-      !> leaves' ends ms(1:2^L) and ns(1:2^L) as BF_Init_randomized counts
-      !> them.  The black box is the device one registered for bf
+      !>**** BF_randomized (less_adapt 1) on the device, for BF_randomized_gpu
+      !> (GPU_BACKEND/bf_gpu/bf_randomized.hpp): a butterfly of L >= 1 levels
+      !> on its process group, laid out as bf_rand (BF_Init_randomized's
+      !> structure, no factors yet): this rank's blocks of every level, its
+      !> leaves' ends ms and ns as BF_Init_randomized counts them, over its U
+      !> and its V blocks, and the global index (zero based) of its first row
+      !> and column.  The black box is the device one registered for bf
       !> (c_bf_set_gpu_matvec), else the C callback matvec with its quant.
-      !> rows/cols: every block's shape - V's, Kerl(1:L)'s row by row, U's -
-      !> for c_bf_gpu_randomized_fetch, which takes the handle.  prof: seconds
-      !> of all, the black box, the sweeps, the range finding and solves, the
-      !> error test; then the black box's calls and columns, the tries of the
-      !> rank guess and the test's error.  info 1: the device declined.
-      subroutine c_bf_gpu_randomized(bf, ptree, L, level_half, M, N, ms, ns, rank0, rankrate, itermax, nbundle, &
-                                     tol_rdetect, tol_ls, matvec, quant, handle, rows, cols, prof, info) &
-         bind(c, name="c_bf_gpu_randomized")
+      !> rows/cols: the shapes of this rank's blocks - V's, Kerl(1:L)'s row by
+      !> row, U's - for c_bf_gpu_randomized_fetch, which takes the handle.
+      !> prof: seconds of all, the black box, the sweeps, the range finding
+      !> and solves, the error test; then the black box's calls and columns,
+      !> the tries of the rank guess and the test's error.  info 1: the device
+      !> declined, on every rank together.  Collective over the group.
+      subroutine c_bf_gpu_randomized(bf, bf_rand, ptree, L, level_half, M, N, ms, ns, row0, col0, rank0, rankrate, &
+                                     itermax, nbundle, tol_rdetect, tol_ls, matvec, quant, handle, rows, cols, prof, &
+                                     info) bind(c, name="c_bf_gpu_randomized")
          import :: c_int, c_double, c_ptr, c_funptr
-         type(c_ptr), value :: bf, ptree, quant
+         type(c_ptr), value :: bf, bf_rand, ptree, quant
          type(c_funptr), value :: matvec
-         integer(c_int) :: L, level_half, M, N, rank0, itermax, nbundle, info
+         integer(c_int) :: L, level_half, M, N, row0, col0, rank0, itermax, nbundle, info
          integer(c_int) :: ms(*), ns(*), rows(*), cols(*)
          real(c_double) :: rankrate, tol_rdetect, tol_ls, prof(*)
          type(c_ptr) :: handle
@@ -566,8 +570,9 @@ contains
    end function BF_gpu_extract_ok
 
    !>**** Whether a butterfly's construction from matvecs runs on the device
-   !> (BF_randomized_gpu): as for the matvec, with the less adaptive scheme
-   !> (less_adapt 1; the other one is BF_randomized_old's), on one process.
+   !> (BF_randomized_gpu): as for the matvec, a butterfly rather than a
+   !> low-rank block, with the less adaptive scheme (less_adapt 1; the other
+   !> one is BF_randomized_old's, as is a low-rank block's).
    logical function BF_gpu_sketch_ok(blocks, option, ptree)
       implicit none
       type(matrixblock)::blocks
@@ -576,8 +581,9 @@ contains
 
       BF_gpu_sketch_ok = .false.
       if (.not. BF_gpu_mult_ok(blocks, option)) return
+      if (blocks%level_butterfly == 0) return
       if (option%less_adapt /= 1) return
-      if (ptree%pgrp(blocks%pgno)%nproc /= 1) return
+      if (.not. IOwnPgrp(ptree, blocks%pgno)) return
       BF_gpu_sketch_ok = .true.
    end function BF_gpu_sketch_ok
 
