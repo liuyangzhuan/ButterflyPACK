@@ -460,8 +460,33 @@ point set and on a plain cube split, dense checks at small N.
   blocks and 32 panels of 16 x 4096 (a compressed parent's dense leaves and
   BACA samples).  64^3, F11 = 16384: 5.9 M entries/s on one GPU's rank
   (compressed records 3.8), 5.4 (4.5) on 4 ranks, against about 5e7 for the
-  GPU HODLR extraction in the STRUMPACK work: the entries are the next
-  lever.  Then: FrontH2Partial in STRUMPACK (its own CompressionType and
+  GPU HODLR extraction in the STRUMPACK work.
+  Step 2 (2026-10-25), the entry path profiled and tuned, same bench and
+  configuration (one rank 32 threads on 16 cores): 7.2 M entries/s
+  (compressed 5.6), 8.1 (6.3) on 4 ranks; one thread a physical core, 9.5
+  (8.6) on one rank.  Each pair's products in the cheaper order (A^T X
+  first for a few members against many: 20.7 -> 4 GF a round); the
+  decompressed chunks shared by a box's row blocks, the only readers of its
+  records, and freed after the last (2.4x fewer decompressions, each chunk
+  once); a remote block carries only what its receiver reads (row blocks
+  their w part, column blocks their raw values: the level-2 exchange 0.12
+  -> 0.05 s on 4 ranks); the root over pairs, the request's sides and the
+  parent blocks' merges in parallel.  Values unchanged (dense checks, 1 to
+  8 ranks, GPU and CPU, compressed and not).  What is left, measured: a
+  round is throughput-bound (6.5 thread-s on 32 threads, no single task
+  over 10% of a level), two thirds of it the panels' wide sides (their
+  4096 members' chains carried up every level: the T products, the merges
+  and their exchange); the near-field blocks cost 4x the panels an entry
+  (every level and the root pair them).  The products are small (most
+  under 2^19 flops at 0.4-5 GF/s; sequential OpenBLAS's locked buffer
+  allocation contends past 8 threads: 8 x 8 x 255 at 12 GF/s alone, 1 GF/s
+  on 32 threads); host Bitcomp decompresses at 0.44 GB/s a thread; on 4
+  ranks rank 0 alone does level 1 and the root (0.13 s of 0.29).  Next
+  levers: a wide side carried down instead of up (the narrow side's
+  projections through the level couplings pushed down the wide side's
+  chains, as the CB product's down-pass: its cost then scales with the
+  narrow side), small products outside OpenBLAS, the top levels split
+  over ranks.  Then: FrontH2Partial in STRUMPACK (its own CompressionType and
   options; the other variant reuses FrontHODLR with HODLROptions::use_h2()),
   in a worktree of its own.
   Later: the records on the device (with compression, or several cards) for

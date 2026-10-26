@@ -27,6 +27,8 @@
 #endif
 
 #include <algorithm>
+#include <memory>
+#include <mutex>
 #include <cmath>
 #include <complex>
 #include <cstdint>
@@ -139,38 +141,71 @@ const DataType* record_values(const PartialRecord<DataType>& r, std::vector<Data
 #endif
 }
 
-// A record's entries read one at a time (the CB entries gather a few rows
-// and columns of a box's records for every block pair): each 512 KB chunk
-// decompressed once, when first read.  One a loop iteration, not kept across
+// The records' entries the CB entries gather (a few rows and columns of a
+// box's records for every block pair), read by many threads: each 512 KB
+// chunk decompressed once, by the first reader, and kept until release(group)
+// frees the chunks of the records a group's readers read (a group: the row
+// blocks of one box, the only readers of its records).  Not kept across
 // calls: a later factorization's records may sit at the same addresses.
 template<typename DataType>
-class RecordCache {
+class RecordChunkCache {
 public:
-    DataType at(const PartialRecord<DataType>& r, size_t i) {
+    /// a reader's last chunk (one a task)
+    struct Reader {
+        const PartialRecord<DataType>* record = nullptr;
+        size_t chunk = 0;
+        const DataType* values = nullptr;
+    };
+    DataType at(const PartialRecord<DataType>& r, size_t i, int64_t group, Reader& reader) {
         if (!r.compressed()) return r.data[i];
         const size_t c = i / kChunkElems;
-        if (&r != last_record_ || c != last_chunk_) {
-            Record& e = records_[&r];
-            if (e.offsets.empty()) {
-                e.offsets.assign(r.strides.size() + 1, 0);
-                for (size_t k = 0; k < r.strides.size(); ++k) e.offsets[k + 1] = e.offsets[k] + r.strides[k];
-            }
-            auto it = e.chunks.find(c);
-            if (it == e.chunks.end()) {
-                const size_t n = static_cast<size_t>(r.rows) * static_cast<size_t>(r.cols);
-                std::vector<DataType> values(std::min(kChunkElems, n - c * kChunkElems));
-                decompress_chunk(r.packed.data() + e.offsets[c], values.data());
-                it = e.chunks.emplace(c, std::move(values)).first;
-            }
-            last_record_ = &r;
-            last_chunk_ = c;
-            last_ = it->second.data();
+        if (&r != reader.record || c != reader.chunk) {
+            reader.values = chunk(r, c, group);
+            reader.record = &r;
+            reader.chunk = c;
         }
-        return last_[i - c * kChunkElems];
+        return reader.values[i - c * kChunkElems];
+    }
+    void release(int64_t group) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (auto it = records_.begin(); it != records_.end();) it = it->second->group == group ? records_.erase(it) : std::next(it);
     }
 
 private:
     static constexpr size_t kChunkElems = std::max<size_t>(1, kRecordChunkBytes / sizeof(DataType));
+    struct Chunk {
+        std::once_flag once;
+        std::vector<DataType> values;
+    };
+    struct Record {
+        int64_t group = 0;
+        std::vector<size_t> offsets;  // each chunk's bytes in packed
+        std::vector<std::unique_ptr<Chunk>> chunks;
+    };
+    const DataType* chunk(const PartialRecord<DataType>& r, size_t c, int64_t group) {
+        Chunk* ch = nullptr;
+        const char* src = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            auto& e = records_[&r];
+            if (!e) {
+                e = std::make_unique<Record>();
+                e->group = group;
+                e->offsets.assign(r.strides.size() + 1, 0);
+                for (size_t k = 0; k < r.strides.size(); ++k) e->offsets[k + 1] = e->offsets[k] + r.strides[k];
+                e->chunks.resize(r.strides.size());
+            }
+            if (!e->chunks[c]) e->chunks[c] = std::make_unique<Chunk>();
+            ch = e->chunks[c].get();
+            src = r.packed.data() + e->offsets[c];
+        }
+        std::call_once(ch->once, [&] {
+            const size_t n = static_cast<size_t>(r.rows) * static_cast<size_t>(r.cols);
+            ch->values.resize(std::min(kChunkElems, n - c * kChunkElems));
+            decompress_chunk(src, ch->values.data());
+        });
+        return ch->values.data();
+    }
     static void decompress_chunk(const char* at, DataType* dst) {
 #ifdef H2_HAVE_NVCOMP
         bitcompHandle_t plan{};
@@ -184,14 +219,8 @@ private:
         throw std::logic_error("H2_partial: a compressed record without a compressor");
 #endif
     }
-    struct Record {
-        std::vector<size_t> offsets;  // each chunk's bytes in packed
-        std::unordered_map<size_t, std::vector<DataType>> chunks;
-    };
-    std::unordered_map<const PartialRecord<DataType>*, Record> records_;
-    const PartialRecord<DataType>* last_record_ = nullptr;
-    size_t last_chunk_ = 0;
-    const DataType* last_ = nullptr;
+    std::mutex mutex_;
+    std::unordered_map<const PartialRecord<DataType>*, std::unique_ptr<Record>> records_;
 };
 
 }  // namespace fmm
