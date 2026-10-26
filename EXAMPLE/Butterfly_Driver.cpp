@@ -445,6 +445,13 @@ void apply(Handles& h, F2Cptr& ptree, char trans, const std::vector<double>& x, 
   d_c_bf_mult(&trans, x.data(), y.data(), &nin, &nout, &nvec, &h.bf, &h.option, &h.stats, &ptree);
 }
 
+// c_bf_mult into a y already sized by apply: what the timing loops time, without the driver's own
+// pass over y (c_bf_mult writes all of it)
+void apply_again(Handles& h, F2Cptr& ptree, char trans, const std::vector<double>& x, std::vector<double>& y,
+                 int nin, int nout, int nvec) {
+  d_c_bf_mult(&trans, x.data(), y.data(), &nin, &nout, &nvec, &h.bf, &h.option, &h.stats, &ptree);
+}
+
 void print_layout(int myid, const char* name, Handles& h) {
   int L = 0, half = 0, M = 0, N = 0, Ml = 0, Nl = 0, nlev = 0, nblk = 0;
   d_c_bf_get_layout(h.bf, &L, &half, &M, &N, &Ml, &Nl, &nlev, &nblk);
@@ -682,7 +689,7 @@ int main(int argc, char* argv[]) {
         for (int r = 0; r < opt.mult_reps; ++r) {
           MPI_Barrier(MPI_COMM_WORLD);
           const double s0 = MPI_Wtime();
-          apply(bf1, ptree, trans, x, y, nin, nout, nrhs);
+          apply_again(bf1, ptree, trans, x, y, nin, nout, nrhs);
           MPI_Barrier(MPI_COMM_WORLD);
           const double dt = MPI_Wtime() - s0;
           best = std::min(best, dt);

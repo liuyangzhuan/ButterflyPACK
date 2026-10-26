@@ -46,6 +46,8 @@
 #include "bpack_gpu.h"  // bpack_gpu_bf_matvec (GPU_INTERFACE)
 
 #ifdef BPACK_BF_GPU_ENABLED
+#include <sys/mman.h>
+
 extern "C" {
 void c_bf_get_layout(void* bf, int* level_butterfly, int* level_half, int* M, int* N, int* M_loc,
                      int* N_loc, int* nlevels, int* nblocks);
@@ -1546,12 +1548,158 @@ void c_bf_gpu_mult(void* bf, void* ptree, const char* op, const int* nrhs, const
 #endif
 }
 
+#ifdef BPACK_BF_GPU_ENABLED
+namespace {
+
+// The host vectors of c_bf_gpu_mult_host: the columns in chunks, each copied
+// by every OpenMP thread into pinned memory, sent on one copy stream, swept on
+// the backend's stream, and returned on another copy stream - so chunk i+1
+// comes in and chunk i-1 goes out while chunk i is swept.  Measured on one
+// A100 (65536^2 butterfly, 256 columns): pageable copies, one after another,
+// ~7 GB/s; pinned chunks without the overlap 23 ms a call, overlapped 15.5 ms,
+// against 5.5 ms on device vectors.  What is left is the host's memory
+// bandwidth: x and y each pass through the stage once.  Two chunks each way
+// at most, kept for the process; one caller at a time, as for the rest of the
+// store.
+//
+// Grow-only pinned host memory whose pages the OpenMP threads fault in, each
+// the part of it parallel_copy's static schedule gives that thread, so the
+// pages lie on the NUMA domains of the threads that copy through them.  From
+// cudaMallocHost all of it lay on the calling thread's domain: one rank of 64
+// threads on the node's four domains (262144^2, 256 columns) took 114 ms a
+// call against 80 ms spread.  Streaming stores gained 8% at most here and
+// nothing with a rank a domain; into the caller's y they ran up to 2x slower
+// (the kernel's NUMA balancing then left y's pages where they were).
+class SpreadPinned {
+ public:
+  void* reserve(size_t bytes) {
+    if (bytes <= capacity_) return ptr_;
+    constexpr size_t granule = size_t{64} << 20;
+    const size_t grown = (std::max(bytes, 2 * capacity_) + granule - 1) / granule * granule;
+    release();
+    void* p = mmap(nullptr, grown, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) throw std::runtime_error("bf host stage: no host memory");
+    madvise(p, grown, MADV_HUGEPAGE);
+    const int64_t pages = static_cast<int64_t>(grown / 4096);
+#pragma omp parallel for schedule(static)
+    for (int64_t i = 0; i < pages; ++i) static_cast<volatile char*>(p)[i * 4096] = 0;
+    fmm::gpu::check_cuda(cudaHostRegister(p, grown, cudaHostRegisterDefault), "bf host stage: register");
+    ptr_ = p;
+    capacity_ = grown;
+    return ptr_;
+  }
+  void release() {
+    if (ptr_ == nullptr) return;
+    cudaHostUnregister(ptr_);
+    munmap(ptr_, capacity_);
+    ptr_ = nullptr;
+    capacity_ = 0;
+  }
+
+ private:
+  void* ptr_ = nullptr;
+  size_t capacity_ = 0;
+};
+
+struct HostStage {
+  static constexpr size_t kChunkBytes = size_t{32} << 20;
+  static constexpr int kMinColumns = 64;  // a chunk this wide keeps the sweep's GEMMs efficient
+  SpreadPinned in[2], out[2];
+  cudaEvent_t in_sent[2] = {nullptr, nullptr}, out_back[2] = {nullptr, nullptr};
+  cudaEvent_t swept = nullptr;
+  cudaStream_t up = nullptr, down = nullptr;
+};
+
+HostStage& host_stage() {
+  static HostStage* stage = [] {
+    auto* h = new HostStage;  // never freed, as fmm::gpu::pinned_pool
+    for (cudaEvent_t* e : {&h->in_sent[0], &h->in_sent[1], &h->out_back[0], &h->out_back[1], &h->swept}) {
+      fmm::gpu::check_cuda(cudaEventCreateWithFlags(e, cudaEventDisableTiming), "bf host stage");
+    }
+    fmm::gpu::check_cuda(cudaStreamCreateWithFlags(&h->up, cudaStreamNonBlocking), "bf host stage");
+    fmm::gpu::check_cuda(cudaStreamCreateWithFlags(&h->down, cudaStreamNonBlocking), "bf host stage");
+    return h;
+  }();
+  return *stage;
+}
+
+// rows x cols of src (ld lds) into dst (ld ldd), host memory, by the OpenMP
+// threads in pieces of at most 64K elements
+void parallel_copy(double* dst, int64_t ldd, const double* src, int64_t lds, int64_t rows, int64_t cols) {
+  if (rows <= 0 || cols <= 0) return;
+  const int64_t piece = std::min<int64_t>(rows, int64_t{1} << 16);
+  const int64_t per_col = (rows + piece - 1) / piece;
+  const int64_t n = per_col * cols;
+#pragma omp parallel for schedule(static)
+  for (int64_t t = 0; t < n; ++t) {
+    const int64_t c = t / per_col, r0 = (t % per_col) * piece, r1 = std::min(rows, r0 + piece);
+    std::memcpy(dst + c * ldd + r0, src + c * lds + r0, static_cast<size_t>(r1 - r0) * sizeof(double));
+  }
+}
+
+// y = op(bf) x for host x (nin x nrhs, ld ldx) and y (nout x nrhs, ld ldy),
+// through the device buffers dx (nin x nrhs) and dy (nout x nrhs), chunk by
+// chunk as described above.  Returns the flops.
+double pipelined_mult(bf::gpu::BfResident& r, bf::gpu::SweepPlan& plan, int nrhs, const double* x, int64_t ldx,
+                      double* y, int64_t ldy, double* dx, double* dy, int64_t nin, int64_t nout, cudaStream_t stream) {
+  HostStage& h = host_stage();
+  const int64_t rows = std::max<int64_t>({nin, nout, 1});
+  const int64_t step = std::min<int64_t>(
+      nrhs, std::max<int64_t>(HostStage::kMinColumns, static_cast<int64_t>(HostStage::kChunkBytes / sizeof(double)) / rows));
+  const size_t in_bytes = static_cast<size_t>(std::max<int64_t>(nin, 1) * step) * sizeof(double);
+  const size_t out_bytes = static_cast<size_t>(std::max<int64_t>(nout, 1) * step) * sizeof(double);
+  const int64_t chunks = (nrhs + step - 1) / step;
+  double *bin[2] = {nullptr, nullptr}, *bout[2] = {nullptr, nullptr};
+  for (int s = 0; s < std::min<int64_t>(chunks, 2); ++s) {
+    bin[s] = static_cast<double*>(h.in[s].reserve(in_bytes));
+    bout[s] = static_cast<double*>(h.out[s].reserve(out_bytes));
+  }
+  auto cols_of = [&](int64_t k) { return std::min<int64_t>(step, nrhs - k * step); };
+  // unpack chunk k from its pinned buffer into y, once it is back
+  auto unpack = [&](int64_t k) {
+    const int s = static_cast<int>(k & 1);
+    fmm::gpu::check_cuda(cudaEventSynchronize(h.out_back[s]), "bf host stage out");
+    parallel_copy(y + k * step * ldy, ldy, bout[s], nout, nout, cols_of(k));
+  };
+  double flops = 0.0;
+  for (int64_t k = 0; k < chunks; ++k) {
+    const int s = static_cast<int>(k & 1);
+    const int64_t nc = cols_of(k);
+    // in: the pinned buffer two chunks back has been sent
+    if (k >= 2) fmm::gpu::check_cuda(cudaEventSynchronize(h.in_sent[s]), "bf host stage in");
+    parallel_copy(bin[s], nin, x + k * step * ldx, ldx, nin, nc);
+    fmm::gpu::check_cuda(cudaMemcpyAsync(dx + k * step * nin, bin[s], static_cast<size_t>(nin * nc) * sizeof(double),
+                                         cudaMemcpyHostToDevice, h.up),
+                         "bf host stage in");
+    fmm::gpu::check_cuda(cudaEventRecord(h.in_sent[s], h.up), "bf host stage in");
+    // swept once it has arrived
+    fmm::gpu::check_cuda(cudaStreamWaitEvent(stream, h.in_sent[s], 0), "bf host stage");
+    flops += bf::gpu::sweep(r.dev, plan, static_cast<int>(nc), dx + k * step * nin, static_cast<int>(std::max<int64_t>(nin, 1)),
+                            dy + k * step * nout, static_cast<int>(std::max<int64_t>(nout, 1)), 1.0, 0.0, r.scratch, stream);
+    fmm::gpu::check_cuda(cudaEventRecord(h.swept, stream), "bf host stage");
+    // out: the pinned buffer two chunks back has been unpacked (below)
+    fmm::gpu::check_cuda(cudaStreamWaitEvent(h.down, h.swept, 0), "bf host stage");
+    fmm::gpu::check_cuda(cudaMemcpyAsync(bout[s], dy + k * step * nout, static_cast<size_t>(nout * nc) * sizeof(double),
+                                         cudaMemcpyDeviceToHost, h.down),
+                         "bf host stage out");
+    fmm::gpu::check_cuda(cudaEventRecord(h.out_back[s], h.down), "bf host stage out");
+    // the chunk before comes out of its buffer while this one is swept
+    if (k >= 1) unpack(k - 1);
+  }
+  unpack(chunks - 1);
+  return flops;
+}
+
+}  // namespace
+#endif
+
 // The same product on the caller's host arrays (C_BF_Mult): x goes to the
-// device, the resident sweep runs, y = op(bf) x comes back.  For a caller
-// that keeps its vectors on the host; one that can keep them on the device
-// saves both copies with c_bf_gpu_mult.  The device copies of x and y are
-// taken per call from the arena, which is a bump of a pointer.  info 1: the
-// device declined, and the caller runs its host path.
+// device, the resident sweep runs, y = op(bf) x comes back, chunk by chunk
+// through pinned memory (pipelined_mult).  For a caller that keeps its vectors
+// on the host; one that can keep them on the device saves both copies with
+// c_bf_gpu_mult.  The device copies of x and y are taken per call from the
+// arena, which is a bump of a pointer.  info 1: the device declined, and the
+// caller runs its host path.
 void c_bf_gpu_mult_host(void* bf, void* ptree, const char* op, const int* nrhs, const void* x,
                         const int* ldx, void* y, const int* ldy, double* flops, int* info) {
 #ifdef BPACK_BF_GPU_ENABLED
@@ -1581,23 +1729,8 @@ void c_bf_gpu_mult_host(void* bf, void* ptree, const char* op, const int* nrhs, 
       return;
     }
     cudaStream_t stream = fmm::gpu::Context::instance().stream();
-    if (nin > 0) {
-      fmm::gpu::check_cuda(cudaMemcpy2DAsync(dx, static_cast<size_t>(nin) * sizeof(double), x,
-                                             static_cast<size_t>(*ldx) * sizeof(double),
-                                             static_cast<size_t>(nin) * sizeof(double), *nrhs,
-                                             cudaMemcpyHostToDevice, stream),
-                           "c_bf_gpu_mult_host x");
-    }
-    const double f = bf::gpu::sweep(r->dev, plan, *nrhs, reinterpret_cast<const double*>(dx), std::max(nin, 1),
-                                    reinterpret_cast<double*>(dy), std::max(nout, 1), 1.0, 0.0, r->scratch,
-                                    stream);
-    if (nout > 0) {
-      fmm::gpu::check_cuda(cudaMemcpy2DAsync(y, static_cast<size_t>(*ldy) * sizeof(double), dy,
-                                             static_cast<size_t>(nout) * sizeof(double),
-                                             static_cast<size_t>(nout) * sizeof(double), *nrhs,
-                                             cudaMemcpyDeviceToHost, stream),
-                           "c_bf_gpu_mult_host y");
-    }
+    const double f = pipelined_mult(*r, plan, *nrhs, static_cast<const double*>(x), *ldx, static_cast<double*>(y), *ldy,
+                                    reinterpret_cast<double*>(dx), reinterpret_cast<double*>(dy), nin, nout, stream);
     fmm::gpu::check_cuda(cudaStreamSynchronize(stream), "c_bf_gpu_mult_host");
     heap.free(dx);
     heap.free(dy);

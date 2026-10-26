@@ -5084,9 +5084,11 @@ contains
       stats%Time_C_Mult_FFT_Multiply = 0
       stats%Time_C_Mult_FFT_Backward = 0
       stats%Time_C_Mult_FFT_Output = 0
-      xout = 0
-      !>**** on the device when the options ask for it (GPU_BACKEND/bf_gpu);
-      !> gpu_info 1: it declined, or was not asked, and the host runs it
+      !>**** on the device when the options ask for it (GPU_BACKEND/bf_gpu),
+      !> which writes all of xout; gpu_info 1: it declined, or was not asked,
+      !> and the host runs it.  The two whole-array passes over xout (the
+      !> zeroing, the scale_factor) are serial and cost more than the device
+      !> product itself at 64+ columns, so neither runs when it changes nothing.
       gpu_info = 1
       if (BF_gpu_mult_ok(blocks, option)) then
          call c_bf_gpu_mult_host(bf_for_Cptr, ptree_Cptr, trans(1), Ncol, c_loc(xin), Ninloc, &
@@ -5094,6 +5096,7 @@ contains
          if (gpu_info == 0) stats%Flop_Tmp = stats%Flop_Tmp + gpu_flops
       endif
       if (gpu_info /= 0) then
+      xout = 0
       if (trim(str) == 'N') then
          call BF_block_MVP_dat(blocks, trim(str), Noutloc, Ninloc, Ncol, xin, Ninloc, xout,Noutloc, BPACK_cone, BPACK_czero, ptree, stats)
       else
@@ -5103,7 +5106,7 @@ contains
 
       t2 = MPI_Wtime()
 
-      xout = xout/option%scale_factor
+      if (option%scale_factor /= 1d0) xout = xout/option%scale_factor
 
       stats%Time_C_Mult_Wrapper = stats%Time_C_Mult_Wrapper + t2 - t1
       stats%Time_C_Mult = stats%Time_C_Mult + t2 - t1
