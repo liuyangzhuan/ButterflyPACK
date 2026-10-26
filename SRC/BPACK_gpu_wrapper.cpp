@@ -1860,9 +1860,9 @@ void c_bf_gpu_extract_dist(void* bf, void* ptree, const int* ninter, const int* 
     *info = 0;
     if (fmm::env::trace("phase") && r->dev.myid == 0) {
       std::printf("BF GPU extract (rank 0 of %d): %d intersections, %lld local entries, %lld GEMMs, %.3e flops: "
-                  "plan %.4f s, run %.4f s (midpoint %.4f s, %lld sent, %lld received)\n",
+                  "plan %.4f s, run %.4f s (midpoint %.4f s; %d exchanges, %lld sent, %lld received)\n",
                   r->bridge.nproc, q.count, static_cast<long long>(prof.entries), static_cast<long long>(prof.items),
-                  prof.flops, prof.plan, prof.run, prof.mid, static_cast<long long>(prof.sent),
+                  prof.flops, prof.plan, prof.run, prof.mid, prof.exchanges, static_cast<long long>(prof.sent),
                   static_cast<long long>(prof.received));
       std::fflush(stdout);
     }

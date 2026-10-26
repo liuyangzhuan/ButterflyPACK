@@ -44,6 +44,8 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
+#include <memory>
 #include <numeric>
 #include <stdexcept>
 #include <string>
@@ -78,9 +80,12 @@ struct ExtractScatter {
     int m = 0, n = 0;
 };
 
-// n elements from src + src_off to dst + dst_off
+// n elements from src + src_off to dst + dst_off: contiguous, or with
+// rows > 0 a rows x (n / rows) block into a matrix of leading dimension ld
 struct ExtractCopy {
     int64_t src = 0, dst = 0, n = 0;
+    int64_t ld = 0;
+    int rows = 0;
 };
 
 void launch_extract_gather(const ExtractGather* items, int count, const int* idx, const DataType* values,
@@ -104,7 +109,9 @@ struct ExtractProfile {
     double plan = 0, run = 0, copy = 0;
     int64_t items = 0, entries = 0;
     double flops = 0;
-    // several ranks: the midpoint's elements sent and received, and its seconds
+    // several ranks: the exchanges (the midpoint's and any other), their
+    // elements sent and received, and the midpoint's seconds
+    int exchanges = 0;
     int64_t sent = 0, received = 0;
     double mid = 0;
 };
@@ -605,17 +612,31 @@ inline bool extract(const BfDevice& bf, ExtractLeaves& leaves, int count, const 
 // Kerl(1 .. h)) in the row-wise ordering, with a pair-wise broadcast after
 // each level, the midpoint redistribution, the left half in the column-wise
 // ordering with a pair-wise reduction after each level, and U; each rank ends
-// with its rows of every intersection.  When every column group of tree level
-// h has its leaves on one rank and so does every row group, the pair-wise
-// exchanges carry nothing: a rank holds the whole right half of its column
-// groups and the whole left half of its row groups.  That is the case here
-// (2^h groups each way a rank at most, so up to 2^min(h, L-h) ranks): the
-// right half's partial products are computed where their columns are, the
-// left half's (from U, as extract() does) where their rows are, and the one
-// exchange is the midpoint's - the right half's products of tree level h
-// going to the rank of their row group, which multiplies them with its left
-// half's.  Any other distribution declines, on every rank together, and the
-// host runs.
+// with its rows of every intersection.  Here the halves meet in the middle as
+// in extract(): each of the right half's partial products is made on the
+// rank holding the factor block that makes it, from V up, and each of the
+// left half's likewise from U down; the right half's products of vector
+// level h+1 go to the rank holding the left half's product each meets, which
+// multiplies the two.
+//
+// Who holds a block follows from the leaves' owners, since GetBlockPID maps
+// a block to a leaf and the leaf to the head of its process group: in the
+// row-wise ordering, block (F, G) of level t - row F, column group G (the
+// kernel's columns 2G and 2G+1) - to column leaf (G << t) | rev_t(F), rev_t
+// reversing F's t bits; in the column-wise ordering, block (G, J) of level
+// t - row group G (the kernel's rows 2G and 2G+1), column J - to row leaf
+// (G << (L-t+1)) | rev_{L-t+1}(J).  The right half's product (F, C) of
+// vector level t is used by level t's blocks (2F, C>>1) and (2F+1, C>>1),
+// whose leaves are its maker's and the one differing from that in bit t-1;
+// the left half's product (F, C) of vector level t by level t-1's (F>>1, 2C)
+// and (F>>1, 2C+1), its maker's leaf and the one differing in bit L-t+1.  So
+// a level's products all stay with their makers unless two leaves one bit
+// apart there have different owners: with 2^p ranks of 2^(L-p) consecutive
+// leaves each, the right half's levels t > L-p and the left half's
+// t <= p+1, none of them when p <= min(h, L-h), the common case.  Where they
+// do, each product goes to its other user once made - the host's pair-wise
+// exchanges.  And when a row group of tree level h has several owners
+// (p > L-h), the rank meeting its halves sends each owner its rows.
 //
 // The request is the host's: every rank passes every intersection (checked),
 // each row and column by its leaf and its position in the leaf, which of an
@@ -635,10 +656,55 @@ struct ExtractRequest {
     const int* col_owner = nullptr;  // of each column leaf
 };
 
+namespace detail {
+
+// x's low `bits` bits in reverse order
+inline int reverse_bits(int x, int bits) {
+    if (bits <= 0) return 0;
+    uint32_t v = static_cast<uint32_t>(x);
+    v = ((v >> 1) & 0x55555555u) | ((v & 0x55555555u) << 1);
+    v = ((v >> 2) & 0x33333333u) | ((v & 0x33333333u) << 2);
+    v = ((v >> 4) & 0x0F0F0F0Fu) | ((v & 0x0F0F0F0Fu) << 4);
+    v = ((v >> 8) & 0x00FF00FFu) | ((v & 0x00FF00FFu) << 8);
+    v = (v >> 16) | (v << 16);
+    return static_cast<int>(v >> (32 - bits));
+}
+
+// The lowest bit at which two leaves differing only there can have different
+// owners (L when one rank owns all 2^L leaves); -1 when an owner is not a
+// rank of the group or a rank's leaves are not consecutive.  With consecutive
+// leaves it is the least number of trailing zeros of a leaf that starts a
+// rank's leaves: such a leaf and the one below it in that bit have different
+// owners, and a split with more trailing zeros cuts no pair at a lower bit.
+inline int owner_split_bit(const int* owner, int L, int nproc) {
+    int low = L;
+    std::vector<char> seen(static_cast<size_t>(nproc), 0);
+    for (int a = 0; a < (1 << L); ++a) {
+        const int o = owner[a];
+        if (o < 0 || o >= nproc) return -1;
+        if (a > 0 && o != owner[a - 1]) {
+            if (seen[static_cast<size_t>(o)]) return -1;
+            low = std::min(low, __builtin_ctz(static_cast<unsigned>(a)));
+        }
+        seen[static_cast<size_t>(o)] = 1;
+    }
+    return low;
+}
+
+// The runs [lo, hi) of a list sorted by group whose groups are parent's
+// children (2 parent and 2 parent + 1).
+inline void child_runs(const Run* r, int64_t n, int parent, int64_t& lo, int64_t& hi) {
+    lo = std::lower_bound(r, r + n, 2 * parent, [](const Run& x, int g) { return x.g < g; }) - r;
+    hi = lo;
+    while (hi < n && (r[hi].g >> 1) == parent) ++hi;
+}
+
+}  // namespace detail
+
 // This rank's rows of every intersection into out (host), the blocks
 // nloc[k] x nc[k], column major, stacked in order.  0: done; 1: declined on
-// every rank (another distribution, no room on some rank).  Collective over
-// the block's communicator.
+// every rank (leaves not split among the ranks in consecutive runs, no room
+// on some rank).  Collective over the block's communicator.
 inline int extract_dist(const BfDevice& bf, MPI_Comm comm, const ExtractRequest& q, DataType* out,
                         ExtractProfile& prof, fmm::gpu::MetaBuilder& meta, fmm::gpu::DeviceBuffer& meta_device) {
     using clock = std::chrono::steady_clock;
@@ -681,26 +747,31 @@ inline int extract_dist(const BfDevice& bf, MPI_Comm comm, const ExtractRequest&
         unsigned long long lo = hv, hi = hv;
         MPI_Allreduce(MPI_IN_PLACE, &lo, 1, MPI_UNSIGNED_LONG_LONG, MPI_MIN, comm);
         MPI_Allreduce(MPI_IN_PLACE, &hi, 1, MPI_UNSIGNED_LONG_LONG, MPI_MAX, comm);
-        if (lo != hi) ok = 0;
+        if (lo != hi) return 1;  // every rank sees it
     }
-    // ---- the rank of each row group and column group of tree level h, -1
-    // where a group's leaves are on several ranks (or a leaf on none)
-    std::vector<int> rgo(static_cast<size_t>(1) << h, -2), cgo(static_cast<size_t>(1) << (L - h), -2);
-    for (int a = 0; a < nleaf; ++a) {
-        int& g = rgo[static_cast<size_t>(a >> (L - h))];
-        const int o = q.row_owner[a];
-        g = (o < 0 || o >= nproc || (g != -2 && g != o)) ? -1 : o;
-    }
-    for (int b = 0; b < nleaf; ++b) {
-        int& g = cgo[static_cast<size_t>(b >> h)];
-        const int o = q.col_owner[b];
-        g = (o < 0 || o >= nproc || (g != -2 && g != o)) ? -1 : o;
-    }
-    for (int g : rgo) if (g < 0) ok = 0;
-    for (int g : cgo) if (g < 0) ok = 0;
-    // a row group g of tree level t >= h, and a column group of level t <= h
-    auto row_mine = [&](int t, int g) { return rgo[static_cast<size_t>(g >> (t - h))] == me; };
-    auto col_mine = [&](int t, int g) { return cgo[static_cast<size_t>(g >> (h - t))] == me; };
+    // ---- the leaves' owners, the same on every rank now, so every rank
+    // declines here together or none does
+    const int low_row = detail::owner_split_bit(q.row_owner, L, nproc);
+    const int low_col = detail::owner_split_bit(q.col_owner, L, nproc);
+    if (low_row < 0 || low_col < 0) return 1;
+    // where a product has a second user (see above): the right half's of
+    // vector level t <= h, the left half's of level t >= h+2, and the rows
+    // of a row group of tree level h
+    auto shared_r = [&](int t) { return t - 1 >= low_col; };
+    auto shared_w = [&](int t) { return L - t + 1 >= low_row; };
+    const bool shared_out = low_row < L - h;
+    // the maker of the right half's product (F, C) of vector level t (block
+    // (F, C) of row-wise level t-1) and of the left half's (block (F, C) of
+    // column-wise level t); where no split falls among the leaves F (C)
+    // picks from, any of them names the rank
+    auto own_r = [&](int t, int F, int C) {
+        const int b = t - 1;
+        return q.col_owner[(C << b) | (b > low_col ? detail::reverse_bits(F, b) : 0)];
+    };
+    auto own_w = [&](int t, int F, int C) {
+        const int b = L - t + 1;
+        return q.row_owner[(F << b) | (b > low_row ? detail::reverse_bits(C, b) : 0)];
+    };
     // a factor block this rank holds, by its zero-based global indices, or null
     auto block_at = [&](int l, int gi, int gj) -> const BlockDesc* {
         const LevelDesc& d = bf.level(l);
@@ -711,8 +782,8 @@ inline int extract_dist(const BfDevice& bf, MPI_Comm comm, const ExtractRequest&
         const BlockDesc& b = bf.blocks[static_cast<size_t>(d.first + static_cast<int64_t>(i) * d.nc + j)];
         return &b;
     };
-    // the rank of vector level t's block (F, C), from the half that holds it:
-    // the right half from the factor below it, the left half from the one
+    // the rank of vector level t's block (F, C), from the factor that makes
+    // it: the right half's from the one below, the left half's from the one
     // above; -1 when that factor is not here
     auto rank_r = [&](int t, int F, int C) -> int {
         const BlockDesc* b = t == 1 ? block_at(0, 0, C) : block_at(t - 1, F, 2 * C);
@@ -820,35 +891,54 @@ inline int extract_dist(const BfDevice& bf, MPI_Comm comm, const ExtractRequest&
         }
     }
     if (bad_local > 0) ok = 0;
+    // the owners' parts of rows [p0, p1) of intersection k's leaf order:
+    // part(r0, r1, owner) for each, in order
+    auto by_owner = [&](int k, int64_t p0, int64_t p1, auto part) {
+        for (int64_t r = p0; r < p1;) {
+            const int o = q.row_owner[rleaf[row_at[k] + r]];
+            int64_t e = r + 1;
+            while (e < p1 && q.row_owner[rleaf[row_at[k] + e]] == o) ++e;
+            part(r, e, o);
+            r = e;
+        }
+    };
 
     // ---- the partial products: slot (k, fi, ci) of a level at
-    // at[base[k] + fi * nC + ci], sized by `size` (0: not this rank's)
+    // at[base[k] + fi * nC + ci] (-1: not on this rank), size[...] elements.
+    // A level of a large request has millions of slots, most of them other
+    // ranks', so the two arrays are written only by the layout's parallel
+    // passes, never filled first (a serial fill of one cost 3-6 ms a call).
     struct Level {
-        std::vector<int64_t> base, at;
+        std::vector<int64_t> base;
+        std::unique_ptr<int64_t[]> at, size;
         int64_t total = 0;
     };
     int bad_rank = 0;
-    auto layout = [&](int tl, Level& s, auto size) {  // tl: the tree level of the runs
+    auto layout = [&](int tl, Level& s, auto size_of) {  // tl: the tree level of the runs
         const auto& RR = rr[tl];
         const auto& CR = cr[tl];
         const auto& RO = ro[tl];
         const auto& CO = co[tl];
         s.base.assign(row_at.size(), 0);
+        for (int k = 0; k < count; ++k) s.base[k + 1] = s.base[k] + (RO[k + 1] - RO[k]) * (CO[k + 1] - CO[k]);
+        const size_t slots = static_cast<size_t>(std::max<int64_t>(s.base[count], 1));
+        s.at.reset(new int64_t[slots]);
+        s.size.reset(new int64_t[slots]);
         std::vector<int64_t> elems(row_at.size(), 0);
-        for (int k = 0; k < count; ++k) {
-            s.base[k + 1] = s.base[k] + (RO[k + 1] - RO[k]) * (CO[k + 1] - CO[k]);
-        }
-        s.at.assign(static_cast<size_t>(s.base[count]), -1);
         int bad = 0;
 #pragma omp parallel for schedule(dynamic, 16) reduction(+ : bad)
         for (int k = 0; k < count; ++k) {
             const int64_t nF = RO[k + 1] - RO[k], nC = CO[k + 1] - CO[k];
-            int64_t e = 0;
+            int64_t e = 0, idx = s.base[k];
             for (int64_t fi = 0; fi < nF; ++fi)
-                for (int64_t ci = 0; ci < nC; ++ci) {
-                    const int64_t z = size(RR[RO[k] + fi], CR[CO[k] + ci]);
-                    if (z < 0) ++bad;
-                    else e += z;
+                for (int64_t ci = 0; ci < nC; ++ci, ++idx) {
+                    int64_t z = size_of(k, RR[RO[k] + fi], CR[CO[k] + ci]);
+                    if (z < 0) {
+                        ++bad;
+                        z = 0;
+                    }
+                    s.size[idx] = z;
+                    e += z;
                 }
             elems[k + 1] = e;
         }
@@ -857,45 +947,90 @@ inline int extract_dist(const BfDevice& bf, MPI_Comm comm, const ExtractRequest&
         s.total = elems[count];
 #pragma omp parallel for schedule(dynamic, 16)
         for (int k = 0; k < count; ++k) {
-            const int64_t nF = RO[k + 1] - RO[k], nC = CO[k + 1] - CO[k];
-            int64_t off = elems[k], idx = s.base[k];
-            for (int64_t fi = 0; fi < nF; ++fi)
-                for (int64_t ci = 0; ci < nC; ++ci, ++idx) {
-                    const int64_t z = size(RR[RO[k] + fi], CR[CO[k] + ci]);
-                    if (z > 0) {
-                        s.at[static_cast<size_t>(idx)] = off;
-                        off += z;
-                    }
-                }
+            int64_t off = elems[k];
+            for (int64_t idx = s.base[k]; idx < s.base[k + 1]; ++idx) {
+                const int64_t z = s.size[idx];
+                s.at[idx] = z > 0 ? off : -1;
+                off += z;
+            }
         }
     };
-    // right half, vector levels 1 .. h+1 (runs of tree level t-1): this rank's column groups
+    // right half, vector levels 1 .. h+1 (runs of tree level t-1): the
+    // products this rank makes, and at a shared level those it uses, sized
+    // from the factor that uses them
     std::vector<Level> R(static_cast<size_t>(h) + 2), W(static_cast<size_t>(L) + 2);
     Level Rmid;
     for (int t = 1; t <= h + 1; ++t) {
-        layout(t - 1, R[t], [&](const Run& f, const Run& c) -> int64_t {
-            if (!col_mine(t - 1, c.g)) return 0;
-            const int r = rank_r(t, f.g, c.g);
-            return r < 0 ? -1 : static_cast<int64_t>(r) * c.count;
+        const bool used_here = t <= h && shared_r(t);
+        layout(t - 1, R[t], [&](int k, const Run& f, const Run& c) -> int64_t {
+            if (own_r(t, f.g, c.g) == me) {
+                const int r = rank_r(t, f.g, c.g);
+                return r < 0 ? -1 : static_cast<int64_t>(r) * c.count;
+            }
+            if (!used_here) return 0;
+            const Run* fr = rr[t].data() + ro[t][k];
+            int64_t lo = 0, hi = 0;
+            detail::child_runs(fr, ro[t][k + 1] - ro[t][k], f.g, lo, hi);
+            for (int64_t i = lo; i < hi; ++i) {
+                if (own_r(t + 1, fr[i].g, c.g >> 1) != me) continue;
+                const BlockDesc* b = block_at(t, fr[i].g, c.g);
+                return b == nullptr ? -1 : static_cast<int64_t>(b->cols) * c.count;
+            }
+            return 0;
         });
     }
-    // left half, vector levels L+1 .. h+1: this rank's row groups
+    // left half, vector levels L+1 .. h+1 (runs of tree level t-1), likewise
     for (int t = L + 1; t >= h + 1; --t) {
-        layout(t - 1, W[t], [&](const Run& f, const Run& c) -> int64_t {
-            if (!row_mine(t - 1, f.g)) return 0;
-            const int r = rank_w(t, f.g, c.g);
-            return r < 0 ? -1 : static_cast<int64_t>(r) * f.count;
+        const bool used_here = t >= h + 2 && shared_w(t);
+        layout(t - 1, W[t], [&](int k, const Run& f, const Run& c) -> int64_t {
+            if (own_w(t, f.g, c.g) == me) {
+                const int r = rank_w(t, f.g, c.g);
+                return r < 0 ? -1 : static_cast<int64_t>(r) * f.count;
+            }
+            if (!used_here) return 0;
+            const Run* cc = cr[t - 2].data() + co[t - 2][k];
+            int64_t lo = 0, hi = 0;
+            detail::child_runs(cc, co[t - 2][k + 1] - co[t - 2][k], c.g, lo, hi);
+            for (int64_t i = lo; i < hi; ++i) {
+                if (own_w(t - 1, f.g >> 1, cc[i].g) != me) continue;
+                const BlockDesc* b = block_at(t - 1, f.g, cc[i].g);
+                return b == nullptr ? -1 : static_cast<int64_t>(b->rows) * f.count;
+            }
+            return 0;
         });
     }
-    // the right half's products of vector level h+1 that meet this rank's rows
-    layout(h, Rmid, [&](const Run& f, const Run& c) -> int64_t {
-        if (!row_mine(h, f.g)) return 0;
+    // the right half's products of vector level h+1 that meet this rank's
+    // left half's
+    layout(h, Rmid, [&](int, const Run& f, const Run& c) -> int64_t {
+        if (own_w(h + 1, f.g, c.g) != me) return 0;
         const int r = rank_w(h + 1, f.g, c.g);
         return r < 0 ? -1 : static_cast<int64_t>(r) * c.count;
     });
     if (bad_rank > 0) ok = 0;
+    // the meet's rows that other ranks own, in order (intersection, row run,
+    // column run, owner), staged before they go: where each intersection's
+    // start
+    std::vector<int64_t> stage_at(row_at.size(), 0);
+    if (shared_out) {
+#pragma omp parallel for schedule(dynamic, 16)
+        for (int k = 0; k < count; ++k) {
+            int64_t n = 0;
+            for (int64_t fi = ro[h][k]; fi < ro[h][k + 1]; ++fi) {
+                const Run& f = rr[h][fi];
+                for (int64_t ci = co[h][k]; ci < co[h][k + 1]; ++ci) {
+                    const Run& c = cr[h][ci];
+                    if (own_w(h + 1, f.g, c.g) != me) continue;
+                    by_owner(k, f.start, f.start + f.count, [&](int64_t r0, int64_t r1, int o) {
+                        if (o != me) n += (r1 - r0) * c.count;
+                    });
+                }
+            }
+            stage_at[k + 1] = n;
+        }
+        for (int k = 0; k < count; ++k) stage_at[k + 1] += stage_at[k];
+    }
 
-    // ---- the GEMM stages, as extract()'s, over this rank's halves
+    // ---- the GEMM stages, as extract()'s, over the products this rank makes
     std::vector<ExtractStage> stages;
     int bad_block = 0;
     auto build = [&](auto items_of, auto fill_one) {
@@ -915,12 +1050,14 @@ inline int extract_dist(const BfDevice& bf, MPI_Comm comm, const ExtractRequest&
     DataType* dRmid = nullptr;
     DataType* sorted = nullptr;
     DataType* d_out = nullptr;
+    DataType* dstage = nullptr;
     auto put = [](ExtractStage& s, int64_t i, const DataType* a, int lda, const DataType* b, int ldb, DataType* c,
                   int ldc, int m, int n, int kk) {
         s.a[i] = a; s.b[i] = b; s.c[i] = c;
         s.m[i] = m; s.n[i] = n; s.k[i] = kk;
         s.lda[i] = std::max(lda, 1); s.ldb[i] = std::max(ldb, 1); s.ldc[i] = std::max(ldc, 1);
     };
+    auto put_bad = [&](ExtractStage& s, int64_t i) { put(s, i, nullptr, 1, nullptr, 1, nullptr, 1, 0, 0, 0); };
     // The buffers come first, since the items hold pointers into them; on no
     // room the plan goes on without them and the group declines below.
     auto& heap = fmm::gpu::DeviceHeap::instance();
@@ -943,16 +1080,27 @@ inline int extract_dist(const BfDevice& bf, MPI_Comm comm, const ExtractRequest&
     dRmid = take(Rmid.total);
     sorted = take(entries);
     d_out = take(entries);
+    if (shared_out) dstage = take(stage_at[count]);
     if (!room) ok = 0;
     const bool go = ok != 0;  // pointers into missing buffers are never followed: nothing launches unless all is well
 
     if (go) {
-        // right half: vector level t -> t+1 through Kerl(t), over this rank's column groups
+        // right half: vector level t -> t+1 through Kerl(t).  Where no split
+        // falls among a column group's leaves (t <= low_col) one rank makes
+        // all its products, whatever their rows.
         for (int t = 1; t <= h; ++t) {
+            const bool whole = t <= low_col;
             build([&](int k) {
                       int64_t n = 0;
-                      for (int64_t ci = co[t - 1][k]; ci < co[t - 1][k + 1]; ++ci)
-                          if (col_mine(t - 1, cr[t - 1][ci].g)) n += ro[t][k + 1] - ro[t][k];
+                      for (int64_t ci = co[t - 1][k]; ci < co[t - 1][k + 1]; ++ci) {
+                          const int C = cr[t - 1][ci].g;
+                          if (whole) {
+                              if (own_r(t + 1, 0, C >> 1) == me) n += ro[t][k + 1] - ro[t][k];
+                              continue;
+                          }
+                          for (int64_t fo = ro[t][k]; fo < ro[t][k + 1]; ++fo)
+                              if (own_r(t + 1, rr[t][fo].g, C >> 1) == me) ++n;
+                      }
                       return n;
                   },
                   [&](int k, ExtractStage& s, int64_t i) {
@@ -967,34 +1115,44 @@ inline int extract_dist(const BfDevice& bf, MPI_Comm comm, const ExtractRequest&
                       const int64_t nc_out = co[t][k + 1] - co[t][k];
                       for (int64_t ci = 0; ci < nc_in; ++ci) {
                           const int C = c_in[ci].g;
-                          if (!col_mine(t - 1, C)) continue;
+                          if (whole && own_r(t + 1, 0, C >> 1) != me) continue;
                           const int cp = find(c_out, nc_out, C >> 1);
                           for (int64_t fo = 0; fo < nf_out; ++fo) {
                               const int F = f_out[fo].g;
+                              if (!whole && own_r(t + 1, F, C >> 1) != me) continue;
                               const int fi = find(f_in, nf_in, F >> 1);
-                              const BlockDesc* K = block_at(t, F, C);
-                              const int r_out = rank_r(t + 1, F, C >> 1);
-                              const int r_in = rank_r(t, F >> 1, C);
-                              if (K == nullptr || r_out < 0 || r_in < 0) {
+                              const BlockDesc* K = block_at(t, F, C);  // r_out x r_in
+                              const int64_t a_in = R[t].at[R[t].base[k] + fi * nc_in + ci];
+                              const int64_t a_out = R[t + 1].at[R[t + 1].base[k] + fo * nc_out + cp];
+                              if (K == nullptr || a_in < 0 || a_out < 0) {
                                   ++bad;
-                                  put(s, i++, nullptr, 1, nullptr, 1, nullptr, 1, 0, 0, 0);
+                                  put_bad(s, i++);
                                   continue;
                               }
-                              const DataType* B = dR[t] + R[t].at[R[t].base[k] + fi * nc_in + ci];
-                              DataType* Cp = dR[t + 1] + R[t + 1].at[R[t + 1].base[k] + fo * nc_out + cp] +
-                                             static_cast<int64_t>(c_in[ci].start - c_out[cp].start) * r_out;
-                              put(s, i++, bf.values + K->offset, K->lda, B, r_in, Cp, r_out, r_out, c_in[ci].count, r_in);
+                              DataType* Cp = dR[t + 1] + a_out + static_cast<int64_t>(c_in[ci].start - c_out[cp].start) * K->rows;
+                              put(s, i++, bf.values + K->offset, K->lda, dR[t] + a_in, K->cols, Cp, K->rows, K->rows,
+                                  c_in[ci].count, K->cols);
                           }
                       }
                       return bad;
                   });
         }
-        // left half: vector level t -> t-1 through Kerl(t-1), over this rank's row groups
+        // left half: vector level t -> t-1 through Kerl(t-1).  Where no split
+        // falls among a row group's leaves (L-t+2 <= low_row) one rank makes
+        // all its products, whatever their columns.
         for (int t = L + 1; t >= h + 2; --t) {
+            const bool whole = L - t + 2 <= low_row;
             build([&](int k) {
                       int64_t n = 0;
-                      for (int64_t fi = ro[t - 1][k]; fi < ro[t - 1][k + 1]; ++fi)
-                          if (row_mine(t - 1, rr[t - 1][fi].g)) n += co[t - 2][k + 1] - co[t - 2][k];
+                      for (int64_t fi = ro[t - 1][k]; fi < ro[t - 1][k + 1]; ++fi) {
+                          const int F = rr[t - 1][fi].g;
+                          if (whole) {
+                              if (own_w(t - 1, F >> 1, 0) == me) n += co[t - 2][k + 1] - co[t - 2][k];
+                              continue;
+                          }
+                          for (int64_t cj = co[t - 2][k]; cj < co[t - 2][k + 1]; ++cj)
+                              if (own_w(t - 1, F >> 1, cr[t - 2][cj].g) == me) ++n;
+                      }
                       return n;
                   },
                   [&](int k, ExtractStage& s, int64_t i) {
@@ -1009,119 +1167,276 @@ inline int extract_dist(const BfDevice& bf, MPI_Comm comm, const ExtractRequest&
                       const int64_t nc_out = co[t - 2][k + 1] - co[t - 2][k];
                       for (int64_t fi = 0; fi < nf_in; ++fi) {
                           const int F = f_in[fi].g;
-                          if (!row_mine(t - 1, F)) continue;
+                          if (whole && own_w(t - 1, F >> 1, 0) != me) continue;
                           const int fp = find(f_out, nf_out, F >> 1);
                           for (int64_t cj = 0; cj < nc_out; ++cj) {
                               const int J = c_out[cj].g;
+                              if (!whole && own_w(t - 1, F >> 1, J) != me) continue;
                               const int ci = find(c_in, nc_in, J >> 1);
-                              const BlockDesc* K = block_at(t - 1, F, J);
-                              const int r_in = rank_w(t, F, J >> 1);
-                              const int r_out = rank_w(t - 1, F >> 1, J);
-                              if (K == nullptr || r_in < 0 || r_out < 0) {
+                              const BlockDesc* K = block_at(t - 1, F, J);  // r_in x r_out
+                              const int64_t a_in = W[t].at[W[t].base[k] + fi * nc_in + ci];
+                              const int64_t a_out = W[t - 1].at[W[t - 1].base[k] + fp * nc_out + cj];
+                              if (K == nullptr || a_in < 0 || a_out < 0) {
                                   ++bad;
-                                  put(s, i++, nullptr, 1, nullptr, 1, nullptr, 1, 0, 0, 0);
+                                  put_bad(s, i++);
                                   continue;
                               }
-                              const DataType* A = dW[t] + W[t].at[W[t].base[k] + fi * nc_in + ci];
-                              DataType* Cp = dW[t - 1] + W[t - 1].at[W[t - 1].base[k] + fp * nc_out + cj] +
-                                             (f_in[fi].start - f_out[fp].start);
-                              put(s, i++, A, f_in[fi].count, bf.values + K->offset, K->lda, Cp, f_out[fp].count,
-                                  f_in[fi].count, r_out, r_in);
+                              DataType* Cp = dW[t - 1] + a_out + (f_in[fi].start - f_out[fp].start);
+                              put(s, i++, dW[t] + a_in, f_in[fi].count, bf.values + K->offset, K->lda, Cp,
+                                  f_out[fp].count, f_in[fi].count, K->cols, K->rows);
                           }
                       }
                       return bad;
                   });
         }
-        // the middle: this rank's rows, every column, in leaf order
+        // the middle: the halves this rank meets, into its rows of the
+        // result, and the rows other ranks own into the staging buffer
         build([&](int k) {
                   int64_t n = 0;
-                  for (int64_t fi = ro[h][k]; fi < ro[h][k + 1]; ++fi)
-                      if (row_mine(h, rr[h][fi].g)) n += co[h][k + 1] - co[h][k];
+                  const int64_t nc = co[h][k + 1] - co[h][k];
+                  for (int64_t fi = ro[h][k]; fi < ro[h][k + 1]; ++fi) {
+                      const Run& f = rr[h][fi];
+                      if (!shared_out) {
+                          if (own_w(h + 1, f.g, 0) == me) n += nc;
+                          continue;
+                      }
+                      for (int64_t ci = co[h][k]; ci < co[h][k + 1]; ++ci) {
+                          if (own_w(h + 1, f.g, cr[h][ci].g) != me) continue;
+                          by_owner(k, f.start, f.start + f.count, [&](int64_t, int64_t, int) { ++n; });
+                      }
+                  }
                   return n;
               },
               [&](int k, ExtractStage& s, int64_t i) {
+                  int bad = 0;
                   const Run* fr = rr[h].data() + ro[h][k];
                   const int64_t nf = ro[h][k + 1] - ro[h][k];
                   const Run* cc = cr[h].data() + co[h][k];
                   const int64_t nc = co[h][k + 1] - co[h][k];
                   const int m = q.nloc[k];
+                  int64_t staged = stage_at[k];
                   for (int64_t fi = 0; fi < nf; ++fi) {
-                      if (!row_mine(h, fr[fi].g)) continue;
+                      if (!shared_out && own_w(h + 1, fr[fi].g, 0) != me) continue;
                       for (int64_t ci = 0; ci < nc; ++ci) {
+                          if (shared_out && own_w(h + 1, fr[fi].g, cc[ci].g) != me) continue;
                           const int r = rank_w(h + 1, fr[fi].g, cc[ci].g);
-                          const DataType* A = dW[h + 1] + W[h + 1].at[W[h + 1].base[k] + fi * nc + ci];
-                          const DataType* B = dRmid + Rmid.at[Rmid.base[k] + fi * nc + ci];
-                          DataType* Cp = sorted + out_at[k] + (fr[fi].start - first[k]) +
-                                         static_cast<int64_t>(cc[ci].start) * m;
-                          put(s, i++, A, fr[fi].count, B, r, Cp, m, fr[fi].count, cc[ci].count, r);
+                          const int64_t aw = W[h + 1].at[W[h + 1].base[k] + fi * nc + ci];
+                          const int64_t am = Rmid.at[Rmid.base[k] + fi * nc + ci];
+                          auto part = [&](int64_t r0, int64_t r1, int o) {
+                              if (r < 0 || aw < 0 || am < 0) {
+                                  ++bad;
+                                  put_bad(s, i++);
+                                  return;
+                              }
+                              const DataType* A = dW[h + 1] + aw + (r0 - fr[fi].start);
+                              const int rows = static_cast<int>(r1 - r0);
+                              if (o == me) {
+                                  DataType* Cp = sorted + out_at[k] + (r0 - first[k]) + static_cast<int64_t>(cc[ci].start) * m;
+                                  put(s, i++, A, fr[fi].count, dRmid + am, r, Cp, m, rows, cc[ci].count, r);
+                              } else {
+                                  put(s, i++, A, fr[fi].count, dRmid + am, r, dstage + staged, rows, rows, cc[ci].count, r);
+                                  staged += static_cast<int64_t>(rows) * cc[ci].count;
+                              }
+                          };
+                          if (shared_out) by_owner(k, fr[fi].start, fr[fi].start + fr[fi].count, part);
+                          else part(fr[fi].start, fr[fi].start + fr[fi].count, me);
                       }
                   }
-                  return 0;
+                  return bad;
               });
     }
     if (bad_block > 0) ok = 0;
 
-    // ---- the midpoint: the right half's products of vector level h+1 to
-    // the rank of their row group, in one order on both ends (intersection,
-    // row run, column run); each end sizes a product from its own factor
-    std::vector<ExtractCopy> pack, unpack;
-    std::vector<int64_t> scount(static_cast<size_t>(nproc), 0), rcount(scount.size(), 0);
-    if (go) {
-        std::vector<std::vector<ExtractCopy>> sends(static_cast<size_t>(nproc)), recvs(static_cast<size_t>(nproc));
+    // ---- the exchanges, in the order they run, the same on every rank: the
+    // right half's shared levels up, the left half's down, the midpoint, the
+    // meet's rows other ranks own.  Each packs slots of one buffer, sends
+    // them, and unpacks them into slots of another, in one order on both
+    // ends; each end sizes a slot from its own factor.
+    struct Exchange {
+        std::vector<ExtractCopy> pack, unpack;
+        std::vector<int64_t> scount, rcount;
+        int64_t stotal = 0, rtotal = 0;
+        size_t at_pack = 0, at_unpack = 0;
+    };
+    std::vector<Exchange> xs;
+    std::vector<int> xr(static_cast<size_t>(h) + 2, -1), xw(static_cast<size_t>(L) + 2, -1);
+    for (int t = 1; t <= h; ++t) {
+        if (!shared_r(t)) continue;
+        xr[static_cast<size_t>(t)] = static_cast<int>(xs.size());
+        xs.emplace_back();
+    }
+    for (int t = L + 1; t >= h + 2; --t) {
+        if (!shared_w(t)) continue;
+        xw[static_cast<size_t>(t)] = static_cast<int>(xs.size());
+        xs.emplace_back();
+    }
+    const int xmid = static_cast<int>(xs.size());
+    xs.emplace_back();
+    const int xout = shared_out ? static_cast<int>(xs.size()) : -1;
+    if (shared_out) xs.emplace_back();
+    for (Exchange& x : xs) {
+        x.scount.assign(static_cast<size_t>(nproc), 0);
+        x.rcount.assign(static_cast<size_t>(nproc), 0);
+    }
+    using Lists = std::vector<std::vector<ExtractCopy>>;
+    auto finish = [&](Exchange& x, Lists& sends, Lists& recvs) {
+        for (int p = 0; p < nproc; ++p) {
+            for (ExtractCopy c : sends[static_cast<size_t>(p)]) {
+                c.dst = x.stotal;
+                x.stotal += c.n;
+                x.scount[static_cast<size_t>(p)] += c.n;
+                if (c.n > 0) x.pack.push_back(c);
+            }
+            for (ExtractCopy c : recvs[static_cast<size_t>(p)]) {
+                c.src = x.rtotal;
+                x.rtotal += c.n;
+                x.rcount[static_cast<size_t>(p)] += c.n;
+                if (c.n > 0) x.unpack.push_back(c);
+            }
+        }
+    };
+    // a shared level's products to their other users: `users(k, f, c, maker,
+    // u)` writes those of slot (f, c) other than its maker into u
+    auto level_exchange = [&](Exchange& x, const Level& s, int tl, auto maker_of, auto users) {
+        Lists sends(static_cast<size_t>(nproc)), recvs(static_cast<size_t>(nproc));
         for (int k = 0; k < count; ++k) {
-            const Run* fr = rr[h].data() + ro[h][k];
-            const int64_t nf = ro[h][k + 1] - ro[h][k];
-            const Run* cc = cr[h].data() + co[h][k];
-            const int64_t nc = co[h][k + 1] - co[h][k];
-            for (int64_t fi = 0; fi < nf; ++fi) {
-                const int dst = rgo[static_cast<size_t>(fr[fi].g)];
-                for (int64_t ci = 0; ci < nc; ++ci) {
-                    const int src = cgo[static_cast<size_t>(cc[ci].g)];
-                    const int64_t slot = fi * nc + ci;
-                    if (src == me) {
-                        const int64_t n = static_cast<int64_t>(rank_r(h + 1, fr[fi].g, cc[ci].g)) * cc[ci].count;
-                        sends[static_cast<size_t>(dst)].push_back(ExtractCopy{R[h + 1].at[R[h + 1].base[k] + slot], 0, n});
-                    }
-                    if (dst == me) {
-                        const int64_t n = static_cast<int64_t>(rank_w(h + 1, fr[fi].g, cc[ci].g)) * cc[ci].count;
-                        recvs[static_cast<size_t>(src)].push_back(ExtractCopy{0, Rmid.at[Rmid.base[k] + slot], n});
+            const int64_t nF = ro[tl][k + 1] - ro[tl][k], nC = co[tl][k + 1] - co[tl][k];
+            for (int64_t fi = 0; fi < nF; ++fi) {
+                const Run& f = rr[tl][ro[tl][k] + fi];
+                for (int64_t ci = 0; ci < nC; ++ci) {
+                    const Run& c = cr[tl][co[tl][k] + ci];
+                    const int maker = maker_of(f.g, c.g);
+                    int u[2];
+                    const int nu = users(k, f.g, c.g, maker, u);
+                    if (nu == 0 || (maker != me && u[0] != me && (nu < 2 || u[1] != me))) continue;
+                    const size_t idx = static_cast<size_t>(s.base[k] + fi * nC + ci);
+                    for (int j = 0; j < nu; ++j) {
+                        if (maker == me) sends[static_cast<size_t>(u[j])].push_back(ExtractCopy{s.at[idx], 0, s.size[idx]});
+                        else if (u[j] == me) recvs[static_cast<size_t>(maker)].push_back(ExtractCopy{0, s.at[idx], s.size[idx]});
                     }
                 }
             }
         }
-        int64_t sat = 0, rat = 0;
-        for (int p = 0; p < nproc; ++p) {
-            for (ExtractCopy& c : sends[static_cast<size_t>(p)]) {
-                c.dst = sat;
-                sat += c.n;
-                scount[static_cast<size_t>(p)] += c.n;
-                if (c.n > 0) pack.push_back(c);
+        finish(x, sends, recvs);
+    };
+    if (go) {
+        for (int t = 1; t <= h; ++t) {
+            if (xr[static_cast<size_t>(t)] < 0) continue;
+            level_exchange(
+                xs[static_cast<size_t>(xr[static_cast<size_t>(t)])], R[t], t - 1,
+                [&](int F, int C) { return own_r(t, F, C); },
+                [&](int k, int F, int C, int maker, int* u) {
+                    const Run* fr = rr[t].data() + ro[t][k];
+                    int64_t lo = 0, hi = 0;
+                    detail::child_runs(fr, ro[t][k + 1] - ro[t][k], F, lo, hi);
+                    int n = 0;
+                    for (int64_t i = lo; i < hi; ++i) {
+                        const int x = own_r(t + 1, fr[i].g, C >> 1);
+                        if (x != maker && (n == 0 || u[0] != x)) u[n++] = x;
+                    }
+                    return n;
+                });
+        }
+        for (int t = L + 1; t >= h + 2; --t) {
+            if (xw[static_cast<size_t>(t)] < 0) continue;
+            level_exchange(
+                xs[static_cast<size_t>(xw[static_cast<size_t>(t)])], W[t], t - 1,
+                [&](int F, int C) { return own_w(t, F, C); },
+                [&](int k, int F, int C, int maker, int* u) {
+                    const Run* cc = cr[t - 2].data() + co[t - 2][k];
+                    int64_t lo = 0, hi = 0;
+                    detail::child_runs(cc, co[t - 2][k + 1] - co[t - 2][k], C, lo, hi);
+                    int n = 0;
+                    for (int64_t i = lo; i < hi; ++i) {
+                        const int x = own_w(t - 1, F >> 1, cc[i].g);
+                        if (x != maker && (n == 0 || u[0] != x)) u[n++] = x;
+                    }
+                    return n;
+                });
+        }
+        // the midpoint: the right half's products of vector level h+1 to the
+        // rank meeting them
+        {
+            Lists sends(static_cast<size_t>(nproc)), recvs(static_cast<size_t>(nproc));
+            for (int k = 0; k < count; ++k) {
+                const int64_t nf = ro[h][k + 1] - ro[h][k], nc = co[h][k + 1] - co[h][k];
+                for (int64_t fi = 0; fi < nf; ++fi) {
+                    const Run& f = rr[h][ro[h][k] + fi];
+                    for (int64_t ci = 0; ci < nc; ++ci) {
+                        const Run& c = cr[h][co[h][k] + ci];
+                        const int src = own_r(h + 1, f.g, c.g), dst = own_w(h + 1, f.g, c.g);
+                        const size_t idx = static_cast<size_t>(R[h + 1].base[k] + fi * nc + ci);
+                        if (src == me) {
+                            sends[static_cast<size_t>(dst)].push_back(ExtractCopy{R[h + 1].at[idx], 0, R[h + 1].size[idx]});
+                        }
+                        if (dst == me) {
+                            recvs[static_cast<size_t>(src)].push_back(ExtractCopy{0, Rmid.at[idx], Rmid.size[idx]});
+                        }
+                    }
+                }
             }
-            for (ExtractCopy& c : recvs[static_cast<size_t>(p)]) {
-                c.src = rat;
-                rat += c.n;
-                rcount[static_cast<size_t>(p)] += c.n;
-                if (c.n > 0) unpack.push_back(c);
+            finish(xs[static_cast<size_t>(xmid)], sends, recvs);
+        }
+        // the meet's rows other ranks own, from the staging buffer to their
+        // places in the owners' results
+        if (xout >= 0) {
+            Lists sends(static_cast<size_t>(nproc)), recvs(static_cast<size_t>(nproc));
+            for (int k = 0; k < count; ++k) {
+                const int m = q.nloc[k];
+                const int64_t mine0 = first[k], mine1 = first[k] + q.nloc[k];
+                int64_t staged = stage_at[k];
+                for (int64_t fi = ro[h][k]; fi < ro[h][k + 1]; ++fi) {
+                    const Run& f = rr[h][fi];
+                    for (int64_t ci = co[h][k]; ci < co[h][k + 1]; ++ci) {
+                        const Run& c = cr[h][ci];
+                        const int w = own_w(h + 1, f.g, c.g);
+                        if (w == me) {
+                            by_owner(k, f.start, f.start + f.count, [&](int64_t r0, int64_t r1, int o) {
+                                if (o == me) return;
+                                const int64_t n = (r1 - r0) * c.count;
+                                sends[static_cast<size_t>(o)].push_back(ExtractCopy{staged, 0, n});
+                                staged += n;
+                            });
+                            continue;
+                        }
+                        const int64_t r0 = std::max<int64_t>(f.start, mine0), r1 = std::min<int64_t>(f.start + f.count, mine1);
+                        if (r0 >= r1) continue;
+                        recvs[static_cast<size_t>(w)].push_back(ExtractCopy{
+                            0, out_at[k] + (r0 - mine0) + static_cast<int64_t>(c.start) * m, (r1 - r0) * c.count, m,
+                            static_cast<int>(r1 - r0)});
+                    }
+                }
             }
+            finish(xs[static_cast<size_t>(xout)], sends, recvs);
         }
     }
-    // the midpoint's buffers, with the others: a rank without room declines
-    // with the group
-    int64_t stotal = 0, rtotal = 0;
-    for (int p = 0; p < nproc; ++p) {
-        stotal += scount[static_cast<size_t>(p)];
-        rtotal += rcount[static_cast<size_t>(p)];
+    // the exchanges' buffers, one pair for all (they run one after another
+    // on the stream), with the others: a rank without room declines with the
+    // group
+    int64_t max_s = 0, max_r = 0, stotal = 0, rtotal = 0;
+    for (const Exchange& x : xs) {
+        max_s = std::max(max_s, x.stotal);
+        max_r = std::max(max_r, x.rtotal);
+        stotal += x.stotal;
+        rtotal += x.rtotal;
     }
-    DataType* dsend = take(stotal);
-    DataType* drecv = take(rtotal);
+    DataType* dsend = take(max_s);
+    DataType* drecv = take(max_r);
     if (!room) ok = 0;
-    // both ends must agree on what moves (they size it from different factors)
+    // both ends of every exchange must agree on what moves (they size it from
+    // different factors)
     {
-        std::vector<int64_t> told(scount.size(), 0);
-        MPI_Alltoall(scount.data(), 1, MPI_INT64_T, told.data(), 1, MPI_INT64_T, comm);
+        const int nx = static_cast<int>(xs.size());
+        std::vector<int64_t> mine(static_cast<size_t>(nproc) * nx, 0), told(mine.size(), 0);
+        for (int p = 0; p < nproc; ++p)
+            for (int e = 0; e < nx; ++e) mine[static_cast<size_t>(p) * nx + e] = xs[static_cast<size_t>(e)].scount[static_cast<size_t>(p)];
+        MPI_Alltoall(mine.data(), nx, MPI_INT64_T, told.data(), nx, MPI_INT64_T, comm);
         for (int p = 0; p < nproc; ++p) {
-            if (told[static_cast<size_t>(p)] != rcount[static_cast<size_t>(p)] && go) ok = 0;
-            if (scount[static_cast<size_t>(p)] > INT32_MAX || rcount[static_cast<size_t>(p)] > INT32_MAX) ok = 0;
+            for (int e = 0; e < nx; ++e) {
+                const Exchange& x = xs[static_cast<size_t>(e)];
+                if (told[static_cast<size_t>(p) * nx + e] != x.rcount[static_cast<size_t>(p)] && go) ok = 0;
+                if (x.scount[static_cast<size_t>(p)] > INT32_MAX || x.rcount[static_cast<size_t>(p)] > INT32_MAX) ok = 0;
+            }
         }
     }
     MPI_Allreduce(MPI_IN_PLACE, &ok, 1, MPI_INT, MPI_MIN, comm);
@@ -1135,8 +1450,8 @@ inline int extract_dist(const BfDevice& bf, MPI_Comm comm, const ExtractRequest&
     std::vector<int64_t> v_at(row_at.size(), 0), u_at(row_at.size(), 0);
     for (int k = 0; k < count; ++k) {
         int64_t nv = 0, nu = 0;
-        for (int64_t ci = co[0][k]; ci < co[0][k + 1]; ++ci) nv += col_mine(0, cr[0][ci].g) ? 1 : 0;
-        for (int64_t fi = ro[L][k]; fi < ro[L][k + 1]; ++fi) nu += row_mine(L, rr[L][fi].g) ? 1 : 0;
+        for (int64_t ci = co[0][k]; ci < co[0][k + 1]; ++ci) nv += q.col_owner[cr[0][ci].g] == me ? 1 : 0;
+        for (int64_t fi = ro[L][k]; fi < ro[L][k + 1]; ++fi) nu += q.row_owner[rr[L][fi].g] == me ? 1 : 0;
         v_at[k + 1] = v_at[k] + nv;
         u_at[k + 1] = u_at[k] + nu;
     }
@@ -1156,8 +1471,10 @@ inline int extract_dist(const BfDevice& bf, MPI_Comm comm, const ExtractRequest&
     const size_t at_gather = meta.alloc(static_cast<size_t>(nv + nu) * sizeof(ExtractGather));
     const size_t at_scatter = meta.alloc(static_cast<size_t>(count) * sizeof(ExtractScatter));
     const size_t at_index = meta.alloc(static_cast<size_t>(std::max<int64_t>(nindex, 1)) * sizeof(int));
-    const size_t at_pack = meta.alloc(pack.size() * sizeof(ExtractCopy));
-    const size_t at_unpack = meta.alloc(unpack.size() * sizeof(ExtractCopy));
+    for (Exchange& x : xs) {
+        x.at_pack = meta.alloc(x.pack.size() * sizeof(ExtractCopy));
+        x.at_unpack = meta.alloc(x.unpack.size() * sizeof(ExtractCopy));
+    }
     for (size_t s = 0; s < stages.size(); ++s) {
         const int64_t n = static_cast<int64_t>(stages[s].size());
         for (int64_t f = 0; f < n; f += kMaxBatch) {
@@ -1173,8 +1490,10 @@ inline int extract_dist(const BfDevice& bf, MPI_Comm comm, const ExtractRequest&
     auto* gathers = reinterpret_cast<ExtractGather*>(meta.host(at_gather));
     auto* scatters = reinterpret_cast<ExtractScatter*>(meta.host(at_scatter));
     int* index = reinterpret_cast<int*>(meta.host(at_index));
-    if (!pack.empty()) std::memcpy(meta.host(at_pack), pack.data(), pack.size() * sizeof(ExtractCopy));
-    if (!unpack.empty()) std::memcpy(meta.host(at_unpack), unpack.data(), unpack.size() * sizeof(ExtractCopy));
+    for (const Exchange& x : xs) {
+        if (!x.pack.empty()) std::memcpy(meta.host(x.at_pack), x.pack.data(), x.pack.size() * sizeof(ExtractCopy));
+        if (!x.unpack.empty()) std::memcpy(meta.host(x.at_unpack), x.unpack.data(), x.unpack.size() * sizeof(ExtractCopy));
+    }
 #pragma omp parallel for schedule(dynamic, 16)
     for (int k = 0; k < count; ++k) {
         for (int64_t c = 0; c < q.nc[k]; ++c) {
@@ -1190,7 +1509,7 @@ inline int extract_dist(const BfDevice& bf, MPI_Comm comm, const ExtractRequest&
         int64_t g = v_at[k];
         for (int64_t ci = co[0][k]; ci < co[0][k + 1]; ++ci) {
             const Run& run = cr[0][ci];
-            if (!col_mine(0, run.g)) continue;
+            if (q.col_owner[run.g] != me) continue;
             const BlockDesc* v = block_at(0, 0, run.g);
             ExtractGather e;
             e.src = v->offset; e.ld_src = v->lda; e.r = v->cols;
@@ -1202,7 +1521,7 @@ inline int extract_dist(const BfDevice& bf, MPI_Comm comm, const ExtractRequest&
         g = nv + u_at[k];
         for (int64_t fi = ro[L][k]; fi < ro[L][k + 1]; ++fi) {
             const Run& run = rr[L][fi];
-            if (!row_mine(L, run.g)) continue;
+            if (q.row_owner[run.g] != me) continue;
             const BlockDesc* u = block_at(L + 1, run.g, 0);
             ExtractGather e;
             e.src = u->offset; e.ld_src = u->lda; e.r = u->cols;
@@ -1249,7 +1568,9 @@ inline int extract_dist(const BfDevice& bf, MPI_Comm comm, const ExtractRequest&
     for (const ExtractStage& s : stages) prof.items += static_cast<int64_t>(s.size());
     const auto t1 = clock::now();
 
-    // ---- launch: the halves, the midpoint, the middle, the scatter
+    // ---- launch: the halves level by level, each shared level's exchange
+    // before the level that uses it, the midpoint, the middle, the rows other
+    // ranks own, the scatter
     cudaStream_t stream = fmm::gpu::Context::instance().stream();
     magma_queue_t queue = fmm::gpu::Context::instance().queue();
     char* dm = meta.upload(meta_device, stream);
@@ -1275,20 +1596,31 @@ inline int extract_dist(const BfDevice& bf, MPI_Comm comm, const ExtractRequest&
                 c.max_m, c.max_n, std::max<magma_int_t>(c.max_k, 1));
         }
     };
-    // the right half's and the left half's stages, then (last) the middle's
-    for (size_t s = 0; s + 1 < stages.size(); ++s) run_stage(s);
-    // the midpoint: packed, exchanged between the devices (alltoallv_device:
-    // NCCL on one node), unpacked
+    // pack, exchange between the devices (alltoallv_device: NCCL where the
+    // group has it), unpack
+    auto exchange = [&](const Exchange& x, const DataType* from, DataType* to) {
+        launch_extract_copies(reinterpret_cast<const ExtractCopy*>(dm + x.at_pack), static_cast<int>(x.pack.size()),
+                              from, dsend, stream);
+        alltoallv_device(comm, dsend, x.scount.data(), drecv, x.rcount.data(), stream);
+        launch_extract_copies(reinterpret_cast<const ExtractCopy*>(dm + x.at_unpack), static_cast<int>(x.unpack.size()),
+                              drecv, to, stream);
+    };
+    for (int t = 1; t <= h; ++t) {
+        if (xr[static_cast<size_t>(t)] >= 0) exchange(xs[static_cast<size_t>(xr[static_cast<size_t>(t)])], dR[t], dR[t]);
+        run_stage(static_cast<size_t>(t - 1));
+    }
+    for (int t = L + 1; t >= h + 2; --t) {
+        if (xw[static_cast<size_t>(t)] >= 0) exchange(xs[static_cast<size_t>(xw[static_cast<size_t>(t)])], dW[t], dW[t]);
+        run_stage(static_cast<size_t>(h + L + 1 - t));
+    }
     const auto tm = clock::now();
-    launch_extract_copies(reinterpret_cast<const ExtractCopy*>(dm + at_pack), static_cast<int>(pack.size()), dR[h + 1],
-                          dsend, stream);
-    alltoallv_device(comm, dsend, scount.data(), drecv, rcount.data(), stream);
-    launch_extract_copies(reinterpret_cast<const ExtractCopy*>(dm + at_unpack), static_cast<int>(unpack.size()), drecv,
-                          dRmid, stream);
+    exchange(xs[static_cast<size_t>(xmid)], dR[h + 1], dRmid);
     prof.mid = std::chrono::duration<double>(clock::now() - tm).count();
+    run_stage(static_cast<size_t>(L));
+    if (xout >= 0) exchange(xs[static_cast<size_t>(xout)], dstage, sorted);
+    prof.exchanges = static_cast<int>(xs.size());
     prof.sent = stotal;
     prof.received = rtotal;
-    if (!stages.empty()) run_stage(stages.size() - 1);
     if (count > 0) launch_extract_scatter(reinterpret_cast<const ExtractScatter*>(dm + at_scatter), count,
                                           reinterpret_cast<const int*>(dm + at_index), sorted, d_out, stream);
     if (entries > 0) {

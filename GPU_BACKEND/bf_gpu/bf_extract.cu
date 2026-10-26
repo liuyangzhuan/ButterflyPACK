@@ -59,11 +59,16 @@ extract_scatter_kernel(const ExtractScatter* items, const int* idx, const DataTy
     }
 }
 
-// One thread block per copy of n contiguous elements.
+// One thread block per copy of n elements, contiguous or into a block.
 __global__ void __launch_bounds__(kThreads)
 extract_copy_kernel(const ExtractCopy* items, const DataType* src, DataType* dst) {
     const ExtractCopy c = items[blockIdx.x];
-    for (int64_t t = threadIdx.x; t < c.n; t += kThreads) dst[c.dst + t] = src[c.src + t];
+    if (c.rows <= 0) {
+        for (int64_t t = threadIdx.x; t < c.n; t += kThreads) dst[c.dst + t] = src[c.src + t];
+    } else {
+        for (int64_t t = threadIdx.x; t < c.n; t += kThreads)
+            dst[c.dst + t % c.rows + t / c.rows * c.ld] = src[c.src + t];
+    }
 }
 
 }  // namespace
