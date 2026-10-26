@@ -64,9 +64,13 @@ void vie3d_gpu_release(void);
  * c_bf_construct_init): cos(2 pi s x_i xi_j), and 1 / (4 pi |p_i - q_j|) with
  * 3 coordinates a point; the tables by row id (m values or points) and by
  * column id (n), copied to the device until butterfly_gpu_release (real, not
- * symmetric). */
+ * symmetric).  The _complex forms register with a z_ butterfly:
+ * exp(2 pi i s x_i xi_j), and the Laplace kernel's real values. */
 void butterfly_gpu_register_dft(void** bf, const double* x, int64_t m, const double* xi, int64_t n, double s);
 void butterfly_gpu_register_laplace(void** bf, const double* rows_xyz, int64_t m, const double* cols_xyz, int64_t n);
+void butterfly_gpu_register_dft_complex(void** bf, const double* x, int64_t m, const double* xi, int64_t n, double s);
+void butterfly_gpu_register_laplace_complex(void** bf, const double* rows_xyz, int64_t m, const double* cols_xyz,
+                                            int64_t n);
 void butterfly_gpu_release(void);
 
 /* EMSURF_Driver.cpp: the EFIE (cfie_alpha == 1: complex symmetric) or CFIE

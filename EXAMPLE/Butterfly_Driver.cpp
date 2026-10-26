@@ -662,19 +662,27 @@ void run(const DriverOptions& opt, int argc, char* argv[], int myid, int nproc) 
                         &bf1.stats, &bf1.msh, &bf1.ker, &ptree, &no_distance, &no_admissibility, &kernel_source);
 #ifdef BPACK_EXAMPLE_GPU
   // the kernel's GPU evaluator: its tables by the ids it receives, the trees' order (the CPU
-  // callbacks' indices minus one), so through the trees' permutations
-  // (the evaluators are real: complex entries come from the CPU callbacks)
-  if (gpu > 0 && opt.gpu_evaluator && !kComplex<T>) {
+  // callbacks' indices minus one), so through the trees' permutations; the complex forms give
+  // Kernel::entry<zcomplex>
+  if (gpu > 0 && opt.gpu_evaluator) {
     if (kernel.geometric()) {
       std::vector<double> p(static_cast<size_t>(M) * 3), q(static_cast<size_t>(N) * 3);
       for (int r = 0; r < M; ++r) kernel.row_point(row_perm[r] - 1, &p[3 * static_cast<size_t>(r)]);
       for (int c = 0; c < N; ++c) kernel.col_point(col_perm[c] - 1, &q[3 * static_cast<size_t>(c)]);
-      butterfly_gpu_register_laplace(&bf1.bf, p.data(), M, q.data(), N);
+      if constexpr (kComplex<T>) {
+        butterfly_gpu_register_laplace_complex(&bf1.bf, p.data(), M, q.data(), N);
+      } else {
+        butterfly_gpu_register_laplace(&bf1.bf, p.data(), M, q.data(), N);
+      }
     } else {
       std::vector<double> xr(M), xc(N);
       for (int r = 0; r < M; ++r) xr[r] = kernel.x(row_perm[r] - 1);
       for (int c = 0; c < N; ++c) xc[c] = kernel.xi(col_perm[c] - 1);
-      butterfly_gpu_register_dft(&bf1.bf, xr.data(), M, xc.data(), N, opt.scale);
+      if constexpr (kComplex<T>) {
+        butterfly_gpu_register_dft_complex(&bf1.bf, xr.data(), M, xc.data(), N, opt.scale);
+      } else {
+        butterfly_gpu_register_dft(&bf1.bf, xr.data(), M, xc.data(), N, opt.scale);
+      }
     }
   }
 #endif
