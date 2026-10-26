@@ -785,11 +785,20 @@ inline DeviceSolveStore& device_solve_store() {
     return (*stores)[operator_context().active];
 }
 
+// Other stores of an operator's device data that a new factorization
+// replaces (H2_partial's records: partial_device.hpp), registered at their
+// first use.
+inline std::vector<std::function<void()>>& device_store_invalidators() {
+    static auto* list = new std::vector<std::function<void()>>;  // (never freed: see DeviceHeap)
+    return *list;
+}
+
 // A factorization or compression replaces the factors: drop the device
 // copies (the solve's factors, and the blocks of a compression-only H2).
 inline void invalidate_device_solve() {
     device_solve_store().release();
     device_matvec_store().release();
+    for (const auto& invalidate : device_store_invalidators()) invalidate();
 }
 
 // ---------------------------------------------------------------------------

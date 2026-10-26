@@ -516,9 +516,23 @@ point set and on a plain cube split, dense checks at small N.
     wave is 64 boxes, X_NR about 19 MB a box with the F22 points in the
     neighbours' skeletons: 7 ms a wave), a device-solve optimisation of its
     own.
-  - **G2:** the F22 records (compressed under H2_compress_factors: 5.9 GB at
-    64^3), T22 and the root's CB kept on the device when they fit (decided
-    collectively, else on the host as now); the CB product on the device.
+  - **G2 done:** the records (their Bitcomp chunks under
+    H2_compress_factors, else raw) and the root's CB block go to the device
+    at the first CB product and stay (h2_gpu/partial_device.hpp,
+    PartialDeviceStore, one per operator, dropped by a new factorization and
+    by c_bpack_partial_schur_release), when every rank's fit beside what the
+    device holds; else the host product.  partial_schur_multiply keeps the
+    passes, exchanges and sums on the host; per level the device takes the
+    raw vectors (and the received ones) and each sparsified box's p and w,
+    gathers rn, decompresses a segment of boxes' records at a time into a
+    scratch (batched Bitcomp), and runs three GEMM batches (X_RR p, X_SR p,
+    X_NR[q] p; += X_RS w; += X_RN rn); the root's term is one GEMM.  A wider
+    product goes in passes of max_columns.  BPACK_CHECK=solve: device vs
+    host 1e-15 .. 5e-15, 1/3/8 ranks, compressed and not; dense checks
+    unchanged.  64^3 one GPU, compressed: 3.47 -> 0.21 s (most of it the
+    decompression of all 31.6 GB each product); raw records (31.7 GB) do not
+    fit a 40 GB card there and the host product runs.  The host copies stay
+    (the CB entries read them until G3); T22 stays on the host (the passes).
   - **G3:** the CB entries on the device: the host plans the block pairs, the
     device decompresses the chunks they read, gathers, multiplies (batched)
     and scatter-adds.

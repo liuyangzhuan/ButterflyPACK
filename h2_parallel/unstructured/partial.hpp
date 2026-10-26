@@ -41,6 +41,9 @@
 #include "core/partial_record_codec.hpp"
 #include "core/morton.hpp"
 #include "core/solver.hpp"
+#ifdef H2_HAVE_GPU
+#include "h2_gpu/partial_device.hpp"
+#endif
 
 #include <mpi.h>
 #include <omp.h>
@@ -2190,6 +2193,24 @@ void partial_schur_multiply(fmm::ParallelTree<CoordType, DataType>& tree, const 
     auto own = [](const fmm::BoxData<CoordType, DataType>& box) {
         return box.f22.sparsified && !box.f22.redundant.empty();
     };
+    // The record and root terms on the device (h2_gpu/partial_device.hpp:
+    // the records and the root block resident there), a pass at most
+    // max_columns columns; with BPACK_CHECK=solve the host product too, and
+    // rank 0 prints their difference.
+    bool device = false;
+#ifdef H2_HAVE_GPU
+    if constexpr (fmm::gpu::gpu_data_type<DataType>) {
+        device = fmm::gpu::partial_device_ready(&tree, 0);
+        if (device) {
+            const int64_t cmax = fmm::gpu::partial_device_store().max_columns;
+            if (ncol > cmax) {
+                for (int64_t c0 = 0; c0 < ncol; c0 += cmax)
+                    partial_schur_multiply(tree, x2 + c0 * n22, y2 + c0 * n22, std::min(cmax, ncol - c0));
+                return;
+            }
+        }
+    }
+#endif
     using SD = fmm::SolveDataRequest<CoordType, DataType>;
     // raw: per level and local box, its points x ncol; pv: p = raw[R]
     auto raw = partial_scratch<CoordType, DataType>(&tree, nullptr, nrhs);
@@ -2268,13 +2289,19 @@ void partial_schur_multiply(fmm::ParallelTree<CoordType, DataType>& tree, const 
         std::vector<DataType> v(static_cast<size_t>(m * ncol)), g(static_cast<size_t>(m * ncol));
         for (int64_t c = 0; c < ncol; ++c)
             for (int64_t a = 0; a < m; ++a) v[static_cast<size_t>(a + c * m)] = x[static_cast<size_t>(pr.slots22[static_cast<size_t>(a)] + c * n)];
-        constexpr int64_t chunk = 256;
-        const int64_t nchunks = (m + chunk - 1) / chunk;
+        if (device) {
+#ifdef H2_HAVE_GPU
+            if constexpr (fmm::gpu::gpu_data_type<DataType>) fmm::gpu::partial_device_root(v.data(), ncol, g.data());
+#endif
+        } else {
+            constexpr int64_t chunk = 256;
+            const int64_t nchunks = (m + chunk - 1) / chunk;
 #pragma omp parallel for schedule(static)
-        for (int64_t q = 0; q < nchunks; ++q) {
-            const int64_t a0 = q * chunk, rows = std::min(chunk, m - a0);
-            partial_gemm<DataType>('N', 'N', rows, ncol, m, DataType(1), pr.cb.data.data() + a0, pr.cb.lda, v.data(), m, DataType(0),
-                                   g.data() + a0, m);
+            for (int64_t q = 0; q < nchunks; ++q) {
+                const int64_t a0 = q * chunk, rows = std::min(chunk, m - a0);
+                partial_gemm<DataType>('N', 'N', rows, ncol, m, DataType(1), pr.cb.data.data() + a0, pr.cb.lda, v.data(), m,
+                                       DataType(0), g.data() + a0, m);
+            }
         }
         for (int64_t c = 0; c < ncol; ++c)
             for (int64_t a = 0; a < m; ++a) out[static_cast<size_t>(pr.slots22[static_cast<size_t>(a)] + c * n)] = g[static_cast<size_t>(a + c * m)];
@@ -2312,6 +2339,126 @@ void partial_schur_multiply(fmm::ParallelTree<CoordType, DataType>& tree, const 
                 remote_raw[head[0]] = {head[1], std::move(x)};
             }
         }
+#ifdef H2_HAVE_GPU
+        if constexpr (fmm::gpu::gpu_data_type<DataType>) {
+            if (device) {
+                // the sparsified boxes' p and w here, their products with the
+                // records on the device: per box gR, gS and t_q = X_NR[q] p
+                const auto& plan = fmm::gpu::partial_device_store().levels[static_cast<size_t>(l)];
+                std::vector<DataType> outv;
+                if (active) {
+                    std::vector<DataType> pw(static_cast<size_t>(plan.pw_units * ncol));
+#pragma omp parallel for schedule(dynamic, 1)
+                    for (int64_t q = 0; q < static_cast<int64_t>(plan.boxes.size()); ++q) {
+                        const auto& B = plan.boxes[static_cast<size_t>(q)];
+                        const auto& box = level.local_boxes[static_cast<size_t>(B.bi)];
+                        const auto& p = pv[static_cast<size_t>(l)][static_cast<size_t>(B.bi)];
+                        const auto w = w_of(box, raw[static_cast<size_t>(l)][static_cast<size_t>(B.bi)].left_side, &p);
+                        std::copy(p.begin(), p.end(), pw.begin() + B.pw_off * ncol);
+                        std::copy(w.begin(), w.end(), pw.begin() + (B.pw_off + B.r) * ncol);
+                    }
+                    std::vector<const DataType*> xl(static_cast<size_t>(level.num_boxes_local));
+                    for (int64_t bi = 0; bi < level.num_boxes_local; ++bi)
+                        xl[static_cast<size_t>(bi)] = raw[static_cast<size_t>(l)][static_cast<size_t>(bi)].left_side.data();
+                    std::unordered_map<int64_t, std::pair<int64_t, const DataType*>> xr;
+                    for (const auto& kv : remote_raw) xr.emplace(kv.first, std::make_pair(kv.second.first, kv.second.second.data()));
+                    outv.resize(static_cast<size_t>(plan.out_units * ncol));
+                    fmm::gpu::partial_device_terms(&tree, l, ncol, xl, xr, pw.data(), outv.data());
+                }
+                auto t_of = [&](int q, size_t slot) {
+                    const auto& B = plan.boxes[static_cast<size_t>(q)];
+                    return outv.data() + (B.out_off + B.t_off[slot]) * ncol;
+                };
+                // (2) the products of other ranks' neighbours to their owners
+                std::vector<std::vector<char>> send_nr(static_cast<size_t>(nranks));
+                if (active) {
+                    for (size_t q = 0; q < plan.boxes.size(); ++q) {
+                        const auto& nb = level.local_boxes[static_cast<size_t>(plan.boxes[q].bi)];
+                        const auto& fn = nb.f22;
+                        for (size_t idx = 0; idx < nb.one_hop.size(); ++idx) {
+                            const int64_t m = fn.neighbor_nr_counts[idx];
+                            const int64_t target = nb.one_hop[idx];
+                            if (m == 0 || level.is_box_on_process(target)) continue;
+                            auto& buf = send_nr[static_cast<size_t>(level.owner_rank_of(target))];
+                            const int64_t head[2] = {target, m};
+                            partial_put(buf, head, 2);
+                            partial_put(buf, fn.neighbor_nr_slots[idx].data(), static_cast<size_t>(m));
+                            partial_put(buf, t_of(static_cast<int>(q), idx), static_cast<size_t>(m * ncol));
+                        }
+                    }
+                }
+                const auto recv_nr = partial_exchange(tree.comm, send_nr, 611);
+                std::unordered_map<int64_t, std::vector<std::pair<std::vector<int64_t>, std::vector<DataType>>>> pushed;
+                for (const auto& buf : recv_nr) {
+                    for (const char* p = buf.data(); p < buf.data() + buf.size();) {
+                        int64_t head[2];
+                        p = partial_get(p, head, 2);
+                        std::vector<int64_t> slots(static_cast<size_t>(head[1]));
+                        p = partial_get(p, slots.data(), slots.size());
+                        std::vector<DataType> t(static_cast<size_t>(head[1] * ncol));
+                        p = partial_get(p, t.data(), t.size());
+                        pushed[head[0]].emplace_back(std::move(slots), std::move(t));
+                    }
+                }
+                if (!active) continue;
+                // (3) every local box: gS with the neighbours' products added (local
+                // ones in one-hop order, then the received), into the accumulators
+                std::exception_ptr failure;
+#pragma omp parallel for schedule(dynamic, 1)
+                for (int64_t bi = 0; bi < level.num_boxes_local; ++bi) {
+                    try {
+                        const auto& box = level.local_boxes[static_cast<size_t>(bi)];
+                        if (box.skeleton_indices.empty()) continue;
+                        const int qi = plan.box_of[static_cast<size_t>(bi)];
+                        const int64_t n = box.num_points, kp = static_cast<int64_t>(box.skeleton_indices.size());
+                        const int64_t r = qi >= 0 ? plan.boxes[static_cast<size_t>(qi)].r : 0;
+                        std::vector<DataType> gS(static_cast<size_t>(kp * ncol), DataType(0));
+                        const DataType* gR = nullptr;
+                        if (qi >= 0) {
+                            const auto& B = plan.boxes[static_cast<size_t>(qi)];
+                            gR = outv.data() + B.out_off * ncol;
+                            std::copy_n(gR + r * ncol, kp * ncol, gS.begin());
+                        }
+                        std::vector<int32_t> s_of(static_cast<size_t>(n), -1);
+                        for (int64_t i = 0; i < kp; ++i) s_of[static_cast<size_t>(box.skeleton_indices[static_cast<size_t>(i)])] = static_cast<int32_t>(i);
+                        auto add_rows = [&](const std::vector<int64_t>& slots, const DataType* t, int64_t m) {
+                            for (int64_t i = 0; i < m; ++i) {
+                                const int32_t si = s_of[static_cast<size_t>(slots[static_cast<size_t>(i)])];
+                                if (si < 0) continue;
+                                for (int64_t c = 0; c < ncol; ++c) gS[static_cast<size_t>(si + c * kp)] += t[static_cast<size_t>(i + c * m)];
+                            }
+                        };
+                        for (size_t idx = 0; idx < box.one_hop.size(); ++idx) {
+                            const int64_t nm = box.one_hop[idx];
+                            if (!is_local(nm)) continue;
+                            const int64_t nl = nm - level.local_morton_start;
+                            const auto& nb = level.local_boxes[static_cast<size_t>(nl)];
+                            if (!own(nb)) continue;
+                            const auto it = std::find(nb.one_hop.begin(), nb.one_hop.end(), box.morton_index);
+                            if (it == nb.one_hop.end()) continue;
+                            const size_t idn = static_cast<size_t>(it - nb.one_hop.begin());
+                            const int64_t m = nb.f22.neighbor_nr_counts[idn];
+                            if (m == 0) continue;
+                            add_rows(nb.f22.neighbor_nr_slots[idn], t_of(plan.box_of[static_cast<size_t>(nl)], idn), m);
+                        }
+                        if (const auto it = pushed.find(box.morton_index); it != pushed.end())
+                            for (const auto& [slots, tv] : it->second) add_rows(slots, tv.data(), static_cast<int64_t>(slots.size()));
+                        auto& out = h[static_cast<size_t>(l)][static_cast<size_t>(bi)].left_side;
+                        const auto& f = box.f22;
+                        for (int64_t c = 0; c < ncol; ++c) {
+                            for (int64_t i = 0; i < kp; ++i) out[static_cast<size_t>(box.skeleton_indices[static_cast<size_t>(i)] + c * n)] += gS[static_cast<size_t>(i + c * kp)];
+                            for (int64_t j = 0; j < r; ++j) out[static_cast<size_t>(f.redundant[static_cast<size_t>(j)] + c * n)] += gR[static_cast<size_t>(j + c * r)];
+                        }
+                    } catch (...) {
+#pragma omp critical(partial_schur_multiply_failure)
+                        if (!failure) failure = std::current_exception();
+                    }
+                }
+                if (failure) std::rethrow_exception(failure);
+                continue;
+            }
+        }
+#endif
         // (2) a sparsified box's X_NR rows of a remote neighbour applied to its p, to that neighbour's owner
         std::vector<std::vector<char>> send_nr(static_cast<size_t>(nranks));
         if (active) {
@@ -2511,6 +2658,26 @@ void partial_schur_multiply(fmm::ParallelTree<CoordType, DataType>& tree, const 
         }
     }
     if (nranks > 1) MPI_Allreduce(MPI_IN_PLACE, y2, static_cast<int>(n22 * ncol), partial_mpi_type<DataType>(), MPI_SUM, tree.comm);
+#ifdef H2_HAVE_GPU
+    if constexpr (fmm::gpu::gpu_data_type<DataType>) {
+        if (device && fmm::gpu::device_solve_check()) {
+            std::vector<DataType> yh(static_cast<size_t>(n22 * ncol));
+            fmm::gpu::device_solve_suspended() = true;
+            partial_schur_multiply(tree, x2, yh.data(), ncol);
+            fmm::gpu::device_solve_suspended() = false;
+            double sums[2] = {0.0, 0.0};
+            for (size_t i = 0; i < yh.size(); ++i) {
+                sums[0] += std::norm(y2[i] - yh[i]);
+                sums[1] += std::norm(yh[i]);
+            }
+            if (me == 0) {
+                std::printf("GPU partial CB product check: |y_gpu - y_host| / |y_host| = %.3e\n",
+                            sums[1] > 0.0 ? std::sqrt(sums[0] / sums[1]) : 0.0);
+                std::fflush(stdout);
+            }
+        }
+    }
+#endif
 }
 
 // The release of the Schur complement (c_bpack_partial_schur_release): the
@@ -2551,6 +2718,9 @@ size_t partial_schur_release(fmm::ParallelTree<CoordType, DataType>& tree) {
             f.released = true;
         }
     }
+#ifdef H2_HAVE_GPU
+    if constexpr (fmm::gpu::gpu_data_type<DataType>) fmm::gpu::partial_device_release(&tree);
+#endif
     const size_t freed = records + root + lists;
     if (fmm::env::trace("memory")) {
         std::printf("H2_PARTIAL_RELEASE rank=%d freed=%.6f records=%.6f root=%.6f lists=%.6f rss_before=%.6f rss_after=%.6f\n",
