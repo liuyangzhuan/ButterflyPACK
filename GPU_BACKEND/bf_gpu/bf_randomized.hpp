@@ -81,6 +81,7 @@ struct PanelItem {
     DataType* dst = nullptr;
     int ldd = 0;
     int transposed = 0;
+    int conj = 0;  // the values conjugated (a complex construction's swept vectors)
 };
 
 // Q of a factorized panel (m x n, ld m), its first `rank` columns, split:
@@ -243,6 +244,15 @@ public:
     using SweepScratch = bf::gpu::SweepScratch<T>;
 
     Randomized(const RandomizedConfig& config, BlackBox blackbox) : c_(config), bb_(std::move(blackbox)) {}
+
+    // Complex data: the host conjugates around its partial sweeps of the black
+    // box's output (BF_Resolving_Butterfly_LL_dat and _RR_dat), projecting onto
+    // the factors built so far with their conjugate transposes, as
+    // conj(op conj(y)).  Here the output is conjugated in place before its sweep,
+    // and the swept blocks as their panels are loaded (PanelItem::conj).  The
+    // left half's sweep of the random vectors, which the halves meet on, the
+    // host does not conjugate, nor does this.
+    static constexpr bool kConj = fmm::gpu::is_complex_scalar<T>;
     ~Randomized() { release(); }
     Randomized(const Randomized&) = delete;
     Randomized& operator=(const Randomized&) = delete;
@@ -1127,11 +1137,13 @@ private:
                     const int i = block_row(nth);
                     std::fill(want.begin() + static_cast<int64_t>(i >> 1) * nc, want.begin() + static_cast<int64_t>((i >> 1) + 1) * nc, 1);
                 }
+                conj_in_place(out, c_.N * nvec);
                 VLev v = sweep_n(out, nvec, l - 1, want);
                 for (int nth = nth_s; nth <= nth_e; ++nth) {
                     const int i = block_row(nth);
                     for (int j = 0; j < (1 << (L - l)); ++j) {
                         PanelItem p;
+                        p.conj = kConj;
                         p.s0 = v.at(i >> 1, 2 * j);
                         p.ld0 = v.rows(i >> 1, 2 * j);
                         p.m0 = p.ld0;
@@ -1224,6 +1236,7 @@ private:
                     for (int I = 0; I < (1 << l); ++I) want_t[static_cast<size_t>(I) * nc + (J >> 1)] = 1;
                 }
             }
+            conj_in_place(out, c_.M * nvec);
             VLev vt = sweep_t(out, nvec, l + 1, want_t);
             if (l == lls) {
                 // the halves meet: the left half's sweep of the same random
@@ -1249,6 +1262,7 @@ private:
                         a.ncols = nvs;
                         a_panels.push_back(a);
                         PanelItem b;
+                        b.conj = kConj;
                         b.s0 = vt.at(2 * I, J >> 1);
                         b.ld0 = vt.rows(2 * I, J >> 1);
                         b.m0 = b.ld0;
@@ -1268,6 +1282,7 @@ private:
                     const int J = block_col(nth);
                     for (int I = 0; I < (1 << (l - 1)); ++I) {
                         PanelItem p;
+                        p.conj = kConj;
                         p.s0 = vt.at(2 * I, J >> 1);
                         p.ld0 = vt.rows(2 * I, J >> 1);
                         p.m0 = p.ld0;
@@ -1319,6 +1334,12 @@ private:
         VecLevel& v = sweep_partial(dev_, plan, nvec, x, static_cast<int>(std::max<int64_t>(ldx, 1)), nullptr, stream());
         prof.sweep += seconds_since(t0);
         return v;
+    }
+    // x (n elements) conjugated in place, for complex data (kConj)
+    void conj_in_place(DataType* x, int64_t n) {
+        if constexpr (kConj) {
+            if (n > 0) launch_conj(x, n, x, n, n, 1, stream());
+        }
     }
     static void free_level(VecLevel& v) {
         if (v.data != nullptr) fmm::gpu::DeviceHeap::instance().free(v.data);
@@ -1390,6 +1411,7 @@ private:
                 }
                 range_batch(panels, targets, norm_tol);
             } else {
+                conj_in_place(out, c_.N_loc * nvec);
                 VecLevel& v = sweep_part(*plan, nvec, out, c_.N_loc);
                 for (int nth = nth_s; nth <= nth_e; ++nth) {
                     const int i = block_row(nth);
@@ -1401,6 +1423,7 @@ private:
                         if (ik < 0 || jk < 0) throw std::runtime_error("bf::gpu::Randomized: a kernel block this rank resolves is not local");
                         const auto b = pair_of(v, i, jl);
                         PanelItem p;
+                        p.conj = kConj;
                         p.s0 = v.data + v.offset[b.first];
                         p.ld0 = v.rows[b.first];
                         p.m0 = p.ld0;
@@ -1493,6 +1516,7 @@ private:
                 give_back(own);
                 continue;
             }
+            conj_in_place(out, c_.M_loc * nvec);
             VecLevel& vt = sweep_part(*pt, nvec, out, c_.M_loc);
             VecLevel* vn = l == lls ? &sweep_part(*pn, nvec, in, c_.N_loc) : nullptr;
             for (int nth = nth_s; nth <= nth_e; ++nth) {
@@ -1505,6 +1529,7 @@ private:
                     if (ik < 0 || jk < 0) throw std::runtime_error("bf::gpu::Randomized: a kernel block this rank resolves is not local");
                     const auto b = pair_of(vt, il, j);
                     PanelItem p;
+                    p.conj = kConj;
                     p.s0 = vt.data + vt.offset[b.first];
                     p.ld0 = vt.rows[b.first];
                     p.m0 = p.ld0;

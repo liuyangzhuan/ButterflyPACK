@@ -81,8 +81,9 @@ __global__ void __launch_bounds__(kThreads) panel_kernel(const PanelItem<DataTyp
     double big = 0.0;
     for (int64_t t = threadIdx.x; t < total; t += kThreads) {
         const int r = static_cast<int>(t % m), c = static_cast<int>(t / m);
-        const DataType v = r < p.m0 ? p.s0[r + static_cast<int64_t>(p.col0 + c) * p.ld0]
-                                    : p.s1[(r - p.m0) + static_cast<int64_t>(p.col0 + c) * p.ld1];
+        const DataType v0 = r < p.m0 ? p.s0[r + static_cast<int64_t>(p.col0 + c) * p.ld0]
+                                     : p.s1[(r - p.m0) + static_cast<int64_t>(p.col0 + c) * p.ld1];
+        const DataType v = p.conj ? fmm::gpu::conj(v0) : v0;
         if (p.transposed) {
             p.dst[c + static_cast<int64_t>(r) * p.ldd] = v;
         } else {

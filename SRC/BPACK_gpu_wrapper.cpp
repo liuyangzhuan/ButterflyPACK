@@ -2112,9 +2112,6 @@ void c_bf_gpu_randomized(void* bf, void* bf_rand, void* ptree, const int* L, con
 #ifdef BPACK_BF_GPU_ENABLED
   try {
     if (*L < 1) return;
-    // complex data stays on the host for now: its construction conjugates around the black box
-    // and the partial sweeps (Bplus_randomized.f90), which the device does not mirror yet
-    if (fmm::gpu::is_complex_scalar<BfScalar>) return;
     int is_head = 0, comm_f = 0, nproc = 1, myid = 0;
     c_bf_get_sub_head(bf_rand, ptree, &is_head, &comm_f, &nproc);
     const MPI_Comm comm = MPI_Comm_f2c(static_cast<MPI_Fint>(comm_f));

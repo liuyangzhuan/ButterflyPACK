@@ -150,8 +150,8 @@ void z_c_bf_set_gpu_list_evaluator(void** bf, bpack_gpu_list_evaluator evaluate,
  * their leading dimensions, all device memory of the matrix's type, the rows
  * in the butterfly's own order as the CPU callback's.  Enqueued on `stream`
  * (the library's, a cudaStream_t) or complete on return.  Without one, the
- * construction calls the CPU callback on host copies of the vectors.  Real
- * double for now: the z_ registration is accepted and not used. */
+ * construction calls the CPU callback on host copies of the vectors.  The
+ * d_ and z_ registrations take vectors of double and of double complex. */
 typedef void (*bpack_gpu_bf_matvec)(char trans, int nin, int nout, int nvec, const void* x, void* y, void* stream,
                                     void* user);
 void d_c_bf_set_gpu_matvec(void** bf, bpack_gpu_bf_matvec matvec, void* user);
