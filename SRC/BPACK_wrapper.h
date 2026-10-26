@@ -224,8 +224,9 @@ void c_bf_gpu_level_id(const int* nblk, const int* rows, const int* cols, void* 
                        const int* transposed, const void* entries, const int64_t* nnz,
                        const double* rtol, const double* atol, int* rank, int* jpvt, void* xout,
                        int* info);
+/* alpha and beta point to the library's scalar (double, or double complex) */
 void c_bf_gpu_mult(F2Cptr bf, F2Cptr ptree, const char* op, const int* nrhs, const void* x,
-                   const int* ldx, void* y, const int* ldy, const double* alpha, const double* beta,
+                   const int* ldx, void* y, const int* ldy, const void* alpha, const void* beta,
                    double* flops, int* info);
 void c_bf_gpu_mult_host(F2Cptr bf, F2Cptr ptree, const char* op, const int* nrhs, const void* x,
                         const int* ldx, void* y, const int* ldy, double* flops, int* info);

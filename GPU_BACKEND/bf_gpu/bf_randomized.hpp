@@ -779,7 +779,7 @@ private:
         fmm::gpu::check_cuda(cudaStreamSynchronize(stream()), "bf randomized norm");
         give_back(own);
         double s = 0.0;
-        for (DataType v : h) s += v * v;
+        for (DataType v : h) s += fmm::gpu::abs2(v);
         cached = std::sqrt(all_sum(s));
         return cached;
     }
@@ -820,8 +820,8 @@ private:
         give_back(own);
         double d = 0.0, r = 0.0;
         for (size_t i = 0; i < h.size(); ++i) {
-            d += (h[i] - href[i]) * (h[i] - href[i]);
-            r += href[i] * href[i];
+            d += fmm::gpu::abs2(h[i] - href[i]);
+            r += fmm::gpu::abs2(href[i]);
         }
         constexpr double kSafeUnderflow = 2.2250738585072014e-308;
         prof.error = (d < kSafeUnderflow && r < kSafeUnderflow) ? 0.0 : std::sqrt(d) / std::sqrt(r);
@@ -1564,8 +1564,8 @@ private:
         give_back(own);
         double d = 0.0, r = 0.0;
         for (size_t i = 0; i < h.size(); ++i) {
-            d += (h[i] - href[i]) * (h[i] - href[i]);
-            r += href[i] * href[i];
+            d += fmm::gpu::abs2(h[i] - href[i]);
+            r += fmm::gpu::abs2(href[i]);
         }
         d = all_sum(d);
         r = all_sum(r);

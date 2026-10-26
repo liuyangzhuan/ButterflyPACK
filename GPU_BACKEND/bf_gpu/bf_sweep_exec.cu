@@ -235,10 +235,39 @@ void launch_sweep_patch(int count, const int64_t* b_off, const int64_t* c_off, c
     }
 }
 
+namespace {
+
+// dst = conj(src), rows x cols, src and dst column major (in place when they
+// are the same)
+template<typename T>
+__global__ void conj_kernel(T* dst, int64_t ldd, const T* src, int64_t lds, int64_t rows, int64_t cols) {
+    using fmm::gpu::conj;
+    const int64_t total = rows * cols;
+    for (int64_t t = blockIdx.x * static_cast<int64_t>(blockDim.x) + threadIdx.x; t < total;
+         t += static_cast<int64_t>(gridDim.x) * blockDim.x) {
+        const int64_t r = t % rows, c = t / rows;
+        dst[r + c * ldd] = conj(src[r + c * lds]);
+    }
+}
+
+}  // namespace
+
+template<typename T>
+void launch_conj(T* dst, int64_t ldd, const T* src, int64_t lds, int64_t rows, int64_t cols, cudaStream_t stream) {
+    if (rows <= 0 || cols <= 0) return;
+    const int64_t blocks = std::min<int64_t>((rows * cols + kThreads - 1) / kThreads, 4096);
+    conj_kernel<T><<<static_cast<int>(blocks), kThreads, 0, stream>>>(dst, ldd, src, lds, rows, cols);
+    const cudaError_t status = cudaGetLastError();
+    if (status != cudaSuccess) {
+        throw std::runtime_error(std::string("CUDA launch failed in launch_conj: ") + cudaGetErrorString(status));
+    }
+}
+
 // the double and the double complex libraries
 #define BF_PATCH_INSTANTIATE(T)                                                                                       \
     template void launch_sweep_patch<T>(int, const int64_t*, const int64_t*, const signed char*, const signed char*,  \
-                                        const T*, T*, T*, T*, int, int, const T**, T**, int*, int*, cudaStream_t);
+                                        const T*, T*, T*, T*, int, int, const T**, T**, int*, int*, cudaStream_t); \
+    template void launch_conj<T>(T*, int64_t, const T*, int64_t, int64_t, int64_t, cudaStream_t);
 BF_PATCH_INSTANTIATE(double)
 BF_PATCH_INSTANTIATE(fmm::gpu::dcomplex)
 #undef BF_PATCH_INSTANTIATE

@@ -269,7 +269,12 @@ inline int narrow_kind(bool trans_a, int max_m, int max_n) {
 
 // The kernel of a replay (bf_sweep_exec.cu): every GEMM's input and output
 // pointer from its offset and buffer, and the leading dimensions of x and y.
-// (defined for double and fmm::gpu::dcomplex)
+// dst = conj(src), rows x cols, column major, in place when dst is src: the
+// conjugations around a 'T' sweep that make it 'C' on complex data
+// (op^H x = conj(op^T conj(x))).  (These two defined for double and
+// fmm::gpu::dcomplex.)
+template<typename T>
+void launch_conj(T* dst, int64_t ldd, const T* src, int64_t lds, int64_t rows, int64_t cols, cudaStream_t stream);
 template<typename T>
 void launch_sweep_patch(int count, const int64_t* b_off, const int64_t* c_off, const signed char* b_buf,
                         const signed char* c_buf, const T* vin, T* buf0, T* buf1, T* vout, int ldi, int ldo,
