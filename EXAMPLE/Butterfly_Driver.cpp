@@ -677,24 +677,31 @@ int main(int argc, char* argv[]) {
     // two must agree to the bit.  At an odd count OpenBLAS changes order on blocks of real rank,
     // and past 256 it splits k into blocks (a low-rank block's are the whole M and N), so there
     // only to rounding.
+    // On real data 'C' is 'T', on either side, to the bit.
     if (gpu > 0) {
       std::vector<double> xn = random_vector(static_cast<size_t>(Nl) * opt.nvec, 555u + myid);
       std::vector<double> xt = random_vector(static_cast<size_t>(Ml) * opt.nvec, 666u + myid);
-      std::vector<double> yn_gpu, yt_gpu, yn_cpu, yt_cpu;
+      std::vector<double> yn_gpu, yt_gpu, yc_gpu, yn_cpu, yt_cpu, yc_cpu;
       apply(bf1, ptree, 'N', xn, yn_gpu, Nl, Ml, opt.nvec);
       apply(bf1, ptree, 'T', xt, yt_gpu, Ml, Nl, opt.nvec);
+      apply(bf1, ptree, 'C', xt, yc_gpu, Ml, Nl, opt.nvec);
       use_host(bf1.option, true, gpu, h2_gpu);
       apply(bf1, ptree, 'N', xn, yn_cpu, Nl, Ml, opt.nvec);
       apply(bf1, ptree, 'T', xt, yt_cpu, Ml, Nl, opt.nvec);
+      apply(bf1, ptree, 'C', xt, yc_cpu, Ml, Nl, opt.nvec);
       use_host(bf1.option, false, gpu, h2_gpu);
       const double rn = relative_difference(yn_cpu, yn_gpu, static_cast<size_t>(Ml) * opt.nvec);
       const double rt = relative_difference(yt_cpu, yt_gpu, static_cast<size_t>(Nl) * opt.nvec);
+      const double rc_gpu = relative_difference(yt_gpu, yc_gpu, static_cast<size_t>(Nl) * opt.nvec);
+      const double rc_cpu = relative_difference(yt_cpu, yc_cpu, static_cast<size_t>(Nl) * opt.nvec);
       const int kmax = max_block_dim(bf1);
       const bool exact = opt.nvec % 2 == 0 && kmax <= 256;
-      const bool pass = exact ? (rn == 0.0 && rt == 0.0) : (rn < 1e-13 && rt < 1e-13);
+      const bool pass = (exact ? (rn == 0.0 && rt == 0.0) : (rn < 1e-13 && rt < 1e-13)) && rc_gpu == 0.0 &&
+                        rc_cpu == 0.0;
       if (myid == 0) {
         std::cout << "BFTEST check bf=1 mult gpu_vs_cpu rel_N=" << rn << " rel_T=" << rt << " kmax=" << kmax
-                  << " expect=" << (exact ? "exact" : "1e-13") << " " << (pass ? "PASS" : "FAIL") << std::endl;
+                  << " expect=" << (exact ? "exact" : "1e-13") << " C_vs_T gpu=" << rc_gpu << " cpu=" << rc_cpu
+                  << " " << (pass ? "PASS" : "FAIL") << std::endl;
       }
     }
     for (int nrhs : opt.mult_nrhs) {

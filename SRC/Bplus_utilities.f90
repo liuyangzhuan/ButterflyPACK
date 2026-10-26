@@ -12453,6 +12453,7 @@ contains
       character chara
       integer Ninloc, Noutloc, Ncol
       DT::xin(Ninloc, Ncol), xout(Noutloc, Ncol)
+      DT, allocatable::xconj(:, :)
 
       type(Hstat)::stats
       type(Hoption)::option
@@ -12467,9 +12468,22 @@ contains
       stats%Time_C_Mult = 0
       xout = 0
       if (chara == 'N') then
-         call BF_block_MVP_dat(blocks, chara, Noutloc, Ninloc, Ncol, xin, Ninloc, xout,Noutloc, BPACK_cone, BPACK_czero, ptree, stats)
+         call BF_block_MVP_dat(blocks, 'N', Noutloc, Ninloc, Ncol, xin, Ninloc, xout,Noutloc, BPACK_cone, BPACK_czero, ptree, stats)
+      elseif (chara == 'T') then
+         call BF_block_MVP_dat(blocks, 'T', Ninloc, Noutloc, Ncol, xin, Ninloc, xout, Noutloc, BPACK_cone, BPACK_czero, ptree, stats)
       else
-         call BF_block_MVP_dat(blocks, chara, Ninloc, Noutloc, Ncol, xin, Ninloc, xout, Noutloc, BPACK_cone, BPACK_czero, ptree, stats)
+         !>**** the sweeps take 'N' and 'T' only: op^H x = conj(op^T conj(x)),
+         !> through a copy, since xin is the caller's
+         call BPACK_require(chara == 'C', 'BF_Mult: chara must be N, T or C')
+#if DAT==0 || DAT==2
+         allocate (xconj(Ninloc, Ncol))
+         xconj = conjg(xin)
+         call BF_block_MVP_dat(blocks, 'T', Ninloc, Noutloc, Ncol, xconj, Ninloc, xout, Noutloc, BPACK_cone, BPACK_czero, ptree, stats)
+         xout = conjg(xout)
+         deallocate (xconj)
+#else
+         call BF_block_MVP_dat(blocks, 'T', Ninloc, Noutloc, Ncol, xin, Ninloc, xout, Noutloc, BPACK_cone, BPACK_czero, ptree, stats)
+#endif
       endif
 
       t2 = MPI_Wtime()

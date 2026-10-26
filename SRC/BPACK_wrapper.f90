@@ -5009,6 +5009,7 @@ contains
       real(kind=8) t1, t2
       integer Ninloc, Noutloc, Ncol
       DT, target::xin(Ninloc, Ncol), xout(Noutloc, Ncol)
+      DT, allocatable::xconj(:, :)
 
       character(kind=c_char, len=1) :: trans(*)
       type(c_ptr), intent(in) :: bf_for_Cptr
@@ -5098,9 +5099,22 @@ contains
       if (gpu_info /= 0) then
       xout = 0
       if (trim(str) == 'N') then
-         call BF_block_MVP_dat(blocks, trim(str), Noutloc, Ninloc, Ncol, xin, Ninloc, xout,Noutloc, BPACK_cone, BPACK_czero, ptree, stats)
+         call BF_block_MVP_dat(blocks, 'N', Noutloc, Ninloc, Ncol, xin, Ninloc, xout,Noutloc, BPACK_cone, BPACK_czero, ptree, stats)
+      elseif (trim(str) == 'T') then
+         call BF_block_MVP_dat(blocks, 'T', Ninloc, Noutloc, Ncol, xin, Ninloc, xout, Noutloc, BPACK_cone, BPACK_czero, ptree, stats)
       else
-         call BF_block_MVP_dat(blocks, trim(str), Ninloc, Noutloc, Ncol, xin, Ninloc, xout, Noutloc, BPACK_cone, BPACK_czero, ptree, stats)
+         !>**** the host's sweeps take 'N' and 'T' only: op^H x = conj(op^T conj(x)),
+         !> through a copy, since xin is the caller's
+         call BPACK_require(trim(str) == 'C', 'C_BF_Mult: trans must be N, T or C')
+#if DAT==0 || DAT==2
+         allocate (xconj(Ninloc, Ncol))
+         xconj = conjg(xin)
+         call BF_block_MVP_dat(blocks, 'T', Ninloc, Noutloc, Ncol, xconj, Ninloc, xout, Noutloc, BPACK_cone, BPACK_czero, ptree, stats)
+         xout = conjg(xout)
+         deallocate (xconj)
+#else
+         call BF_block_MVP_dat(blocks, 'T', Ninloc, Noutloc, Ncol, xin, Ninloc, xout, Noutloc, BPACK_cone, BPACK_czero, ptree, stats)
+#endif
       endif
       endif
 
