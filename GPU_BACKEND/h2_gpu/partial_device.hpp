@@ -868,6 +868,129 @@ private:
     std::vector<char*> held_;
 };
 
+// The values of an exchange of the CB entries (partial_schur_blocks_device,
+// whose blocks' index lists go through the host): spans[p] the device values
+// for rank p, in the order of its lists, and rcount[p] the elements from rank
+// p (known from the lists received).  The values are gathered into one buffer
+// on the device and, when MPI is GPU-aware (BPACK_GPU_AWARE_MPI), sent and
+// received in device memory - in the exchange arena when they fit (MPI
+// registers it once; device memory outside it makes the transfers much
+// slower) - else through host copies.  Returns the received values in work
+// memory, rank p's from element roff[p] (null when none arrive).  Collective
+// over comm.
+template<typename DataType>
+char* partial_values_exchange(PartialDeviceWork& work, MPI_Comm comm,
+                              const std::vector<std::vector<std::pair<const DataType*, size_t>>>& spans,
+                              const std::vector<int64_t>& rcount, int tag, std::vector<int64_t>& roff) {
+    int nproc = 1, me = 0;
+    MPI_Comm_size(comm, &nproc);
+    MPI_Comm_rank(comm, &me);
+    constexpr size_t D = sizeof(DataType);
+    constexpr int64_t kWords = static_cast<int64_t>(D / sizeof(double));
+    const size_t P = static_cast<size_t>(nproc), self = static_cast<size_t>(me);
+    std::vector<int64_t> soff(P + 1, 0);
+    roff.assign(P + 1, 0);
+    for (size_t p = 0; p < P; ++p) {
+        int64_t n = 0;
+        for (const auto& s : spans[p]) n += static_cast<int64_t>(s.second);
+        soff[p + 1] = soff[p] + n;
+        roff[p + 1] = roff[p] + rcount[p];
+        if (n * kWords > INT32_MAX || rcount[p] * kWords > INT32_MAX) {
+            throw std::runtime_error("partial CB entries: a message over MPI's counts");
+        }
+    }
+    if (rcount[self] != soff[self + 1] - soff[self]) throw std::logic_error("partial CB entries: a rank's own values miscounted");
+    const size_t sbytes = static_cast<size_t>(soff[P]) * D, rbytes = static_cast<size_t>(roff[P]) * D;
+    const bool direct = device_exchange_enabled();
+    DeviceHeap& arena = DeviceHeap::exchange_arena();
+    auto buffer = [&](size_t bytes, bool& in_arena) -> char* {
+        in_arena = false;
+        if (bytes == 0) return nullptr;
+        if (direct && arena.initialized()) {
+            if (char* p = arena.try_alloc(bytes)) {
+                in_arena = true;
+                return p;
+            }
+        }
+        return work.alloc(bytes);
+    };
+    bool s_arena = false, r_arena = false;
+    char* sbuf = buffer(sbytes, s_arena);
+    char* rbuf = buffer(rbytes, r_arena);
+    cudaStream_t stream = work.stream();
+    if (sbytes > 0) {
+        MetaBuilder& meta = work.meta();
+        std::vector<CopySpan> items;
+        int64_t max_words = 0;
+        for (size_t p = 0; p < P; ++p) {
+            int64_t at = soff[p];
+            for (const auto& [src, e] : spans[p]) {
+                const int64_t words = static_cast<int64_t>(e * D / 4);
+                if (words > 0) items.push_back({src, sbuf + static_cast<size_t>(at) * D, words});
+                max_words = std::max(max_words, words);
+                at += static_cast<int64_t>(e);
+            }
+        }
+        const size_t off = meta.append(items);
+        char* md = work.upload_meta();
+        launch_copy_spans(reinterpret_cast<const CopySpan*>(md + off), static_cast<int>(items.size()), max_words, stream);
+    }
+    if (rcount[self] > 0) {
+        check_cuda(cudaMemcpyAsync(rbuf + static_cast<size_t>(roff[self]) * D, sbuf + static_cast<size_t>(soff[self]) * D,
+                                   static_cast<size_t>(rcount[self]) * D, cudaMemcpyDeviceToDevice, stream),
+                   "partial CB exchange");
+    }
+    // the messages: from and into device memory, or host copies of it
+    std::vector<char> hs, hr;
+    char* s_msg = sbuf;
+    char* r_msg = rbuf;
+    if (!direct) {
+        hs.resize(sbytes);
+        hr.resize(rbytes);
+        if (sbytes > 0) work.download(hs.data(), sbuf, sbytes);
+        s_msg = hs.data();
+        r_msg = hr.data();
+    }
+    work.sync();
+    std::vector<MPI_Request> reqs;
+    for (int p = 0; p < nproc; ++p) {
+        const size_t q = static_cast<size_t>(p);
+        if (p == me || rcount[q] == 0) continue;
+        reqs.emplace_back();
+        MPI_Irecv(r_msg + static_cast<size_t>(roff[q]) * D, static_cast<int>(rcount[q] * kWords), MPI_DOUBLE, p, tag, comm,
+                  &reqs.back());
+    }
+    for (int p = 0; p < nproc; ++p) {
+        const size_t q = static_cast<size_t>(p);
+        const int64_t n = soff[q + 1] - soff[q];
+        if (p == me || n == 0) continue;
+        reqs.emplace_back();
+        MPI_Isend(s_msg + static_cast<size_t>(soff[q]) * D, static_cast<int>(n * kWords), MPI_DOUBLE, p, tag, comm, &reqs.back());
+    }
+    if (!reqs.empty()) MPI_Waitall(static_cast<int>(reqs.size()), reqs.data(), MPI_STATUSES_IGNORE);
+    if (!direct) {
+        for (size_t p = 0; p < P; ++p) {
+            if (p == self || rcount[p] == 0) continue;
+            work.upload(rbuf + static_cast<size_t>(roff[p]) * D, hr.data() + static_cast<size_t>(roff[p]) * D,
+                        static_cast<size_t>(rcount[p]) * D);
+        }
+    }
+    char* out = rbuf;
+    if (r_arena) {
+        // (out of the arena: the values stay for the level)
+        out = work.alloc(rbytes);
+        check_cuda(cudaMemcpyAsync(out, rbuf, rbytes, cudaMemcpyDeviceToDevice, stream), "partial CB exchange");
+        work.sync();
+        arena.free(rbuf);
+    }
+    if (s_arena) {
+        arena.free(sbuf);
+    } else {
+        work.release(sbuf);
+    }
+    return out;
+}
+
 // An operand of a term: a block's values on the device (ld rows), all of
 // them, or rows of them gathered (a block's list, or the term's own)
 template<typename DataType>

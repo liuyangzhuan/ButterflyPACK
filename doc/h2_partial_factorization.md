@@ -171,10 +171,17 @@ the device against 0.43 s on the host.
 
 ### Messages between ranks
 
-On several ranks, the products and entries exchange the data of neighbouring
-boxes through host MPI: the data is copied from the device, sent, and copied
-back, also when MPI is GPU-aware (`BPACK_GPU_AWARE_MPI`). The partial solves
-on the device use the device exchanges of the full solve.
+On several ranks, the entries' blocks that other ranks read go from device
+memory to device memory when MPI is GPU-aware (`BPACK_GPU_AWARE_MPI`, through
+the exchange arena of `BPACK_GPU_EXCHANGE_MB`); only their index lists go
+through the host. Without GPU-aware MPI their values are staged through host
+memory. In the 64^3 case above on 4 ranks and 4 GPUs, the parent-like rounds
+took 0.062 s (0.172 s staged through the host, 0.268 s before the values left
+the host messages).
+
+The products keep their vectors on the host (only the records' and the root
+block's products run on the device), so their messages are host MPI. The
+partial solves on the device use the device exchanges of the full solve.
 
 ### Checks
 
@@ -219,5 +226,5 @@ srun -n 4 ./claplace3d_h2 --grid-size 20 --tol-comp 1e-6 --Nmin_leaf 64 --elem_e
 - `sym 0` only: there is no symmetric (LDL^T) partial factorization.
 - Color levels only; no CA levels.
 - Complex-valued (`z_`) fronts compile but have not been tested.
-- On several ranks, the Schur complement's products and entries exchange
+- On several ranks, the Schur complement's products exchange their vectors
   through host memory ([above](#messages-between-ranks)).

@@ -563,7 +563,7 @@ point set and on a plain cube split, dense checks at small N.
     not fit one card: the host runs.  Small calls lose on the device (20^3,
     4 small blocks: 4.1 ms against 2.5 ms): auto takes the device from 2^16
     entries a call (kPartialExtractDeviceEntries, uncalibrated).
-  - **G4 done 2026-10-26 (uncommitted):** the records kept on the device from
+  - **G4 done 2026-10-26 (committed 17a51e3):** the records kept on the device from
     the factorization, no host copies.  f22_submit_records keeps a chunk's
     lossy records (Bitcomp chunks, or raw entries copied out of the records
     block) in a resident block of the partial store (PartialRecord::device)
@@ -582,3 +582,32 @@ point set and on a plain cube split, dense checks at small N.
     4 ranks: rank 0's RSS 4.20 -> 2.76 GB.  Raw records at 64^3: level 3
     keeps 7.04 GB, the store cannot take the rest, so they spill at the first
     CB use and the host runs (as before G4).
+  - **G5 done 2026-10-26 (uncommitted): the CB entries' exchanges GPU to
+    GPU.**  The two exchanges of partial_schur_blocks_device (the level
+    terms' remote blocks, tag 620, and the parent blocks of another rank's
+    parent, 621) carried the values inside host byte messages: gathered and
+    downloaded, packed, sent, unpacked, uploaded.  Now the index lists alone
+    go through the host (620/621) and the values through
+    partial_values_exchange (h2_gpu/partial_device.hpp; tags 622/623):
+    gathered on the device into one buffer by destination, sent and
+    received in the exchange arena with GPU-aware MPI, received values
+    copied into the call's work memory; without GPU-aware MPI
+    (BPACK_GPU_AWARE_MPI=0) staged through host copies, still without the
+    host packing.  BPACK_TRACE=phase prints a call's time by phase per rank
+    (`[partial CB entries] rank r: ...`, the stream synchronized at each
+    phase's end).  Measured, 64^3, F11 = 16384, 4 ranks on 4 GPUs, the
+    parent-like bench (2.36 M entries a round), the same build with and
+    without the change: compressed records 0.268 -> 0.062 s a round (8.8 ->
+    38.3 M entries/s; one GPU 0.099), raw 0.257 -> 0.055 s; staged through
+    the host 0.172 s.  The baseline's exchanges were about 0.19 s of rank
+    0's round: the terms' 108-177 MB a rank (download and pack 0.03-0.05 s,
+    MPI 0.03, unpack and upload 0.03-0.04) and about 200 MB of parent
+    blocks into rank 0 (0.05 s waiting, 0.044 s unpack and upload); now
+    0.005-0.008 s and 0.003-0.012 s.  Rank 0's round is now the root's pairs
+    (0.018 s, rank 0 alone), the pair terms (0.011-0.016) and the plans
+    (0.005).  Values unchanged (dense checks to the digit at 3 and 8 ranks,
+    device vs host entries 0 .. 3e-16, staged too); extractelement against
+    the per-block extract at 4 ranks is 9.2e-18, as before the change (the
+    ranks' sum order).  Not done: NCCL (the exchanges are now under a fifth
+    of the round); the product's exchanges (610/611) carry host vectors -
+    the product keeps its vectors on the host (G2), 0.063 s at 4 ranks.

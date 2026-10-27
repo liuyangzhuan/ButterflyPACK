@@ -1572,9 +1572,10 @@ inline constexpr int64_t kPartialExtractDeviceEntries = int64_t{1} << 16;
 // partial_device.hpp): the same levels, blocks, pairs and terms, with the
 // chain blocks' values on the device for the whole call (the leaves'
 // identities, each level's T22 steps, the pair terms, the merges, the root's
-// pairs); the host plans the index lists, keeps the exchanges (only the
-// blocks other ranks read come down and go up) and sums the pairs' blocks
-// into out.  The records and the root block are the store's (resident).
+// pairs); the host plans the index lists, sends those of the blocks other
+// ranks read (their values device to device when MPI is GPU-aware:
+// partial_values_exchange) and sums the pairs' blocks into out.  The records
+// and the root block are the store's (resident).
 template<typename DataType>
 struct PartialDeviceChain {
     int64_t box = -1, inter = 0;
@@ -1605,6 +1606,21 @@ void partial_schur_blocks_device(fmm::ParallelTree<CoordType, DataType>& tree, i
     gpu::PartialDeviceWork work;
     gpu::PartialDeviceStore& store = work.store();
     cudaStream_t stream = work.stream();
+    // BPACK_TRACE=phase: the call's time by phase on each rank (the stream
+    // synchronized at each phase's end, so a phase holds its device work)
+    // and the bytes the exchanges send
+    const bool trace = fmm::env::trace("phase");
+    enum { kPlan, kSteps, kTermsOut, kTermsMpi, kTermsIn, kPairs, kUpOut, kUpMpi, kUpIn, kRoot, kPhases };
+    double tp[kPhases] = {}, sent[2] = {0.0, 0.0};
+    double tmark = MPI_Wtime();
+    const double tcall = tmark;
+    auto mark = [&](int phase) {
+        if (!trace) return;
+        work.sync();
+        const double t = MPI_Wtime();
+        tp[phase] += t - tmark;
+        tmark = t;
+    };
     partial_leaf_index(tree);
     const PartialCbSide<DataType> Rh = partial_cb_side(tree, ninter, rows, roff, false);
     const PartialCbSide<DataType> Ch = partial_cb_side(tree, ninter, cols, coff, false);
@@ -1700,31 +1716,6 @@ void partial_schur_blocks_device(fmm::ParallelTree<CoordType, DataType>& tree, i
             i0 = i1;
         }
     };
-    // values of blocks to the host, end to end (for the messages to other
-    // ranks): gathered on the device, then one transfer
-    auto fetch = [&](const std::vector<std::pair<const DataType*, size_t>>& parts, std::vector<DataType>& host) {
-        size_t n = 0;
-        for (const auto& [p, e] : parts) n += e;
-        host.resize(n);
-        if (n == 0) return;
-        char* stage = work.alloc(n * D);
-        fmm::gpu::MetaBuilder& meta = work.meta();
-        std::vector<fmm::gpu::CopySpan> spans;
-        int64_t max_words = 0;
-        size_t at = 0;
-        for (const auto& [p, e] : parts) {
-            const int64_t words = static_cast<int64_t>(e * D / 4);
-            if (words > 0) spans.push_back({p, stage + at * D, words});
-            max_words = std::max(max_words, words);
-            at += e;
-        }
-        const size_t off = meta.append(spans);
-        char* md = work.upload_meta();
-        fmm::gpu::launch_copy_spans(reinterpret_cast<const fmm::gpu::CopySpan*>(md + off), static_cast<int>(spans.size()), max_words,
-                                    stream);
-        work.download(host.data(), stage, n * D);
-        work.release(stage);
-    };
     // a block of another rank's box: its members, raw rows, w part and live set, values on the device
     struct RemoteD {
         int64_t morton = -1, num_points = 0, inter = 0;
@@ -1789,6 +1780,7 @@ void partial_schur_blocks_device(fmm::ParallelTree<CoordType, DataType>& tree, i
                 }
                 run_pairs(pairs, info);
             }
+            mark(kRoot);
             break;
         }
         const auto& SL = store.levels[static_cast<size_t>(l)];
@@ -1861,6 +1853,7 @@ void partial_schur_blocks_device(fmm::ParallelTree<CoordType, DataType>& tree, i
                 for (size_t t = 0; t < b.wrows.size(); ++t) b.wpos[static_cast<size_t>(b.wrows[t])] = static_cast<int32_t>(t);
             }
         }
+        mark(kPlan);
         {
             size_t bytes = 0;
             for (int sd = 0; sd < 2; ++sd) {
@@ -1974,61 +1967,54 @@ void partial_schur_blocks_device(fmm::ParallelTree<CoordType, DataType>& tree, i
                                         static_cast<int>(copies.size()), cm, cn, md, stream);
             if (steps.count() > 0) steps.gemm(md, MagmaNoTrans, MagmaNoTrans, DataType(1), DataType(1), work.queue());
         }
+        mark(kSteps);
         // ---- the level's terms
         if (l >= 2) {
             // this rank's blocks to the owners of their boxes' remote neighbours (row
-            // blocks their w part and the box's live set, column blocks their raw values)
+            // blocks their w part and the box's live set, column blocks their raw
+            // values): the index lists through the host, the values device to device
             std::vector<std::vector<char>> send(static_cast<size_t>(nranks));
+            std::vector<std::vector<std::pair<const DataType*, size_t>>> send_vals(static_cast<size_t>(nranks));
             if (active) {
                 for (int side_id = 0; side_id < 2; ++side_id) {
-                    const auto& blocks = sides[side_id];
-                    std::vector<size_t> who;
-                    std::vector<std::pair<const DataType*, size_t>> parts;
-                    for (size_t i = 0; i < blocks.size(); ++i) {
-                        const auto& box = level.local_boxes[static_cast<size_t>(blocks[i].box)];
-                        bool remote = false;
-                        for (int64_t nm : box.one_hop) remote = remote || !level.is_box_on_process(nm);
-                        if (!remote) continue;
-                        who.push_back(i);
-                        const auto& b = blocks[i];
-                        parts.emplace_back(side_id == 0 ? b.wv : b.v,
-                                           (side_id == 0 ? b.wrows.size() : b.rows.size()) * b.members.size());
-                    }
-                    std::vector<DataType> vals;
-                    fetch(parts, vals);
-                    size_t at = 0;
-                    for (size_t w = 0; w < who.size(); ++w) {
-                        const auto& b = blocks[who[w]];
+                    const bool row = side_id == 0;
+                    for (const auto& b : sides[side_id]) {
                         const auto& box = level.local_boxes[static_cast<size_t>(b.box)];
                         std::set<int> dest;
                         for (int64_t nm : box.one_hop)
                             if (!level.is_box_on_process(nm)) dest.insert(level.owner_rank_of(nm));
+                        if (dest.empty()) continue;
                         std::vector<char> msg;
-                        const bool row = side_id == 0;
                         const int64_t head[8] = {side_id, box.morton_index, box.num_points, static_cast<int64_t>(b.members.size()),
                                                  row ? 0 : static_cast<int64_t>(b.rows.size()), row ? static_cast<int64_t>(b.wrows.size()) : 0,
                                                  row ? static_cast<int64_t>(box.skeleton_indices.size()) : 0, b.inter};
                         partial_put(msg, head, 8);
                         partial_put(msg, b.members.data(), b.members.size());
-                        const size_t e = parts[w].second;
                         if (row) {
                             partial_put(msg, b.wrows.data(), b.wrows.size());
-                            partial_put(msg, vals.data() + at, e);
                             partial_put(msg, box.skeleton_indices.data(), box.skeleton_indices.size());
                         } else {
                             partial_put(msg, b.rows.data(), b.rows.size());
-                            partial_put(msg, vals.data() + at, e);
                         }
-                        at += e;
-                        for (int r : dest) send[static_cast<size_t>(r)].insert(send[static_cast<size_t>(r)].end(), msg.begin(), msg.end());
+                        const size_t e = (row ? b.wrows.size() : b.rows.size()) * b.members.size();
+                        for (int r : dest) {
+                            send[static_cast<size_t>(r)].insert(send[static_cast<size_t>(r)].end(), msg.begin(), msg.end());
+                            send_vals[static_cast<size_t>(r)].emplace_back(row ? b.wv : b.v, e);
+                            sent[0] += static_cast<double>(e * D);
+                        }
                     }
                 }
             }
+            for (const auto& s : send) sent[0] += static_cast<double>(s.size());
+            mark(kTermsOut);
             const auto recv = partial_exchange(tree.comm, send, 620);
+            mark(kTermsMpi);
             std::vector<RemoteD> remote_rows, remote_cols;
-            std::vector<DataType> remote_vals;
             std::vector<std::pair<int, size_t>> remote_at;  // (side, index) of each received block, in order
-            for (const auto& buf : recv) {
+            std::vector<int64_t> rcount(static_cast<size_t>(nranks), 0);
+            size_t nvals = 0;
+            for (size_t from = 0; from < recv.size(); ++from) {
+                const auto& buf = recv[from];
                 for (const char* p = buf.data(); p < buf.data() + buf.size();) {
                     int64_t head[8];
                     p = partial_get(p, head, 8);
@@ -2039,25 +2025,26 @@ void partial_schur_blocks_device(fmm::ParallelTree<CoordType, DataType>& tree, i
                     const int64_t nm = head[3], nr = head[4], nw = head[5], kp = head[6];
                     rb.members.resize(static_cast<size_t>(nm));
                     p = partial_get(p, rb.members.data(), rb.members.size());
-                    const size_t v0 = remote_vals.size();
+                    int64_t e = 0;
                     if (head[0] == 0) {
                         rb.wrows.resize(static_cast<size_t>(nw));
                         p = partial_get(p, rb.wrows.data(), rb.wrows.size());
-                        remote_vals.resize(v0 + static_cast<size_t>(nw * nm));
-                        p = partial_get(p, remote_vals.data() + v0, static_cast<size_t>(nw * nm));
                         rb.skeleton.resize(static_cast<size_t>(kp));
                         p = partial_get(p, rb.skeleton.data(), rb.skeleton.size());
                         rb.wpos.assign(static_cast<size_t>(kp), -1);
                         for (int64_t t = 0; t < nw; ++t) rb.wpos[static_cast<size_t>(rb.wrows[static_cast<size_t>(t)])] = static_cast<int32_t>(t);
+                        e = nw * nm;
                     } else {
                         rb.rows.resize(static_cast<size_t>(nr));
                         p = partial_get(p, rb.rows.data(), rb.rows.size());
-                        remote_vals.resize(v0 + static_cast<size_t>(nr * nm));
-                        p = partial_get(p, remote_vals.data() + v0, static_cast<size_t>(nr * nm));
                         rb.rowpos.assign(static_cast<size_t>(rb.num_points), -1);
                         for (int64_t t = 0; t < nr; ++t) rb.rowpos[static_cast<size_t>(rb.rows[static_cast<size_t>(t)])] = static_cast<int32_t>(t);
+                        e = nr * nm;
                     }
-                    rb.voff = v0;
+                    // (the values arrive in rank order, a rank's in its lists' order)
+                    rb.voff = nvals;
+                    nvals += static_cast<size_t>(e);
+                    rcount[from] += e;
                     if (head[0] == 0) {
                         remote_at.emplace_back(0, remote_rows.size());
                         remote_rows.push_back(std::move(rb));
@@ -2067,16 +2054,16 @@ void partial_schur_blocks_device(fmm::ParallelTree<CoordType, DataType>& tree, i
                     }
                 }
             }
-            if (!remote_vals.empty()) {
-                char* arena = work.alloc(remote_vals.size() * D);
-                arenas.push_back(arena);
-                work.upload(arena, remote_vals.data(), remote_vals.size() * D);
+            mark(kTermsIn);
+            std::vector<int64_t> roff;
+            if (char* vals = gpu::partial_values_exchange(work, tree.comm, send_vals, rcount, 622, roff)) {
+                arenas.push_back(vals);
                 for (const auto& [sd, i] : remote_at) {
                     RemoteD& rb = sd == 0 ? remote_rows[i] : remote_cols[i];
-                    DataType* p = reinterpret_cast<DataType*>(arena) + rb.voff;
-                    (sd == 0 ? rb.wv : rb.v) = p;
+                    (sd == 0 ? rb.wv : rb.v) = reinterpret_cast<DataType*>(vals) + rb.voff;
                 }
             }
+            mark(kTermsMpi);
 
             if (active) {
                 // the column blocks by box (Morton): this rank's and received (as the host's)
@@ -2323,12 +2310,14 @@ void partial_schur_blocks_device(fmm::ParallelTree<CoordType, DataType>& tree, i
                 }
                 run_pairs(pairs, info);
             }
+            mark(kPairs);
         }
         // ---- the parent blocks (as the host's): each block's w part at its box's
         // offset, the dense parts of a box's blocks merged, blocks whose parent is
         // another rank's to it; the values copied on the device
         auto& parent_level = tree.levels[static_cast<size_t>(l) - 1];
         std::vector<std::vector<char>> send_up(static_cast<size_t>(nranks));
+        std::vector<std::vector<std::pair<const DataType*, size_t>>> send_up_vals(static_cast<size_t>(nranks));
         std::vector<char*> next_arenas;
         std::vector<Chain> next[2];
         for (int side_id = 0; side_id < 2; ++side_id) {
@@ -2393,44 +2382,38 @@ void partial_schur_blocks_device(fmm::ParallelTree<CoordType, DataType>& tree, i
             char* md = work.upload_meta();
             fmm::gpu::launch_copy_spans(reinterpret_cast<const fmm::gpu::CopySpan*>(md + soff), static_cast<int>(spans.size()), max_words,
                                         stream);
-            std::vector<size_t> away;
-            std::vector<std::pair<const DataType*, size_t>> parts;
             for (size_t k = 0; k < up.size(); ++k) {
                 const int64_t parent = up_parent[k];
                 if (parent_level.is_process_active && parent_level.is_box_on_process(parent)) {
                     up[k].box = parent - parent_level.local_morton_start;
+                    next[side_id].push_back(std::move(up[k]));
                     continue;
                 }
-                away.push_back(k);
-                parts.emplace_back(up[k].v, up[k].rows.size() * up[k].members.size());
-            }
-            std::vector<DataType> vals;
-            fetch(parts, vals);
-            size_t vat = 0;
-            for (size_t w = 0; w < away.size(); ++w) {
-                const auto& u = up[away[w]];
+                const auto& u = up[k];
                 const int dest = level.parent_level_owner;
                 if (dest < 0) throw std::runtime_error("partial Schur: no owner of a parent box");
                 auto& buf = send_up[static_cast<size_t>(dest)];
-                const int64_t head[5] = {side_id, up_parent[away[w]], static_cast<int64_t>(u.members.size()),
-                                         static_cast<int64_t>(u.rows.size()), u.inter};
+                const int64_t head[5] = {side_id, parent, static_cast<int64_t>(u.members.size()), static_cast<int64_t>(u.rows.size()),
+                                         u.inter};
                 partial_put(buf, head, 5);
                 partial_put(buf, u.members.data(), u.members.size());
                 partial_put(buf, u.rows.data(), u.rows.size());
-                partial_put(buf, vals.data() + vat, parts[w].second);
-                vat += parts[w].second;
+                const size_t e = u.rows.size() * u.members.size();
+                send_up_vals[static_cast<size_t>(dest)].emplace_back(u.v, e);
+                sent[1] += static_cast<double>(e * D);
             }
-            std::vector<bool> gone(up.size(), false);
-            for (size_t k : away) gone[k] = true;
-            for (size_t k = 0; k < up.size(); ++k)
-                if (!gone[k]) next[side_id].push_back(std::move(up[k]));
         }
+        for (const auto& s : send_up) sent[1] += static_cast<double>(s.size());
+        mark(kUpOut);
         const auto recv_up = partial_exchange(tree.comm, send_up, 621);
+        mark(kUpMpi);
         {
-            std::vector<DataType> vals;
             std::vector<std::pair<int, size_t>> got;  // (side, index in next) of each, values at their offsets
             std::vector<size_t> voff;
-            for (const auto& buf : recv_up) {
+            std::vector<int64_t> rcount(static_cast<size_t>(nranks), 0);
+            size_t nvals = 0;
+            for (size_t from = 0; from < recv_up.size(); ++from) {
+                const auto& buf = recv_up[from];
                 for (const char* p = buf.data(); p < buf.data() + buf.size();) {
                     int64_t head[5];
                     p = partial_get(p, head, 5);
@@ -2441,29 +2424,49 @@ void partial_schur_blocks_device(fmm::ParallelTree<CoordType, DataType>& tree, i
                     u.rows.resize(static_cast<size_t>(head[3]));
                     p = partial_get(p, u.members.data(), u.members.size());
                     p = partial_get(p, u.rows.data(), u.rows.size());
-                    const size_t v0 = vals.size();
-                    vals.resize(v0 + static_cast<size_t>(head[2] * head[3]));
-                    p = partial_get(p, vals.data() + v0, static_cast<size_t>(head[2] * head[3]));
-                    voff.push_back(v0);
+                    voff.push_back(nvals);
+                    nvals += static_cast<size_t>(head[2] * head[3]);
+                    rcount[from] += head[2] * head[3];
                     got.emplace_back(static_cast<int>(head[0]), next[head[0]].size());
                     next[head[0]].push_back(std::move(u));
                 }
             }
-            if (!vals.empty()) {
-                char* arena = work.alloc(vals.size() * D);
-                next_arenas.push_back(arena);
-                work.upload(arena, vals.data(), vals.size() * D);
+            mark(kUpIn);
+            std::vector<int64_t> roff;
+            if (char* vals = gpu::partial_values_exchange(work, tree.comm, send_up_vals, rcount, 623, roff)) {
+                next_arenas.push_back(vals);
                 for (size_t g = 0; g < got.size(); ++g)
-                    next[got[g].first][got[g].second].v = reinterpret_cast<DataType*>(arena) + voff[g];
+                    next[got[g].first][got[g].second].v = reinterpret_cast<DataType*>(vals) + voff[g];
             }
         }
         work.sync();
+        mark(kUpMpi);
         for (char* a : arenas) work.release(a);
         arenas = std::move(next_arenas);
         R = std::move(next[0]);
         C = std::move(next[1]);
     }
-
+    if (trace) {
+        constexpr int kRow = kPhases + 3;
+        double row[kRow];
+        std::copy(tp, tp + kPhases, row);
+        row[kPhases] = sent[0] / 1e6;
+        row[kPhases + 1] = sent[1] / 1e6;
+        row[kPhases + 2] = MPI_Wtime() - tcall;
+        std::vector<double> all(me == 0 ? static_cast<size_t>(nranks) * kRow : 0);
+        MPI_Gather(row, kRow, MPI_DOUBLE, all.data(), kRow, MPI_DOUBLE, 0, tree.comm);
+        if (me == 0) {
+            for (int r = 0; r < nranks; ++r) {
+                const double* x = all.data() + static_cast<size_t>(r) * kRow;
+                std::printf("[partial CB entries] rank %d: %.4f s - plans %.4f, chain steps %.4f, terms' exchange (out %.4f, "
+                            "MPI %.4f, in %.4f; %.1f MB sent), pairs %.4f, parents' exchange (out %.4f, MPI %.4f, in %.4f; "
+                            "%.1f MB sent), root %.4f\n",
+                            r, x[kPhases + 2], x[kPlan], x[kSteps], x[kTermsOut], x[kTermsMpi], x[kTermsIn], x[kPhases],
+                            x[kPairs], x[kUpOut], x[kUpMpi], x[kUpIn], x[kPhases + 1], x[kRoot]);
+            }
+            std::fflush(stdout);
+        }
+    }
 }
 #endif  // H2_HAVE_GPU
 
