@@ -18,6 +18,22 @@ points and serve its partial solves and the Schur complement's entries and
 products (`c_bpack_partial_*`, `c_bpack_extractelement`), on the CPU and the
 GPU: [`h2_partial_factorization.md`](h2_partial_factorization.md).
 
+The entries of a compression-only H2 (`precon 2`) are served from the stored
+representation by `c_bpack_extractelement`, which a parent front uses to read
+its children's contribution blocks. With `H2_use_gpu 1` the compression keeps
+its coupling and near blocks on the device for the matvec, and the option
+`H2_extract` says where those entries are then computed: `auto` (0, the
+default), `device` (1) or `host` (2); the device path also needs the caller
+to be one rank. **`auto` picks the host today**: measured at 64^3, the device
+path would make the call 0.436 -> 0.55 s, because it loses 1.5x on the 47% of
+it that it replaces, the rest being the plan every path shares.
+`extract_device.hpp` records the measurement. The
+device path keeps every decision on the host -- the request is resolved,
+grouped and walked up the tree as for the host path -- and runs the per-task
+gathers and the two GEMMs of each far block on the device, writing each
+block straight into its place in the output. `BPACK_CHECK=matvec` extracts
+the same entries on the host and prints the difference.
+
 The matrix's entries on the GPU (`H2_use_gpu`, `HODLR_use_gpu`): how to write
 and register a GPU evaluator of the application's kernel, from C++, C,
 Fortran or Python: [`gpu_kernels.md`](gpu_kernels.md).

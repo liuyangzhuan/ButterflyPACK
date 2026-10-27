@@ -33,11 +33,17 @@
 #include "core/blas_declare.hpp"
 #include "core/butterfly_matvec.hpp"
 #include "core/extraction_profile.hpp"
+#ifdef H2_HAVE_GPU
+#include "h2_gpu/extract_device.hpp"
+#endif
 
 #include <mpi.h>
 
 #include <algorithm>
+#include <cmath>
+#include <complex>
 #include <cstdint>
+#include <cstdio>
 #include <limits>
 #include <map>
 #include <stdexcept>
@@ -124,6 +130,7 @@ struct BoxVectors {
     std::unordered_map<int64_t, int64_t> column;  // point -> column, built on first use
     const DataType* of(int64_t point) {
         if (column.empty()) {
+            column.reserve(points.size());
             for (size_t j = 0; j < points.size(); ++j) column.emplace(points[j], static_cast<int64_t>(j));
         }
         const auto it = column.find(point);
@@ -173,6 +180,52 @@ std::vector<std::vector<T>> exchange(MPI_Comm comm, const std::vector<std::vecto
                                             rbuf.begin() + rd[static_cast<size_t>(p)] + rc[static_cast<size_t>(p)]);
     }
     return recv;
+}
+
+// One all-to-all of per-rank buffers of T over comm, the result flat: rank
+// p's message is [disp[p], disp[p + 1]) of the returned buffer, and `send` is
+// left empty.  `exchange` copies the payload three times (into its send
+// buffer, across, then out into per-rank vectors), which the vectors going up
+// the tree cannot afford -- measured, 13% of `vectors up` at one rank, where
+// nothing is sent at all and the buffer now moves straight through.
+template<typename T>
+std::pair<std::vector<T>, std::vector<int64_t>> exchange_flat(MPI_Comm comm, std::vector<std::vector<T>>& send,
+                                                              MPI_Datatype type, double* mpi_seconds = nullptr) {
+    int size = 1;
+    MPI_Comm_size(comm, &size);
+    if (size == 1) {
+        std::vector<int64_t> disp{0, static_cast<int64_t>(send[0].size())};
+        return {std::move(send[0]), std::move(disp)};
+    }
+    std::vector<int> sc(static_cast<size_t>(size)), rc(static_cast<size_t>(size)), sd(static_cast<size_t>(size)),
+        rd(static_cast<size_t>(size));
+    size_t total = 0;
+    for (int q = 0; q < size; ++q) {
+        sc[static_cast<size_t>(q)] = checked_count(send[static_cast<size_t>(q)].size(), "a message");
+        sd[static_cast<size_t>(q)] = checked_count(total, "a send buffer");
+        total += send[static_cast<size_t>(q)].size();
+    }
+    std::vector<T> sbuf;
+    sbuf.reserve(total);
+    for (auto& v : send) {
+        sbuf.insert(sbuf.end(), v.begin(), v.end());
+        v.clear();
+        v.shrink_to_fit();
+    }
+    const double t_mpi = MPI_Wtime();
+    MPI_Alltoall(sc.data(), 1, MPI_INT, rc.data(), 1, MPI_INT, comm);
+    size_t rtotal = 0;
+    for (int q = 0; q < size; ++q) {
+        rd[static_cast<size_t>(q)] = checked_count(rtotal, "a receive buffer");
+        rtotal += static_cast<size_t>(rc[static_cast<size_t>(q)]);
+    }
+    std::vector<T> rbuf(rtotal);
+    MPI_Alltoallv(sbuf.data(), sc.data(), sd.data(), type, rbuf.data(), rc.data(), rd.data(), type, comm);
+    if (mpi_seconds != nullptr) *mpi_seconds += MPI_Wtime() - t_mpi;
+    std::vector<int64_t> disp(static_cast<size_t>(size) + 1, 0);
+    for (int q = 0; q < size; ++q)
+        disp[static_cast<size_t>(q) + 1] = disp[static_cast<size_t>(q)] + rc[static_cast<size_t>(q)];
+    return {std::move(rbuf), std::move(disp)};
 }
 
 }  // namespace extraction_detail
@@ -359,32 +412,58 @@ Plan<CoordType, DataType> plan_extraction(
     auto& vectors = p.vectors;
     vectors.resize(static_cast<size_t>(leaf) + 1);
     {
+        // The points this rank carries up, grouped by their leaf box, then
+        // one box's columns at a time: a box's position -> slot map is built
+        // once from its skeleton and redundant lists (the point at a time
+        // form searched both lists per point), and the boxes run in parallel.
         auto& level = tree->levels[static_cast<size_t>(leaf)];
         for (int64_t d = 0; d < npoints; ++d) {
-            if (need[static_cast<size_t>(d)] > leaf || level.owner_rank_of(p.leaf_box[static_cast<size_t>(d)]) != srank) {
-                continue;
-            }
-            auto* box = level.find_local_box(p.leaf_box[static_cast<size_t>(d)]);
-            if (box == nullptr) throw std::logic_error("extract_compressed_blocks: a leaf box is not local");
-            auto& bv = vectors[static_cast<size_t>(leaf)][box->morton_index];
-            bv.k = static_cast<int64_t>(box->skeleton_indices.size());
-            bv.points.push_back(d);
-            const int64_t q = p.leaf_position[static_cast<size_t>(d)];
-            std::vector<DataType> col(static_cast<size_t>(bv.k), DataType{0});
-            const auto sit = std::find(box->skeleton_indices.begin(), box->skeleton_indices.end(), q);
-            if (sit != box->skeleton_indices.end()) {
-                col[static_cast<size_t>(sit - box->skeleton_indices.begin())] = DataType{1};
-            } else {
-                const auto rit = std::find(box->redundant_indices.begin(), box->redundant_indices.end(), q);
-                if (rit == box->redundant_indices.end()) {
-                    throw std::logic_error("extract_compressed_blocks: a point neither skeleton nor redundant");
-                }
-                const int64_t j = rit - box->redundant_indices.begin();
-                const auto& T = box->interpolation_matrix;
-                for (int64_t i = 0; i < bv.k; ++i) col[static_cast<size_t>(i)] = T.data[static_cast<size_t>(i + j * T.lda)];
-            }
-            bv.u.insert(bv.u.end(), col.begin(), col.end());
+            const int64_t m = p.leaf_box[static_cast<size_t>(d)];
+            if (need[static_cast<size_t>(d)] > leaf || level.owner_rank_of(m) != srank) continue;
+            vectors[static_cast<size_t>(leaf)][m].points.push_back(d);
         }
+        std::vector<std::pair<int64_t, BoxVectors<DataType>*>> boxes;
+        boxes.reserve(vectors[static_cast<size_t>(leaf)].size());
+        for (auto& [m, bv] : vectors[static_cast<size_t>(leaf)]) boxes.emplace_back(m, &bv);
+        const int64_t nboxes = static_cast<int64_t>(boxes.size());
+        std::exception_ptr failure;
+#pragma omp parallel for schedule(dynamic)
+        for (int64_t b = 0; b < nboxes; ++b) {
+            try {
+                auto* box = level.find_local_box(boxes[static_cast<size_t>(b)].first);
+                if (box == nullptr) throw std::logic_error("extract_compressed_blocks: a leaf box is not local");
+                auto& bv = *boxes[static_cast<size_t>(b)].second;
+                const int64_t k = static_cast<int64_t>(box->skeleton_indices.size());
+                bv.k = k;
+                // a point's position in the box: i + 1 for skeleton slot i,
+                // -(j + 1) for redundant slot j, 0 for neither
+                std::vector<int64_t> slot(box->point_indices.size(), 0);
+                for (size_t i = 0; i < box->skeleton_indices.size(); ++i) {
+                    slot[static_cast<size_t>(box->skeleton_indices[i])] = static_cast<int64_t>(i) + 1;
+                }
+                for (size_t j = 0; j < box->redundant_indices.size(); ++j) {
+                    slot[static_cast<size_t>(box->redundant_indices[j])] = -(static_cast<int64_t>(j) + 1);
+                }
+                const auto& T = box->interpolation_matrix;
+                bv.u.assign(static_cast<size_t>(k) * bv.points.size(), DataType{0});
+                for (size_t c = 0; c < bv.points.size(); ++c) {
+                    const int64_t q = p.leaf_position[static_cast<size_t>(bv.points[c])];
+                    DataType* col = bv.u.data() + static_cast<int64_t>(c) * k;
+                    const int64_t at = slot[static_cast<size_t>(q)];
+                    if (at > 0) {
+                        col[at - 1] = DataType{1};
+                    } else if (at < 0) {
+                        std::copy_n(T.data.data() + (-at - 1) * T.lda, k, col);
+                    } else {
+                        throw std::logic_error("extract_compressed_blocks: a point neither skeleton nor redundant");
+                    }
+                }
+            } catch (...) {
+#pragma omp critical(extract_compressed_blocks_up)
+                if (!failure) failure = std::current_exception();
+            }
+        }
+        if (failure) std::rethrow_exception(failure);
     }
     const int ssize = p.ssize;
     for (int l = leaf; l > std::max(p.coarsest, 2); --l) {
@@ -392,67 +471,210 @@ Plan<CoordType, DataType> plan_extraction(
         // offset in its point list, k, m; the points; the vectors
         auto& child_level = tree->levels[static_cast<size_t>(l)];
         auto& parent_level = tree->levels[static_cast<size_t>(l) - 1];
+        // what each child box sends and where: its columns whose point is
+        // still needed higher up, its offset in its parent's point list, and
+        // its parent's owner.  The destinations' buffers are sized from these
+        // records, so the copies into them then run in parallel.
+        struct Send {
+            BoxVectors<DataType>* bv = nullptr;
+            int64_t parent = 0, offset = 0, mat = 0, dat = 0;
+            int to = -1;
+            std::vector<int64_t> up;
+        };
+        std::vector<std::pair<int64_t, BoxVectors<DataType>*>> childboxes;
+        childboxes.reserve(vectors[static_cast<size_t>(l)].size());
+        for (auto& [c, bv] : vectors[static_cast<size_t>(l)]) childboxes.emplace_back(c, &bv);
+        const int64_t nchild = static_cast<int64_t>(childboxes.size());
+        std::vector<Send> sends(static_cast<size_t>(nchild));
+#pragma omp parallel for schedule(dynamic)
+        for (int64_t b = 0; b < nchild; ++b) {
+            const int64_t c = childboxes[static_cast<size_t>(b)].first;
+            Send& snd = sends[static_cast<size_t>(b)];
+            snd.bv = childboxes[static_cast<size_t>(b)].second;
+            snd.parent = c >> dimension;
+            for (size_t j = 0; j < snd.bv->points.size(); ++j) {
+                if (need[static_cast<size_t>(snd.bv->points[j])] < l) snd.up.push_back(static_cast<int64_t>(j));
+            }
+            if (snd.up.empty()) continue;
+            for (int64_t sib = snd.parent << dimension; sib < c; ++sib) {
+                if (const auto* sb = child_level.find_local_box(sib)) {
+                    snd.offset += static_cast<int64_t>(sb->skeleton_indices.size());
+                }
+            }
+            snd.to = parent_level.owner_rank_of(snd.parent);
+        }
         std::vector<std::vector<int64_t>> meta(static_cast<size_t>(ssize));
         std::vector<std::vector<DataType>> data(static_cast<size_t>(ssize));
-        for (auto& [c, bv] : vectors[static_cast<size_t>(l)]) {
-            std::vector<int64_t> up;
-            for (size_t j = 0; j < bv.points.size(); ++j) {
-                if (need[static_cast<size_t>(bv.points[j])] < l) up.push_back(static_cast<int64_t>(j));
+        {
+            std::vector<int64_t> mcount(static_cast<size_t>(ssize), 0), dcount(static_cast<size_t>(ssize), 0);
+            for (Send& snd : sends) {
+                if (snd.to < 0) continue;
+                snd.mat = mcount[static_cast<size_t>(snd.to)];
+                mcount[static_cast<size_t>(snd.to)] += 4 + static_cast<int64_t>(snd.up.size());
+                snd.dat = dcount[static_cast<size_t>(snd.to)];
+                dcount[static_cast<size_t>(snd.to)] += static_cast<int64_t>(snd.up.size()) * snd.bv->k;
             }
-            if (up.empty()) continue;
-            const int64_t parent = c >> dimension;
-            int64_t offset = 0;
-            for (int64_t sib = parent << dimension; sib < c; ++sib) {
-                if (const auto* sb = child_level.find_local_box(sib)) offset += static_cast<int64_t>(sb->skeleton_indices.size());
+            for (int r = 0; r < ssize; ++r) {
+                meta[static_cast<size_t>(r)].resize(static_cast<size_t>(mcount[static_cast<size_t>(r)]));
+                data[static_cast<size_t>(r)].resize(static_cast<size_t>(dcount[static_cast<size_t>(r)]));
             }
-            const int to = parent_level.owner_rank_of(parent);
-            auto& mv = meta[static_cast<size_t>(to)];
-            mv.insert(mv.end(), {parent, offset, bv.k, static_cast<int64_t>(up.size())});
-            for (int64_t j : up) mv.push_back(bv.points[static_cast<size_t>(j)]);
-            auto& dv = data[static_cast<size_t>(to)];
-            for (int64_t j : up) dv.insert(dv.end(), bv.u.begin() + j * bv.k, bv.u.begin() + (j + 1) * bv.k);
         }
-        const auto rmeta = exchange(tree->comm, meta, MPI_INT64_T);
-        const auto rdata = exchange(tree->comm, data, p.value_type);
+#pragma omp parallel for schedule(dynamic)
+        for (int64_t b = 0; b < nchild; ++b) {
+            const Send& snd = sends[static_cast<size_t>(b)];
+            if (snd.to < 0) continue;
+            const int64_t k = snd.bv->k, m = static_cast<int64_t>(snd.up.size());
+            int64_t* mv = meta[static_cast<size_t>(snd.to)].data() + snd.mat;
+            mv[0] = snd.parent;
+            mv[1] = snd.offset;
+            mv[2] = k;
+            mv[3] = m;
+            DataType* dv = data[static_cast<size_t>(snd.to)].data() + snd.dat;
+            for (int64_t j = 0; j < m; ++j) {
+                mv[4 + j] = snd.bv->points[static_cast<size_t>(snd.up[static_cast<size_t>(j)])];
+                std::copy_n(snd.bv->u.data() + snd.up[static_cast<size_t>(j)] * k, k, dv + j * k);
+            }
+        }
+        auto mrecv = exchange_flat(tree->comm, meta, MPI_INT64_T);
+        auto drecv = exchange_flat(tree->comm, data, p.value_type);
+        const std::vector<int64_t>& mbuf = mrecv.first;
+        const std::vector<int64_t>& mdisp = mrecv.second;
+        const std::vector<DataType>& dbuf = drecv.first;
+        const std::vector<int64_t>& ddisp = drecv.second;
+        // the received child blocks as records, with each one's place among
+        // its parent's columns: the parents' vectors are sized here, so the
+        // fill below only writes into slices that no longer move and two
+        // records of one parent are independent.
+        struct Record {
+            int64_t parent, offset, kc, m, mi, di, base;
+        };
+        std::vector<Record> records;
         for (int from = 0; from < ssize; ++from) {
-            const auto& mv = rmeta[static_cast<size_t>(from)];
-            const auto& dv = rdata[static_cast<size_t>(from)];
-            size_t mi = 0, di = 0;
-            while (mi < mv.size()) {
-                const int64_t parent = mv[mi], offset = mv[mi + 1], kc = mv[mi + 2], m = mv[mi + 3];
-                mi += 4;
+            int64_t mi = mdisp[static_cast<size_t>(from)], di = ddisp[static_cast<size_t>(from)];
+            const int64_t mend = mdisp[static_cast<size_t>(from) + 1];
+            while (mi < mend) {
+                if (mi + 4 > mend) throw std::logic_error("extract_compressed_blocks: a short record");
+                Record rec{mbuf[static_cast<size_t>(mi)],     mbuf[static_cast<size_t>(mi) + 1],
+                           mbuf[static_cast<size_t>(mi) + 2], mbuf[static_cast<size_t>(mi) + 3],
+                           mi + 4,                            di,
+                           0};
+                mi += 4 + rec.m;
+                di += rec.m * rec.kc;
+                if (mi > mend || di > ddisp[static_cast<size_t>(from) + 1]) {
+                    throw std::logic_error("extract_compressed_blocks: a truncated record");
+                }
+                records.push_back(rec);
+            }
+        }
+        const int64_t nrec = static_cast<int64_t>(records.size());
+        std::vector<decltype(parent_level.find_local_box(0))> rpb(static_cast<size_t>(nrec), nullptr);
+        std::vector<BoxVectors<DataType>*> rbv(static_cast<size_t>(nrec), nullptr);
+        {
+            std::unordered_map<int64_t, int64_t> total_of, next_of;
+            for (const Record& rec : records) total_of[rec.parent] += rec.m;
+            for (const auto& [parent, total] : total_of) {
                 auto* pb = parent_level.find_local_box(parent);
                 if (pb == nullptr) throw std::logic_error("extract_compressed_blocks: a parent box is not local");
-                const int64_t np = static_cast<int64_t>(pb->point_indices.size());
-                const int64_t kp = static_cast<int64_t>(pb->skeleton_indices.size());
-                if (offset + kc > np) throw std::logic_error("extract_compressed_blocks: a child outside its parent");
                 auto& bv = vectors[static_cast<size_t>(l) - 1][parent];
-                bv.k = kp;
-                std::vector<DataType> v(static_cast<size_t>(np));
-                for (int64_t j = 0; j < m; ++j) {
-                    std::fill(v.begin(), v.end(), DataType{0});
-                    std::copy_n(dv.begin() + static_cast<std::ptrdiff_t>(di + j * kc), kc, v.begin() + offset);
-                    // u = v[S] + T v[R]
-                    std::vector<DataType> u(static_cast<size_t>(kp));
-                    for (int64_t i = 0; i < kp; ++i) u[static_cast<size_t>(i)] = v[static_cast<size_t>(pb->skeleton_indices[static_cast<size_t>(i)])];
-                    const auto& T = pb->interpolation_matrix;
-                    for (size_t r = 0; r < pb->redundant_indices.size(); ++r) {
-                        const DataType x = v[static_cast<size_t>(pb->redundant_indices[r])];
-                        if (x == DataType{0}) continue;
-                        for (int64_t i = 0; i < kp; ++i) u[static_cast<size_t>(i)] += T.data[static_cast<size_t>(i + static_cast<int64_t>(r) * T.lda)] * x;
-                    }
-                    bv.points.push_back(mv[mi + static_cast<size_t>(j)]);
-                    bv.u.insert(bv.u.end(), u.begin(), u.end());
+                bv.k = static_cast<int64_t>(pb->skeleton_indices.size());
+                next_of[parent] = static_cast<int64_t>(bv.points.size());
+                bv.points.resize(bv.points.size() + static_cast<size_t>(total));
+                bv.u.resize(bv.points.size() * static_cast<size_t>(bv.k));
+            }
+            for (int64_t q = 0; q < nrec; ++q) {
+                Record& rec = records[static_cast<size_t>(q)];
+                auto* pb = parent_level.find_local_box(rec.parent);
+                if (pb == nullptr) throw std::logic_error("extract_compressed_blocks: a parent box is not local");
+                if (rec.offset < 0 || rec.kc < 0 || rec.m < 0 ||
+                    rec.offset + rec.kc > static_cast<int64_t>(pb->point_indices.size())) {
+                    throw std::logic_error("extract_compressed_blocks: a child outside its parent");
                 }
-                mi += static_cast<size_t>(m);
-                di += static_cast<size_t>(m * kc);
+                rpb[static_cast<size_t>(q)] = pb;
+                rbv[static_cast<size_t>(q)] = &vectors[static_cast<size_t>(l) - 1].at(rec.parent);
+                int64_t& at = next_of[rec.parent];
+                rec.base = at;
+                at += rec.m;
             }
         }
+        std::exception_ptr failure;
+#pragma omp parallel for schedule(dynamic)
+        for (int64_t q = 0; q < nrec; ++q) {
+            try {
+                const Record& rec = records[static_cast<size_t>(q)];
+                const auto* pb = rpb[static_cast<size_t>(q)];
+                auto& bv = *rbv[static_cast<size_t>(q)];
+                const int64_t kp = bv.k, kc = rec.kc, m = rec.m;
+                const DataType* X = dbuf.data() + rec.di;   // the child's columns, kc x m
+                DataType* U = bv.u.data() + rec.base * kp;  // this record's slice, kp x m
+                for (int64_t j = 0; j < m; ++j) {
+                    bv.points[static_cast<size_t>(rec.base + j)] = mbuf[static_cast<size_t>(rec.mi + j)];
+                }
+                // u = v[S] + T v[R] with v the child's column placed at its
+                // offset in the parent's point list: v is zero outside the
+                // window [offset, offset + kc), so only the parent's slots
+                // inside the window contribute.  The skeleton part is a
+                // gather and the redundant part one GEMM over all m columns
+                // (the column at a time form zeroed a length-np v and ran a
+                // GEMV each).
+                std::vector<int64_t> srow, scol, rrow, rcol;
+                for (int64_t i = 0; i < kp; ++i) {
+                    const int64_t w = static_cast<int64_t>(pb->skeleton_indices[static_cast<size_t>(i)]) - rec.offset;
+                    if (w >= 0 && w < kc) {
+                        srow.push_back(i);
+                        scol.push_back(w);
+                    }
+                }
+                for (size_t r = 0; r < pb->redundant_indices.size(); ++r) {
+                    const int64_t w = static_cast<int64_t>(pb->redundant_indices[r]) - rec.offset;
+                    if (w >= 0 && w < kc) {
+                        rrow.push_back(static_cast<int64_t>(r));
+                        rcol.push_back(w);
+                    }
+                }
+                std::fill_n(U, static_cast<size_t>(kp * m), DataType{0});
+                for (size_t c = 0; c < srow.size(); ++c) {
+                    const int64_t i = srow[c], w = scol[c];
+                    for (int64_t j = 0; j < m; ++j) U[i + j * kp] = X[w + j * kc];
+                }
+                const int64_t nsub = static_cast<int64_t>(rrow.size());
+                if (kp > 0 && m > 0 && nsub > 0) {
+                    const auto& T = pb->interpolation_matrix;
+                    std::vector<DataType> Tsub(static_cast<size_t>(kp * nsub)), Xsub(static_cast<size_t>(nsub * m));
+                    for (int64_t c = 0; c < nsub; ++c) {
+                        std::copy_n(T.data.data() + rrow[static_cast<size_t>(c)] * T.lda, kp,
+                                    Tsub.begin() + c * kp);
+                    }
+                    for (int64_t j = 0; j < m; ++j) {
+                        for (int64_t c = 0; c < nsub; ++c) {
+                            Xsub[static_cast<size_t>(c + j * nsub)] = X[rcol[static_cast<size_t>(c)] + j * kc];
+                        }
+                    }
+                    const int mm = static_cast<int>(kp), nn = static_cast<int>(m), kk = static_cast<int>(nsub);
+                    const int lda = mm, ldb = kk, ldc = mm;
+                    const DataType one{1};
+                    const char no = 'N';
+                    gemm_(&no, &no, &mm, &nn, &kk, &one, Tsub.data(), &lda, Xsub.data(), &ldb, &one, U, &ldc);
+                }
+            } catch (...) {
+#pragma omp critical(extract_compressed_blocks_up)
+                if (!failure) failure = std::current_exception();
+            }
+        }
+        if (failure) std::rethrow_exception(failure);
     }
-    // (the vectors' point maps, before threads read them)
-    for (auto& per_level : vectors) {
-        for (auto& [m, bv] : per_level) {
-            if (!bv.points.empty()) (void)bv.of(bv.points.front());
+    // (the vectors' point maps, before threads read them: one per box, so
+    // they are built in parallel)
+    {
+        std::vector<BoxVectors<DataType>*> all;
+        for (auto& per_level : vectors) {
+            for (auto& [m, bv] : per_level) {
+                if (!bv.points.empty()) all.push_back(&bv);
+            }
+        }
+        const int64_t nall = static_cast<int64_t>(all.size());
+#pragma omp parallel for schedule(dynamic)
+        for (int64_t b = 0; b < nall; ++b) {
+            (void)all[static_cast<size_t>(b)]->of(all[static_cast<size_t>(b)]->points.front());
         }
     }
     lap(fmm::ExtractionProfile::kUp);
@@ -475,6 +697,134 @@ const H2Block<DataType>& near_block(TreeLevel<CoordType, DataType>& level, BoxDa
     return *block;
 }
 
+#ifdef H2_HAVE_GPU
+// The plan as the device extraction takes it (h2_gpu/extract_device.hpp), and
+// the call.  One rank of the caller's communicator only, so every
+// intersection is this rank's and the blocks need no routing; the output is
+// the host's layout.  False, nothing written, when the device declines (its
+// store does not hold a task's block).
+template<typename CoordType, typename DataType>
+bool extract_on_device(Plan<CoordType, DataType>& p, const int* rowidx, const int* colidx, DataType* alldat_loc,
+                       int64_t entries, std::string& why) {
+    if constexpr (!fmm::gpu::gpu_data_type<DataType>) {
+        (void)p; (void)rowidx; (void)colidx; (void)alldat_loc; (void)entries;
+        why = "this build has no device path for the element type";
+        return false;
+    } else {
+        auto* tree = p.tree;
+        if (tree == nullptr) {
+            why = "this rank does not hold the matrix";
+            return false;
+        }
+        fmm::gpu::ExtractDeviceRequest<DataType> req;
+        req.entries = entries;
+        // the vectors, and where each level's box sits among them
+        std::vector<std::unordered_map<int64_t, int>> vec_of(p.vectors.size());
+        for (size_t l = 0; l < p.vectors.size(); ++l) {
+            for (auto& [m, bv] : p.vectors[l]) {
+                vec_of[l].emplace(m, static_cast<int>(req.vectors.size()));
+                req.vectors.push_back({static_cast<int>(bv.k), static_cast<int>(bv.points.size()), bv.u.data()});
+            }
+        }
+        std::vector<int64_t> base(static_cast<size_t>(p.ninter) + 1, 0);
+        for (int64_t n = 0; n < p.ninter; ++n) {
+            base[static_cast<size_t>(n) + 1] =
+                base[static_cast<size_t>(n)] + static_cast<int64_t>(rowidx[n]) * colidx[n];
+        }
+        // a near task's column side is read by its points' positions in the
+        // source box, so each source box's global indices are placed once
+        std::unordered_map<int64_t, std::unordered_map<int64_t, int>> near_columns;
+        auto append = [&](const std::vector<int>& v) {
+            const int64_t at = static_cast<int64_t>(req.index.size());
+            req.index.insert(req.index.end(), v.begin(), v.end());
+            return at;
+        };
+        std::vector<int> buf;
+        for (const Task& task : p.tasks) {
+            fmm::gpu::ExtractDeviceTask dt;
+            dt.level = task.level;
+            dt.near = task.near ? 1 : 0;
+            dt.t = task.t;
+            dt.s = task.s;
+            dt.nr = static_cast<int>(p.row_count(task.rgroup));
+            dt.nc = static_cast<int>(p.col_count(task.cgroup));
+            dt.out_at = base[static_cast<size_t>(task.inter)];
+            dt.out_ld = rowidx[task.inter];
+            // the output's rows and columns of this group
+            buf.clear();
+            p.row_points(task.rgroup, [&](int64_t, int64_t stacked) {
+                buf.push_back(static_cast<int>(stacked - p.row_offset[static_cast<size_t>(task.inter)]));
+            });
+            dt.orow = append(buf);
+            buf.clear();
+            p.col_points(task.cgroup, [&](int64_t, int64_t stacked) {
+                buf.push_back(static_cast<int>(stacked - p.col_offset[static_cast<size_t>(task.inter)]));
+            });
+            dt.ocol = append(buf);
+            if (task.near) {
+                buf.clear();
+                p.row_points(task.rgroup,
+                             [&](int64_t d, int64_t) { buf.push_back(static_cast<int>(p.leaf_position[static_cast<size_t>(d)])); });
+                dt.rpos = append(buf);
+                auto cit = near_columns.find(task.s);
+                if (cit == near_columns.end()) {
+                    std::unordered_map<int64_t, int> of;
+                    const auto columns = h2_box_global_indices(tree->levels[static_cast<size_t>(p.leaf)], task.s, false);
+                    for (size_t j = 0; j < columns.size(); ++j) of.emplace(columns[j], static_cast<int>(j));
+                    cit = near_columns.emplace(task.s, std::move(of)).first;
+                }
+                buf.clear();
+                bool complete = true;
+                p.col_points(task.cgroup, [&](int64_t d, int64_t) {
+                    const auto it = cit->second.find(p.distinct[static_cast<size_t>(d)]);
+                    if (it == cit->second.end()) complete = false;
+                    else buf.push_back(it->second);
+                });
+                if (!complete) {
+                    why = "a near task's column point is not among its source box's points";
+                    return false;
+                }
+                dt.cpos = append(buf);
+            } else {
+                const size_t l = static_cast<size_t>(task.level);
+                const auto rit = vec_of[l].find(task.t), sit = vec_of[l].find(task.s);
+                if (rit == vec_of[l].end() || sit == vec_of[l].end()) {
+                    why = "level " + std::to_string(task.level) + ": a far task's box has no interpolation vectors";
+                    return false;
+                }
+                dt.rvec = rit->second;
+                dt.cvec = sit->second;
+                auto columns_of = [&](int64_t group, int64_t box, bool rows, int64_t& out) {
+                    auto& bv = p.vectors[l].at(box);
+                    buf.clear();
+                    bool ok = true;
+                    auto one = [&](int64_t d, int64_t) {
+                        const auto it = bv.column.find(d);
+                        if (it == bv.column.end()) ok = false;
+                        else buf.push_back(static_cast<int>(it->second));
+                    };
+                    if (rows) p.row_points(group, one);
+                    else p.col_points(group, one);
+                    out = append(buf);
+                    return ok;
+                };
+                if (!columns_of(task.rgroup, task.t, true, dt.rpos) ||
+                    !columns_of(task.cgroup, task.s, false, dt.cpos)) {
+                    why = "a far task's point has no interpolation vector in its box";
+                    return false;
+                }
+            }
+            req.tasks.push_back(dt);
+        }
+        if (req.index.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
+            why = "the request's index lists exceed INT_MAX";
+            return false;
+        }
+        return fmm::gpu::extract_compressed_blocks_device(tree, req, alldat_loc, &why);
+    }
+}
+#endif  // H2_HAVE_GPU
+
 }  // namespace extraction_detail
 
 // The blocks A(I_n, J_n), n < ninter, each to the caller's rank owner[n]
@@ -486,7 +836,7 @@ template<typename CoordType, typename DataType>
 void extract_compressed_blocks(
     H2<CoordType, DataType>* source, MPI_Comm caller_comm, int64_t ninter,
     const int* allrows, const int* allcols, const int* rowidx, const int* colidx,
-    const std::vector<int>& owner, DataType* alldat_loc) {
+    const std::vector<int>& owner, DataType* alldat_loc, int extract_mode = 0) {
     using namespace extraction_detail;
     // (the time by step: core/extraction_profile.hpp)
     fmm::ExtractionProfile& profile = fmm::extraction_profile();
@@ -499,6 +849,45 @@ void extract_compressed_blocks(
     };
     Plan<CoordType, DataType> p = plan_extraction(source, caller_comm, ninter, allrows, allcols, rowidx, colidx, lap);
     auto* tree = p.tree;
+#ifdef H2_HAVE_GPU
+    // H2_extract: 2 the host; 1 the device when the compression kept its
+    // blocks there; 0 (auto) also when the call is large enough.  One rank of
+    // the caller's communicator only (extract_on_device), which is where the
+    // cost is: a front's children are read on self communicators.
+    // BPACK_CHECK=matvec: the host's values too, and their difference (the
+    // same store and the same matrix as the device matvec that value checks).
+    if (extract_mode != 2 && p.csize == 1) {
+        int64_t entries = 0;
+        for (int64_t n = 0; n < ninter; ++n) entries += static_cast<int64_t>(rowidx[n]) * colidx[n];
+        if (extract_mode == 1 || entries >= fmm::gpu::kExtractDeviceEntries) {
+            std::string why;
+            const bool done = extract_on_device(p, rowidx, colidx, alldat_loc, entries, why);
+            if (!done && extract_mode == 1 && tree != nullptr && tree->mpi_rank == 0) {
+                // an explicit request that cannot be served says so: it must
+                // not fall back to the host silently
+                std::printf("H2_extract device declined, the host path runs instead: %s\n", why.c_str());
+                std::fflush(stdout);
+            }
+            if (done && fmm::gpu::device_matvec_check()) {
+                std::vector<DataType> host(static_cast<size_t>(std::max<int64_t>(entries, 1)));
+                extract_compressed_blocks(source, caller_comm, ninter, allrows, allcols, rowidx, colidx, owner,
+                                          host.data(), 2);
+                double sums[2] = {0.0, 0.0};
+                for (int64_t i = 0; i < entries; ++i) {
+                    const DataType d = alldat_loc[i] - host[static_cast<size_t>(i)];
+                    sums[0] += std::norm(d);
+                    sums[1] += std::norm(host[static_cast<size_t>(i)]);
+                }
+                std::printf("GPU H2 entries check: |gpu - host| / |host| = %.3e (%lld entries)\n",
+                            sums[1] > 0.0 ? std::sqrt(sums[0] / sums[1]) : 0.0, static_cast<long long>(entries));
+                std::fflush(stdout);
+            }
+            if (done) return;
+        }
+    }
+#else
+    (void)extract_mode;
+#endif
     const int srank = p.srank, csize = p.csize, crank = p.crank;
     const auto& tasks = p.tasks;
     const auto& rg = p.rg;

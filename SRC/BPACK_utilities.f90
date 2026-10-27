@@ -1336,6 +1336,7 @@ contains
       option%H2_s_op=0d0
       option%H2_partial=0
       option%H2_partial_extract=0
+      option%H2_extract=0
 
    end subroutine SetDefaultOptions
 
@@ -1443,6 +1444,16 @@ contains
                      option%H2_partial_extract = 2
                   else
                      read (strings1, *) option%H2_partial_extract
+                  endif
+               else if (trim(strings) == '--h2_extract' .or. trim(strings) == '--H2_extract') then
+                  if (trim(strings1) == 'auto') then
+                     option%H2_extract = 0
+                  else if (trim(strings1) == 'device') then
+                     option%H2_extract = 1
+                  else if (trim(strings1) == 'host') then
+                     option%H2_extract = 2
+                  else
+                     read (strings1, *) option%H2_extract
                   endif
                else if (trim(strings) == '--iter_solver') then
                   read (strings1, *) option%iter_solver
@@ -1587,6 +1598,7 @@ contains
       option1%H2_s_op = option%H2_s_op
       option1%H2_partial = option%H2_partial
       option1%H2_partial_extract = option%H2_partial_extract
+      option1%H2_extract = option%H2_extract
       option1%tol_comp = option%tol_comp
       option1%tol_Rdetect = option%tol_Rdetect
       option1%tol_LS = option%tol_LS
@@ -1690,6 +1702,7 @@ contains
             write (*, '(A18,Es14.7)') 'h2_s_op', option%H2_s_op
             write (*, '(A18,I8)') 'h2_partial', option%H2_partial
             write (*, '(A20,I8)') 'h2_partial_extract', option%H2_partial_extract
+            write (*, '(A20,I8)') 'h2_extract', option%H2_extract
             write (*, '(A18,I8)') 'n_iter', option%n_iter
             write (*, '(A18,I8)') 'precon', option%precon
             write (*, '(A18,I8)') 'verbosity', option%verbosity

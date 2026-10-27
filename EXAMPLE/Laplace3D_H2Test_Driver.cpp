@@ -62,6 +62,7 @@ struct DriverOptions {
   int extract_check = 0;   // intersections of the extraction check of a compression-only H2 (precon 2); 0: none
   int64_t h2_partial = 0;  // H2_partial: the first h2_partial points (the grid's first planes) form F11
   int h2_partial_extract = 0;  // H2_partial_extract: 0 auto, 1 device, 2 host
+  int h2_extract = 0;      // H2_extract: 0 auto, 1 device, 2 host
   int partial_check = 0;   // 1: the partial solves and Schur complement against dense LAPACK on rank 0 (N <= 40000, distributed64 1)
   int partial_extract_bench = 0;  // > 0: that many rounds of parent-like Schur complement blocks through c_bpack_extractelement
   int logdet_check = 0;    // 1: the logdet and a solve again after another H2 is built (format 7, not precon 2)
@@ -267,6 +268,11 @@ DriverOptions parse_driver_options(int argc, char** argv) {
                                    : value == "device" ? 1
                                    : value == "host"   ? 2
                                                        : parse_int(value, "H2_partial_extract");
+    } else if (name == "h2_extract") {
+      options.h2_extract = value == "auto"     ? 0
+                           : value == "device" ? 1
+                           : value == "host"   ? 2
+                                               : parse_int(value, "H2_extract");
     } else if (name == "partial_check") {
       options.partial_check = parse_int(value, "partial_check");
     } else if (name == "partial_extract_bench") {
@@ -408,6 +414,9 @@ DriverOptions parse_driver_options(int argc, char** argv) {
   if (options.h2_partial_extract < 0 || options.h2_partial_extract > 2) {
     throw std::invalid_argument("H2_partial_extract must be auto (0), device (1) or host (2)");
   }
+  if (options.h2_extract < 0 || options.h2_extract > 2) {
+    throw std::invalid_argument("H2_extract must be auto (0), device (1) or host (2)");
+  }
   if (options.h2_ca_solve < 0 || options.h2_ca_solve > 1) {
     throw std::invalid_argument("H2_CA_solve must be replicated (0) or home (1)");
   }
@@ -517,6 +526,9 @@ void print_usage(const char* executable) {
       << "  --extract_check <count>   (format=7, precon 2, distributed64 1: that many\n"
          "                             random blocks extracted from the compressed H2,\n"
          "                             against the kernel and its matvec)\n"
+      << "  --H2_extract <auto|device|host>   (format=7, precon 2: where a compressed H2's entries\n"
+         "                            are computed; auto: the device when the compression kept its\n"
+         "                            blocks there and the call is large enough)\n"
       << "  --logdet_check <0|1>   (format=7, precon 1 or 3: the logdet and a solve of\n"
          "                          the factored H2 again after a compression-only H2\n"
          "                          of the same kernel is built)\n"
@@ -1454,6 +1466,7 @@ int main(int argc, char** argv) {
       d_c_bpack_set_I_option(option_handle, "precon", driver_options.precon);
       d_c_bpack_set_I_option(option_handle, "H2_partial", static_cast<int>(driver_options.h2_partial));
       d_c_bpack_set_I_option(option_handle, "H2_partial_extract", driver_options.h2_partial_extract);
+      d_c_bpack_set_I_option(option_handle, "H2_extract", driver_options.h2_extract);
       d_c_bpack_set_I_option(
           option_handle, "verbosity", driver_options.verbosity);
       d_c_bpack_set_I_option(
@@ -1694,6 +1707,19 @@ int main(int argc, char** argv) {
           rowidx.data(), colidx.data(), pgidx.data(), &npmap, pmaps.data());
       double t_extract = MPI_Wtime() - t0;
       MPI_Allreduce(MPI_IN_PLACE, &t_extract, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+      {  // where that call's time went (core/extraction_profile.hpp)
+        double pr[12] = {0.0};
+        d_c_bpack_get_extraction_profile(pr);
+        MPI_Allreduce(MPI_IN_PLACE, pr, 12, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+        if (rank == 0) {
+          static const char* names[8] = {"resolve", "tasks",   "vectors up", "column side",
+                                         "compute", "pack",    "route",      "unpack"};
+          std::printf("  extraction profile (max over ranks, %lld calls): ", static_cast<long long>(pr[11]));
+          for (int k = 0; k < 8; ++k) std::printf("%s %.4f  ", names[k], pr[k]);
+          std::printf("| entries computed %.0f\n", pr[9]);
+          std::fflush(stdout);
+        }
+      }
 
       // against the kernel (the random blocks), and the matvec (the probes)
       std::vector<double> unit(static_cast<size_t>(local_points) * 2, 0.0);

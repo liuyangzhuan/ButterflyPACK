@@ -59,6 +59,31 @@ struct IndexCopyItemT {
     int add;
 };
 
+// out[out_rows[i] * ors + out_cols[j] * ocs] = src[src_rows[i] * rs +
+// src_cols[j] * cs] (i < m, j < n), or += with add: rows and columns indexed
+// on both sides, so one launch covers a gather into a dense block, the
+// scatter of a block into indexed rows and columns of an output, and the two
+// in one.  An index list left default is the identity (index_at), and a
+// transposed source is the same item with rs and cs swapped.  The items of a
+// launch write distinct entries.
+template<typename T>
+struct BlockCopyItemT {
+    T* out;
+    int64_t ors;
+    int64_t ocs;
+    IndexList out_rows;
+    IndexList out_cols;
+    const T* src;
+    int64_t rs;
+    int64_t cs;
+    IndexList src_rows;
+    IndexList src_cols;
+    int m;
+    int n;
+    int add;
+};
+using BlockCopyItem = BlockCopyItemT<double>;
+
 // out(i, j) = a(rows[i], cols[j]) of a column-major matrix (leading dimension
 // lda) held as chunks of `chunk` elements, chunk k at pool + slot[k] * chunk
 // (the chunks a gather reads, decompressed: H2_partial's records)
@@ -306,6 +331,9 @@ void launch_add_store(const AddStoreItemT<T>* items, int count, int max_m, int m
                       cudaStream_t stream);
 template<typename T>
 void launch_index_copy(const IndexCopyItemT<T>* items, int count, int max_m, int max_n, const char* meta,
+                       cudaStream_t stream);
+template<typename T>
+void launch_block_copy(const BlockCopyItemT<T>* items, int count, int max_m, int max_n, const char* meta,
                        cudaStream_t stream);
 template<typename T>
 void launch_chunk_gather(const ChunkGatherItemT<T>* items, int count, int max_m, int max_n, const char* meta,

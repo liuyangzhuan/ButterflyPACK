@@ -57,6 +57,24 @@ __global__ void index_copy_kernel(const IndexCopyItemT<T>* items, const char* me
 }
 
 template<typename T>
+__global__ void block_copy_kernel(const BlockCopyItemT<T>* items, const char* meta) {
+    const BlockCopyItemT<T> item = items[blockIdx.x];
+    const int i = blockIdx.y * kTile + threadIdx.x;
+    const int j0 = blockIdx.z * kTile;
+    if (i >= item.m || j0 >= item.n) return;
+    const int64_t so = static_cast<int64_t>(index_at(meta, item.src_rows, i)) * item.rs;
+    const int64_t oo = static_cast<int64_t>(index_at(meta, item.out_rows, i)) * item.ors;
+    for (int jj = threadIdx.y; jj < kTile; jj += kTileRows) {
+        const int j = j0 + jj;
+        if (j >= item.n) break;
+        const T v = item.src[so + static_cast<int64_t>(index_at(meta, item.src_cols, j)) * item.cs];
+        T* at = item.out + oo + static_cast<int64_t>(index_at(meta, item.out_cols, j)) * item.ocs;
+        if (item.add) *at += v;
+        else *at = v;
+    }
+}
+
+template<typename T>
 __global__ void chunk_gather_kernel(const ChunkGatherItemT<T>* items, const char* meta) {
     const ChunkGatherItemT<T> item = items[blockIdx.x];
     const int i = blockIdx.y * kTile + threadIdx.x;
@@ -265,6 +283,14 @@ void launch_index_copy(const IndexCopyItemT<T>* items, int count, int max_m, int
 }
 
 template<typename T>
+void launch_block_copy(const BlockCopyItemT<T>* items, int count, int max_m, int max_n, const char* meta,
+                       cudaStream_t stream) {
+    if (count <= 0 || max_m <= 0 || max_n <= 0) return;
+    block_copy_kernel<T><<<tile_grid(count, max_m, max_n), dim3(kTile, kTileRows), 0, stream>>>(items, meta);
+    check_launch("block_copy_kernel");
+}
+
+template<typename T>
 void launch_chunk_gather(const ChunkGatherItemT<T>* items, int count, int max_m, int max_n, const char* meta,
                          cudaStream_t stream) {
     if (count <= 0 || max_m <= 0 || max_n <= 0) return;
@@ -377,6 +403,7 @@ void launch_abs_max(const AbsMaxItem* items, int count, cudaStream_t stream) {
     template void launch_gather<T>(const GatherItemT<T>*, int, int, int, const char*, cudaStream_t);               \
     template void launch_add_store<T>(const AddStoreItemT<T>*, int, int, int, cudaStream_t);                       \
     template void launch_index_copy<T>(const IndexCopyItemT<T>*, int, int, int, const char*, cudaStream_t);        \
+    template void launch_block_copy<T>(const BlockCopyItemT<T>*, int, int, int, const char*, cudaStream_t);        \
     template void launch_chunk_gather<T>(const ChunkGatherItemT<T>*, int, int, int, const char*, cudaStream_t);    \
     template void launch_sym_add<T>(const SymAddItemT<T>*, int, int, cudaStream_t);                               \
     template void launch_symmetrize<T>(const IdentityItemT<T>*, int, int, cudaStream_t);                          \

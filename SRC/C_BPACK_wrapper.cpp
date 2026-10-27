@@ -595,6 +595,8 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"H2_partial", required_argument, 0, 1006},
 		{"h2_partial_extract", required_argument, 0, 1007},
 		{"H2_partial_extract", required_argument, 0, 1007},
+		{"h2_extract", required_argument, 0, 1008},
+		{"H2_extract", required_argument, 0, 1008},
 		{"H2_use_gpu", required_argument, 0, 59},
 		{"hodlr_use_gpu", required_argument, 0, 60},
 		{"HODLR_use_gpu", required_argument, 0, 60},
@@ -937,6 +939,14 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		else if (v == "host") opt_i = 2;
 		else { std::istringstream iss(v); iss >> opt_i; }
 		c_bpack_set_I_option(&option0, "H2_partial_extract", opt_i);
+		} break;
+		case 1008: {
+		const std::string v(optarg);
+		if (v == "auto") opt_i = 0;
+		else if (v == "device") opt_i = 1;
+		else if (v == "host") opt_i = 2;
+		else { std::istringstream iss(v); iss >> opt_i; }
+		c_bpack_set_I_option(&option0, "H2_extract", opt_i);
 		} break;
 		case 61: {
 		std::istringstream iss(optarg);
@@ -2702,9 +2712,21 @@ static int partial_extract_of(F2Cptr* option) {
   return mode;
 }
 
+// H2_extract (0 auto, 1 device, 2 host): where a compression-only H2's
+// entries are computed.  It picks a collective branch, so every rank of the
+// call must hold the same value (the bridge reduces it: only the source's
+// ranks hold the option).
+static int compressed_extract_of(F2Cptr* option) {
+  double v = 0.0;
+  c_bpack_getoption(option, "H2_extract", &v);
+  const int mode = static_cast<int>(std::llround(v));
+  if (mode < 0 || mode > 2) throw std::invalid_argument("H2_extract must be 0 (auto), 1 (device) or 2 (host)");
+  return mode;
+}
+
 static void h2_extract_elements(
-    F2Cptr* bmat, MPI_Comm caller_comm, bool partial, int partial_extract, int* Ninter, int* allrows, int* allcols,
-    C_DT* alldat_loc, int* rowidx, int* colidx, int* pgidx, int* Npmap,
+    F2Cptr* bmat, MPI_Comm caller_comm, bool partial, int partial_extract, int extract, int* Ninter, int* allrows,
+    int* allcols, C_DT* alldat_loc, int* rowidx, int* colidx, int* pgidx, int* Npmap,
     int* pmaps, const char* caller) {
   using H2Data = typename butterfly::fmm_data<C_DT>::type;
   const std::vector<int> owner =
@@ -2718,7 +2740,7 @@ static void h2_extract_elements(
   }
   butterfly::color_unstructured::extract_compressed_blocks(
     h2_of<H2Data>(bmat), caller_comm, *Ninter, allrows, allcols, rowidx, colidx, owner,
-    reinterpret_cast<H2Data*>(alldat_loc));
+    reinterpret_cast<H2Data*>(alldat_loc), extract);
 }
 
 // The sketched blocks of a list of requests from a compression-only
@@ -2883,7 +2905,8 @@ void c_bpack_extractelement(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stat
     // (every rank holds the matrix, so its kind needs no collective)
     const bool partial = h2->build_state == butterfly::H2BuildState::RS_PARTIAL;
     try {
-      h2_extract_elements(bmat, comm, partial, partial ? partial_extract_of(option) : 0, Ninter, allrows, allcols,
+      h2_extract_elements(bmat, comm, partial, partial ? partial_extract_of(option) : 0,
+                          partial ? 0 : compressed_extract_of(option), Ninter, allrows, allcols,
                           alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps, "c_bpack_extractelement");
     } catch (const std::exception& e) {
       int rank = 0;
@@ -2911,7 +2934,10 @@ void c_bpack_extractelement_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cpt
   MPI_Comm caller_comm = MPI_Comm_f2c(static_cast<MPI_Fint>(fcomm));
   // and whether it is a partial factorization, in the same reduction
   using H2Data = typename butterfly::fmm_data<C_DT>::type;
-  int kind[2] = {-1, 0};
+  // kind: the format, whether it is a partial factorization, and H2_extract
+  // (the compressed path's branch is collective, and only the source's ranks
+  // hold the option, so it travels in the same reduction)
+  int kind[3] = {-1, 0, -1};
   int partial_extract = 0;  // (read where the matrix is: only its ranks compute)
   if (option != nullptr && *option != nullptr) {
     double tmp = 0.0;
@@ -2921,13 +2947,15 @@ void c_bpack_extractelement_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cpt
       butterfly::H2<double, H2Data>* h2 = h2_of<H2Data>(bmat);
       kind[1] = h2 != nullptr && h2->build_state == butterfly::H2BuildState::RS_PARTIAL ? 1 : 0;
       if (kind[1] != 0) partial_extract = partial_extract_of(option);
+      else kind[2] = compressed_extract_of(option);
     }
   }
-  MPI_Allreduce(MPI_IN_PLACE, kind, 2, MPI_INT, MPI_MAX, caller_comm);
+  MPI_Allreduce(MPI_IN_PLACE, kind, 3, MPI_INT, MPI_MAX, caller_comm);
   const int format = kind[0];
   if (format == 7) {
     try {
-      h2_extract_elements(bmat, caller_comm, kind[1] != 0, partial_extract, Ninter, allrows, allcols, alldat_loc,
+      h2_extract_elements(bmat, caller_comm, kind[1] != 0, partial_extract, std::max(kind[2], 0), Ninter, allrows,
+                          allcols, alldat_loc,
                           rowidx, colidx, pgidx, Npmap, pmaps, "c_bpack_extractelement_bridge");
     } catch (const std::exception& e) {
       int rank = 0;
