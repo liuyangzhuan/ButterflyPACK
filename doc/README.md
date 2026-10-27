@@ -13,6 +13,11 @@ Environment variables of the H2 code and the GPU backends (`BPACK_CHECK`,
 `BPACK_TRACE`, device memory, GPU-aware MPI):
 [`environment_variables.md`](environment_variables.md).
 
+The partial H2 factorization (`H2_partial`): eliminate a front's leading
+points and serve its partial solves and the Schur complement's entries and
+products (`c_bpack_partial_*`, `c_bpack_extractelement`), on the CPU and the
+GPU: [`h2_partial_factorization.md`](h2_partial_factorization.md).
+
 The matrix's entries on the GPU (`H2_use_gpu`, `HODLR_use_gpu`): how to write
 and register a GPU evaluator of the application's kernel, from C++, C,
 Fortran or Python: [`gpu_kernels.md`](gpu_kernels.md).

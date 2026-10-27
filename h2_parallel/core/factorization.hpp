@@ -8259,6 +8259,9 @@ struct LazyFarEndpoint {
     const std::vector<int64_t>* wanted = nullptr;
     int64_t wanted_count = 0;
     const int64_t* indices = nullptr;
+    /// H2_partial: the endpoint's skeleton before the level's F22 phase (a
+    /// source that saw it after its elimination laid its rows out over it)
+    const std::vector<int64_t>* skeleton_before = nullptr;
 };
 
 /**
@@ -8323,6 +8326,25 @@ bool lazy_far_locate_endpoint_rows(
         return true;
     }
 
+    if (endpoint.skeleton_before != nullptr && !endpoint.skeleton_before->empty() &&
+        slot_count == static_cast<int64_t>(endpoint.skeleton_before->size()) && endpoint.wanted != nullptr &&
+        (endpoint.skeleton == nullptr || slot_count != static_cast<int64_t>(endpoint.skeleton->size()) ||
+         endpoint.wanted != endpoint.skeleton)) {
+        // H2_partial: slot rows are the endpoint's skeleton before the F22
+        // phase; the wanted slots are a subset of it
+        const auto& before = *endpoint.skeleton_before;
+        for (int64_t w : *endpoint.wanted) {
+            const auto it = std::find(before.begin(), before.end(), w);
+            if (it == before.end()) {
+                throw std::runtime_error(
+                    "lazy_far_locate_endpoint_rows: a wanted slot outside the skeleton before the F22 phase "
+                    "(source " + std::to_string(source_box->morton_index) + ", endpoint " +
+                    std::to_string(endpoint.morton) + ")");
+            }
+            row_positions.push_back(static_cast<int64_t>(it - before.begin()));
+        }
+        return true;
+    }
     if (endpoint.skeleton != nullptr &&
         slot_count == static_cast<int64_t>(endpoint.skeleton->size())) {
         // Slot rows are the endpoint's skeleton. The reader must want exactly
@@ -8867,6 +8889,7 @@ void gather_id_target_streamed(
     col_end.morton = box->morton_index;
     col_end.full_size = n;
     col_end.skeleton = &box->skeleton_indices;
+    col_end.skeleton_before = &box->skeleton_before_f22;
     col_end.wanted = nullptr;
     col_end.wanted_count = n;
     col_end.indices = box->point_indices.data();
@@ -9578,7 +9601,11 @@ void gather_id_target_streamed_nonsymmetric(
     KernelType* kernel,
     FactorizationThreadScratch<CoordType, DataType>& scratch,
     bool on_boundary,
-    double id_tolerance) {
+    double id_tolerance,
+    const std::vector<int64_t>* column_slots = nullptr) {
+    // column_slots (H2_partial's F22 phase): the target's columns are these
+    // slots of the box (an eliminated box's skeleton before the phase), the
+    // fill located through them; else every point of the box.
 
     scratch.streamed_sketch_valid = false;
     scratch.id_adaptive = IDAdaptiveStats{};
@@ -9592,7 +9619,18 @@ void gather_id_target_streamed_nonsymmetric(
     }
 
     const int dimension = tree->dimension;
-    const int64_t n = box->num_points;
+    std::vector<int64_t> column_ids_storage;
+    if (column_slots != nullptr) {
+        column_ids_storage.reserve(column_slots->size());
+        for (int64_t slot : *column_slots) column_ids_storage.push_back(box->point_indices[static_cast<size_t>(slot)]);
+    }
+    const int64_t n = column_slots != nullptr ? static_cast<int64_t>(column_slots->size()) : box->num_points;
+    const int64_t* column_ids = column_slots != nullptr ? column_ids_storage.data() : box->point_indices.data();
+    if (n == 0) {
+        scratch.workspace_rows = 0;
+        scratch.workspace_cols = 0;
+        return;
+    }
     const std::vector<int64_t> extra = select_static_id_training_indices(tree, box);
     const int64_t n_extra = static_cast<int64_t>(extra.size());
     for (size_t idx = 0; idx < box->one_hop.size(); ++idx) {
@@ -9622,6 +9660,7 @@ void gather_id_target_streamed_nonsymmetric(
     std::vector<int64_t> ring_full(num_ring, 0);
     std::vector<const std::vector<int64_t>*> ring_skeleton(num_ring, nullptr);
     std::vector<const std::vector<int64_t>*> ring_wanted(num_ring, nullptr);
+    std::vector<const std::vector<int64_t>*> ring_before(num_ring, nullptr);  // H2_partial: before the F22 phase
     std::vector<std::vector<int64_t>> ring_points(num_ring);
     std::vector<LazyFarSource> pair_sources;
     int64_t far_rows = 0;
@@ -9636,6 +9675,7 @@ void gather_id_target_streamed_nonsymmetric(
         if (BoxData<CoordType, DataType>* nb = resolve_neighbor(morton)) {
             points = &nb->point_indices;
             skeleton = &nb->skeleton_indices;
+            ring_before[f] = &nb->skeleton_before_f22;
             const bool full_boundary_pair = on_boundary && nb->on_boundary && pair_sources.empty();
             use_skeleton = !full_boundary_pair && sketch_box_eliminated(level, morton);
         } else {
@@ -9755,7 +9795,7 @@ void gather_id_target_streamed_nonsymmetric(
         // K(rows, B), (a x n), into row-major
         block_cm.resize(static_cast<size_t>(a * n));
         evaluate_block_by_index_split<DataType>(
-            kernel, row_points, a, box->point_indices.data(), n, block_cm.data(), a, scratch.split_threads);
+            kernel, row_points, a, column_ids, n, block_cm.data(), a, scratch.split_threads);
         block_rm.resize(static_cast<size_t>(a * n));
         constexpr int64_t tile = 32;
         for (int64_t i0 = 0; i0 < a; i0 += tile) {
@@ -9772,7 +9812,7 @@ void gather_id_target_streamed_nonsymmetric(
         // K(B, rows) (n x a) column-major: the rows of K(B, rows)^T, row-major
         block_rm.resize(static_cast<size_t>(a * n));
         evaluate_block_by_index_split<DataType>(
-            kernel, box->point_indices.data(), n, row_points, a, block_rm.data(), n, scratch.split_threads);
+            kernel, column_ids, n, row_points, a, block_rm.data(), n, scratch.split_threads);
     };
     // Entries through a collective callback with both sketch callbacks: the
     // kernel rows are not evaluated; their draws become Omega's entries, the
@@ -9840,7 +9880,7 @@ void gather_id_target_streamed_nonsymmetric(
             const Deferred& from = deferred[part];
             if (from.ids.empty()) continue;
             kernel_sketch_block(kernel, 0, from.ids.data(), static_cast<int64_t>(from.ids.size()),
-                                box->point_indices.data(), n, static_cast<int>(d),
+                                column_ids, n, static_cast<int>(d),
                                 static_cast<int64_t>(from.orow.size()), from.orow.data(), from.odest.data(),
                                 from.oval.data(), Yk.data(), d, part == 1);
             for (int64_t i = 0; i < d; ++i) {
@@ -9854,11 +9894,12 @@ void gather_id_target_streamed_nonsymmetric(
     if (!pair_src_mortons.empty()) {
         LazyFarEndpoint<CoordType> b_end;
         b_end.morton = box->morton_index;
-        b_end.full_size = n;
+        b_end.full_size = box->num_points;
         b_end.skeleton = &box->skeleton_indices;
-        b_end.wanted = nullptr;
+        b_end.skeleton_before = &box->skeleton_before_f22;
+        b_end.wanted = column_slots;
         b_end.wanted_count = n;
-        b_end.indices = box->point_indices.data();
+        b_end.indices = column_ids;
         std::vector<int64_t> sources;
         for (int64_t candidate : box->one_hop) {
             if (sketch_box_eliminated(level, candidate) &&
@@ -9867,6 +9908,7 @@ void gather_id_target_streamed_nonsymmetric(
             }
         }
         auto& positions = scratch.stream_positions;
+        std::vector<int64_t> b_positions;  // (column_slots: the box's rows; positions is reused for the ring's)
         std::vector<DataType> P1, P2, W1, W2, side;
         for (int64_t src_morton : sources) {
             BoxData<CoordType, DataType>* src = resolve_source(src_morton);
@@ -9885,6 +9927,13 @@ void gather_id_target_streamed_nonsymmetric(
             const int64_t temp2_ld = src->X_NR.lda;
             int64_t b_off = 0, b_count = 0;
             if (!lazy_far_locate_endpoint_rows(src, b_end, b_off, b_count, positions)) continue;
+            if (column_slots != nullptr) {
+                b_positions.assign(positions.begin(), positions.end());
+                if (static_cast<int64_t>(b_positions.size()) != n) {
+                    throw std::logic_error("gather_id_target_streamed_nonsymmetric: the columns' rows in fill source " +
+                                           std::to_string(src_morton) + " not located");
+                }
+            }
 
             // W1 (W2): the sketched temp2_E rows (temp4_E columns) of the
             // blocks listing E, (r x d) column-major
@@ -9907,6 +9956,7 @@ void gather_id_target_streamed_nonsymmetric(
                 f_end.morton = box->two_hop[f];
                 f_end.full_size = ring_full[f];
                 f_end.skeleton = ring_skeleton[f];
+                f_end.skeleton_before = ring_before[f];
                 f_end.wanted = ring_wanted[f];
                 f_end.wanted_count = a;
                 int64_t f_off = 0, f_count = 0;
@@ -9938,8 +9988,9 @@ void gather_id_target_streamed_nonsymmetric(
             if (!any) continue;
 
             // P1 = X_RR_E temp4_E[:, B], P2 = X_RR_E^T temp2_E[B]^T (r x n);
-            // B's rows of a source are its full point set, in order
-            if (b_count != n) {
+            // B's rows of a source are its full point set, in order (or,
+            // with column_slots, the located positions)
+            if (column_slots == nullptr && b_count != n) {
                 throw std::runtime_error(
                     "gather_id_target_streamed_nonsymmetric: the box's slot in a fill source is not its full point set");
             }
@@ -9951,6 +10002,22 @@ void gather_id_target_streamed_nonsymmetric(
                 int lda = static_cast<int>(src->X_RR_full.lda);
                 DataType one = 1.0;
                 DataType zero = 0.0;
+                if (column_slots != nullptr) {
+                    // the columns' rows of the source gathered contiguously
+                    std::vector<DataType> t4g(static_cast<size_t>(r * n)), t2g(static_cast<size_t>(n * r));
+                    for (int64_t c = 0; c < n; ++c) {
+                        const int64_t row = b_off + b_positions[static_cast<size_t>(c)];
+                        std::copy_n(temp4 + row * r, r, t4g.data() + c * r);
+                        for (int64_t j = 0; j < r; ++j) t2g[static_cast<size_t>(c + j * n)] = temp2[row + j * temp2_ld];
+                    }
+                    int n_t = static_cast<int>(n);
+                    int ldb4 = static_cast<int>(r);
+                    gemm_("N", "N", &m_i, &n_t, &k_i, &one, src->X_RR_full.data.data(), &lda, t4g.data(), &ldb4, &zero,
+                          P1.data(), &m_i);
+                    int ldb2 = static_cast<int>(n);
+                    gemm_("T", "T", &m_i, &n_t, &k_i, &one, src->X_RR_full.data.data(), &lda, t2g.data(), &ldb2, &zero,
+                          P2.data(), &m_i);
+                } else
                 split_columns_chunked(n, scratch.split_threads, [&](int64_t c0, int64_t c1) {
                     int n_t = static_cast<int>(c1 - c0);
                     int ldb4 = static_cast<int>(r);
@@ -10108,7 +10175,17 @@ void compute_and_modify(
     IDResult<DataType> id_result;
     FMM_PHASE_LAP_BEGIN(box_lap);
     try {
-        if (scratch.streamed_sketch_valid) {
+        if (level.partial_count > 0) {
+            // H2_partial: the ID of the F11 columns, the F22 columns kept as
+            // skeleton (the production configuration: the streamed sketch)
+            if (!scratch.streamed_sketch_valid) {
+                throw std::logic_error("compute_and_modify: H2_partial needs the streamed sketch");
+            }
+            id_result = fmm::compute_id_partial(
+                sketch_storage.data(), scratch.streamed_sketch_rows, workspace_cols,
+                scratch.streamed_sketch_rows, tolerance.relative, tolerance.absolute,
+                box->point_indices, level.partial_count);
+        } else if (scratch.streamed_sketch_valid) {
             id_result = fmm::compute_id_complex(
                 sketch_storage.data(),
                 scratch.streamed_sketch_rows,
@@ -12033,6 +12110,7 @@ std::vector<DataType> extract_child_interaction(
         endpoint.morton = child->morton_index;
         endpoint.full_size = child->num_points;
         endpoint.skeleton = &child->skeleton_indices;
+        endpoint.skeleton_before = &child->skeleton_before_f22;
         endpoint.wanted = &child->skeleton_indices;
         endpoint.wanted_count =
             static_cast<int64_t>(child->skeleton_indices.size());
@@ -12580,6 +12658,7 @@ std::vector<DataType> extract_or_evaluate_child_interaction_for_assisting(
         source_endpoint.morton = source_child->morton_index;
         source_endpoint.full_size = source_child->num_points;
         source_endpoint.skeleton = &source_child->skeleton_indices;
+        source_endpoint.skeleton_before = &source_child->skeleton_before_f22;
         source_endpoint.wanted = &source_child->skeleton_indices;
         source_endpoint.wanted_count = n_source;
         source_endpoint.indices = source_indices.data();
@@ -12597,6 +12676,7 @@ std::vector<DataType> extract_or_evaluate_child_interaction_for_assisting(
         if (target_box != nullptr) {
             target_endpoint.full_size = target_box->num_points;
             target_endpoint.skeleton = &target_box->skeleton_indices;
+            target_endpoint.skeleton_before = &target_box->skeleton_before_f22;
             target_endpoint.wanted = &target_box->skeleton_indices;
         } else {
             auto assist_it =
@@ -12612,6 +12692,7 @@ std::vector<DataType> extract_or_evaluate_child_interaction_for_assisting(
             target_endpoint.full_size =
                 static_cast<int64_t>(assist.indices.size());
             target_endpoint.skeleton = &assist.skel_indices;
+            target_endpoint.skeleton_before = &assist.skel_before;
             target_endpoint.wanted = &assist.skel_indices;
         }
 

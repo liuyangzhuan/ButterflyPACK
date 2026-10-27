@@ -845,7 +845,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer:: CA_level !< first H2 level using communication-avoiding factorization; 10000 selects color
         integer:: H2_use_sketch !< H2 ID mode: 0 full workspace, 1 materialized sketch, 2 streamed sketch when H2_ID_proxy!=2
         integer:: H2_lazy_schur !< H2 color Schur mode: 0 eager, 1 lazy far, 2 lazy far plus generated near
-        integer:: H2_compress_factors !< H2 GPU lossy compression (nvCOMP bitcomp) at tol_comp: 0 off, 1 on: the factors kept on the device for the solve (X_NR, T, X_SR) and the factorization's own data (the fill sources later waves and the level transition read, the near and parent blocks held under memory pressure, the CA blocks on more than one rank), so the factorization is lossy too, within the tolerance; no other value
+        integer:: H2_compress_factors !< H2 GPU lossy compression (nvCOMP bitcomp) at tol_comp: 0 off, 1 on: the factors kept on the device for the solve (X_NR, T, X_SR) and the factorization's own data (the fill sources later waves and the level transition read, the near and parent blocks held under memory pressure, the CA blocks on more than one rank), so the factorization is lossy too, within the tolerance; with H2_partial instead the F22 records the Schur complement's entries and products read, kept on the host at 0.02 tol_comp (the partial solves' factors uncompressed); no other value
         integer:: H2_GEMM_split !< maximum OpenMP task split for one H2 color work item; 0 disables splitting
         integer:: H2_XRR_factor !< H2 X_RR pivot factorization: 0 Bunch-Kaufman, 1 LU with partial pivoting
         integer:: H2_use_gpu !< H2 Color levels: 0 CPU, 1 GPU backend, its real double GEMMs on the FP64 tensor cores (2, the old tensor-core mode, is taken as 1; requires a build with enable_h2_gpu)
@@ -859,6 +859,8 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer:: H2_ID_radius !< diagnostic H2 ID neighborhood radius; 2 keeps the standard workspace
         integer:: H2_ID_proxy !< H2 ID proxy mode: 0 none, 1 geometric surface, 2 adaptive row sampling
         integer:: H2_ID_proxy_points !< geometric surface samples for H2 ID proxy mode 1
+        integer:: H2_partial !< H2 partial factorization (H2_unstructured 1, sym 0): the first H2_partial points in input order (F11) are eliminated, the rest (F22) retained; the object then serves the front's partial solves and the Schur complement F22 - F21 F11^-1 F12 (c_bpack_partial_*); 0 (default): full factorization
+        integer:: H2_partial_extract !< H2 partial factorization (H2_partial > 0, H2_use_gpu 1): where the Schur complement's entries (c_bpack_extractelement) are computed: 0 auto (default: the device when the records are on it and the call is large enough, else the host), 1 the device when the records are on it, 2 the host
         real(kind=8):: H2_s_op !< H2 IDs: absolute floor tol_comp*H2_s_op on the rank rule, |R_kk| > max(tol_comp |R_11|, tol_comp H2_s_op); 0 off (default). At most ||A|| for compression-only H2 (precon 2), at most 1/||A^-1|| for the factorization (K + tau^2 I: tau^2)
         integer:: use_fft_circulant !< 1: use reduced-kernel FFT circulant MVP, 2: build FFT circulant from fullmat then free fullmat
         integer:: fftw_plan_mode !< FFTW apply-plan mode: 0 estimate, 1 measure, 2 patient, 3 exhaustive

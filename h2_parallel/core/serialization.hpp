@@ -6394,7 +6394,7 @@ void gather_boxes_solve(
             size += vector_serialized_size(rhs_info.right_side);
             size += vector_serialized_size(rhs_info.left_side);
             size += vector_serialized_size(box.redundant_indices);
-            size += vector_serialized_size(box.skeleton_indices);
+            size += vector_serialized_size(factor_skeleton(box));  // (copy_*_from_box's skeleton)
             if (uses_factorization_data(req_info)) {
                 size += vector_serialized_size(box.one_hop);
                 size += vector_serialized_size(box.use_full_set);

@@ -165,6 +165,33 @@ void c_bpack_extractsketch_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr
 void c_bpack_extractsketch_transpose_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree,F2Cptr* ptree_caller, int* Nsketch, int* Nallrows, int* Nallcols, int64_t* Nallomega, int64_t* Nalldat_loc, int* allrows, int* allcols, int* rowidx, int* colidx, int* sketchdim, int* omegaidx, int* omega_row, int* omega_dest, double* omega_val, C_DT* alldat_loc, int* pgidx, int* Npmap, int* pmaps);
 void c_bpack_inv_mult_fortran(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* bmat,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);
 void c_bpack_inv_mult(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* bmat,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);
+/*
+ * The partial factorization (format 7, option H2_partial = the number of
+ * leading input points forming F11; h2_parallel/unstructured/
+ * PARTIAL_FACTORIZATION_PLAN.md).  c_bpack_factor eliminates F11 only; the
+ * object then serves the front: the forward partial solve, out2 = b2 - F21
+ * F11^-1 b1 for b in the caller's order (as c_bpack_solve), out2 the F22
+ * vectors (N22 = N - H2_partial rows, F22 index = input index - H2_partial,
+ * replicated on every rank); the backward one, x = [F11^-1 (b1 - F12 x2);
+ * x2] in the caller's order from the forward call's b and the given x2; the
+ * Schur complement CB = F22 - F21 F11^-1 F12 by entries (rows, cols 0-based
+ * F22 indices; out column-major nrows x ncols, replicated) and by products
+ * (x2, y2 N22 x Ncol, replicated); and the release of the Schur complement
+ * (its root block and the F22 records, nearly all of the object's memory; the
+ * solves stay, and Schur calls after it throw).  With H2_compress_factors 1
+ * the records are kept compressed (lossy at 0.02 tol_comp): the entries and
+ * products decompress what they read.  All collective over the matrix's
+ * communicator, every rank passing the same rows, cols and x2.
+ * c_bpack_extractelement and c_bpack_extractelement_bridge on the object
+ * return blocks of the Schur complement, as an N22 x N22 matrix: 1-based F22
+ * indices (1..N22), each intersection to one rank (1 x 1 process grids, as
+ * for a compression-only H2), every intersection of a call in one pass.
+ */
+void c_bpack_partial_forward(C_DT* out2, C_DT const* b, int* Nloc, int* N22, int* Nrhs, F2Cptr* bmat, F2Cptr* option, F2Cptr* stats, F2Cptr* ptree);
+void c_bpack_partial_backward(C_DT* x, C_DT const* x2, int* Nloc, int* N22, int* Nrhs, F2Cptr* bmat, F2Cptr* option, F2Cptr* stats, F2Cptr* ptree);
+void c_bpack_partial_schur_extract(C_DT* out, int const* rows, int* nrows, int const* cols, int* ncols, F2Cptr* bmat, F2Cptr* option);
+void c_bpack_partial_schur_mult(C_DT* y2, C_DT const* x2, int* N22, int* Ncol, F2Cptr* bmat, F2Cptr* option);
+void c_bpack_partial_schur_release(F2Cptr* bmat, F2Cptr* option);
 // The two above for a Fortran caller: an H2 matrix (format 7), which
 // BPACK_Inv_Mult and BPACK_Mult cannot apply, with any exception reported and
 // aborted here rather than thrown through the Fortran frame.

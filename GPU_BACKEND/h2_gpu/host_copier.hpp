@@ -4,9 +4,10 @@
 // A worker thread owns a copy stream and two fixed pinned slots.  Each job is
 // a device block, the event after which it is complete, and the destination
 // segments inside it; queued jobs stream through the slots as one chunk
-// sequence, and the worker appends every chunk to its destination vectors
-// (with a small OpenMP team) while the next chunk is in flight.  The job's
-// finalize step then runs on the worker (dimensions, checks).
+// sequence, and the worker appends every chunk to its destination vectors,
+// or copies it in pieces into the destinations it sized (Segment::into), with
+// a small OpenMP team while the next chunk is in flight.  The job's finalize
+// step then runs on the worker (dimensions, checks).
 //
 // The device heap is not thread-safe, so the owner frees the blocks of
 // finished jobs (take_finished) on its own thread.  A job's block is released
@@ -18,17 +19,25 @@
 #include "gpu_runtime.hpp"
 
 #include <omp.h>
+#include <sys/mman.h>
 
 #include <algorithm>
 #include <complex>
 #include <condition_variable>
+#include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <deque>
 #include <exception>
 #include <functional>
 #include <mutex>
 #include <thread>
+#include <utility>
 #include <vector>
+
+#ifndef MADV_POPULATE_WRITE
+#define MADV_POPULATE_WRITE 23  // Linux 5.14
+#endif
 
 namespace fmm {
 namespace gpu {
@@ -36,9 +45,11 @@ namespace gpu {
 class HostCopier {
 public:
     struct Segment {
-        std::vector<double>* doubles = nullptr;  // exactly one destination
+        std::vector<double>* doubles = nullptr;  // exactly one destination: a vector to fill,
         std::vector<int>* ints = nullptr;
         std::vector<std::complex<double>>* complexes = nullptr;
+        std::function<char*()> sized;            // or a destination the worker sizes (into())
+        char* raw = nullptr;                     // (what `sized` returned)
         size_t offset = 0;                       // bytes into the device block
         size_t bytes = 0;
         Segment() = default;
@@ -47,6 +58,20 @@ public:
         Segment(std::vector<std::complex<double>>* c, std::vector<int>* i, size_t off, size_t b)
             : ints(i), complexes(c), offset(off), bytes(b) {}
         Segment(std::nullptr_t, std::vector<int>* i, size_t off, size_t b) : ints(i), offset(off), bytes(b) {}
+        // A destination `size` sizes to `b` bytes without zero-filling it
+        // (e.g. a PartialRecord's resize) and returns: the worker sizes it
+        // and copies into it in pieces over the copy threads, its pages
+        // faulting in on them, instead of appending on one.  (H2_partial's
+        // F22 records at 64^3 on one GPU: 7 GB/s appended, 9-14 so; sized by
+        // the owner on its own thread, which then stalled 0.2-1.1 s a level
+        // against the workers' page faults; populated first, slower.)
+        static Segment into(std::function<char*()> size, size_t off, size_t b) {
+            Segment seg;
+            seg.sized = std::move(size);
+            seg.offset = off;
+            seg.bytes = b;
+            return seg;
+        }
     };
     struct Job {
         char* device = nullptr;
@@ -122,6 +147,8 @@ public:
 
     double busy_seconds() const { return busy_; }
     double wait_seconds() const { return wait_; }
+    double setup_seconds() const { return setup_; }  // reserving, sizing and populating the destinations
+    double store_seconds() const { return store_; }  // storing the chunks
     double bytes() const { return bytes_; }
 
 private:
@@ -172,16 +199,22 @@ private:
         if (stream) cudaStreamDestroy(stream);
     }
 
-    void process(std::deque<Job>& jobs, cudaStream_t stream, cudaEvent_t copied[2], char* slots[2]) {
-        using clock = std::chrono::steady_clock;
-        const auto t0 = clock::now();
-        constexpr size_t slot_bytes = PinnedPool::kRingSlot;
-        for (Job& job : jobs) {
-            std::sort(job.segments.begin(), job.segments.end(),
-                      [](const Segment& a, const Segment& b) { return a.offset < b.offset; });
+    // Empty every vector destination and reserve its bytes, and size the
+    // others (into()).  The pages of a fresh reservation fault in on first
+    // touch, one thread at a time for an append (a 174 MB segment went at
+    // 7 GB/s; the D2H runs at 20-24): the larger vectors' pages are populated
+    // first, in 2 MB pieces over the copy threads (MADV_POPULATE_WRITE: no
+    // access to the elements; on a kernel without it the call fails and the
+    // appends fault as before).
+    void reserve_destinations(std::deque<Job>& jobs) {
+        for (Job& job : jobs) {  // (job by job, as the appends are: a later job may empty an earlier one's vector)
             #pragma omp parallel for num_threads(threads_) schedule(dynamic, 16)
             for (int64_t i = 0; i < static_cast<int64_t>(job.segments.size()); ++i) {
                 Segment& seg = job.segments[static_cast<size_t>(i)];
+                if (seg.sized) {
+                    seg.raw = seg.sized();
+                    continue;
+                }
                 if (seg.doubles) {
                     seg.doubles->clear();
                     seg.doubles->reserve(seg.bytes / sizeof(double));
@@ -193,6 +226,38 @@ private:
                     seg.ints->reserve(seg.bytes / sizeof(int));
                 }
             }
+        }
+        constexpr size_t kPopulateFrom = size_t{4} << 20;
+        constexpr uintptr_t kPage = 4096;
+        constexpr uintptr_t kPiece = uintptr_t{2} << 20;
+        std::vector<std::pair<char*, size_t>> pieces;
+        for (const Job& job : jobs) {
+            for (const Segment& seg : job.segments) {
+                if (seg.raw || seg.bytes < kPopulateFrom) continue;  // (a sized one faults in over the copy threads)
+                const char* at = seg.doubles     ? reinterpret_cast<const char*>(seg.doubles->data())
+                                 : seg.complexes ? reinterpret_cast<const char*>(seg.complexes->data())
+                                                 : reinterpret_cast<const char*>(seg.ints->data());
+                const uintptr_t lo = (reinterpret_cast<uintptr_t>(at) + kPage - 1) & ~(kPage - 1);
+                const uintptr_t hi = (reinterpret_cast<uintptr_t>(at) + seg.bytes) & ~(kPage - 1);
+                for (uintptr_t q = lo; q < hi; q += kPiece) {
+                    pieces.emplace_back(reinterpret_cast<char*>(q), static_cast<size_t>(std::min(hi - q, kPiece)));
+                }
+            }
+        }
+        #pragma omp parallel for num_threads(threads_) schedule(dynamic, 1)
+        for (int64_t i = 0; i < static_cast<int64_t>(pieces.size()); ++i) {
+            const auto& [q, n] = pieces[static_cast<size_t>(i)];
+            (void)madvise(q, n, MADV_POPULATE_WRITE);
+        }
+    }
+
+    void process(std::deque<Job>& jobs, cudaStream_t stream, cudaEvent_t copied[2], char* slots[2]) {
+        using clock = std::chrono::steady_clock;
+        const auto t0 = clock::now();
+        constexpr size_t slot_bytes = PinnedPool::kRingSlot;
+        for (Job& job : jobs) {
+            std::sort(job.segments.begin(), job.segments.end(),
+                      [](const Segment& a, const Segment& b) { return a.offset < b.offset; });
         }
         struct Chunk { size_t job; size_t begin; size_t end; bool first; bool last; };
         std::vector<Chunk> chunks;
@@ -244,7 +309,12 @@ private:
             }
             check_cuda(cudaEventRecord(copied[c % 2], stream), "cudaEventRecord");
         };
-        if (!chunks.empty()) issue(0);
+        if (!chunks.empty()) issue(0);  // (the destinations are set up meanwhile)
+        {
+            const auto ts = clock::now();
+            reserve_destinations(jobs);
+            setup_ += std::chrono::duration<double>(clock::now() - ts).count();
+        }
         for (size_t c = 0; c < chunks.size(); ++c) {
             const auto tw = clock::now();
             check_cuda(cudaEventSynchronize(copied[c % 2]), "host copy");
@@ -261,18 +331,34 @@ private:
                 job.released = true;
                 idle_cv_.notify_all();
             }
+            const auto t_store = clock::now();
             const char* slot = slots[c % 2];
             auto first = std::upper_bound(job.segments.begin(), job.segments.end(), ch.begin,
                                           [](size_t v, const Segment& seg) { return v < seg.offset + seg.bytes; });
             auto last = std::lower_bound(job.segments.begin(), job.segments.end(), ch.end,
                                          [](const Segment& seg, size_t v) { return seg.offset < v; });
-            const int64_t overlap = last - first;
-            #pragma omp parallel for num_threads(threads_) schedule(dynamic, 4)
-            for (int64_t i = 0; i < overlap; ++i) {
-                const Segment& seg = *(first + i);
-                const size_t lo = std::max(ch.begin, seg.offset), hi = std::min(ch.end, seg.offset + seg.bytes);
+            // the chunk's stores: a vector appended on one thread, a sized
+            // destination in pieces over the threads
+            constexpr size_t kPiece = size_t{1} << 20;
+            stores_.clear();
+            for (auto it = first; it != last; ++it) {
+                const size_t lo = std::max(ch.begin, it->offset), hi = std::min(ch.end, it->offset + it->bytes);
+                if (lo >= hi) continue;
+                if (it->raw == nullptr) {
+                    stores_.push_back({&*it, lo, hi});
+                    continue;
+                }
+                for (size_t a = lo; a < hi; a += kPiece) stores_.push_back({&*it, a, std::min(hi, a + kPiece)});
+            }
+            #pragma omp parallel for num_threads(threads_) schedule(dynamic, 1)
+            for (int64_t i = 0; i < static_cast<int64_t>(stores_.size()); ++i) {
+                const Store& st = stores_[static_cast<size_t>(i)];
+                const Segment& seg = *st.seg;
+                const size_t lo = st.lo, hi = st.hi;
                 const char* src = slot + (lo - ch.begin);
-                if (seg.doubles) {
+                if (seg.raw) {
+                    std::memcpy(seg.raw + (lo - seg.offset), src, hi - lo);
+                } else if (seg.doubles) {
                     const double* p = reinterpret_cast<const double*>(src);
                     seg.doubles->insert(seg.doubles->end(), p, p + (hi - lo) / sizeof(double));
                 } else if (seg.complexes) {
@@ -284,6 +370,7 @@ private:
                     seg.ints->insert(seg.ints->end(), p, p + (hi - lo) / sizeof(int));
                 }
             }
+            store_ += std::chrono::duration<double>(clock::now() - t_store).count();
             if (ch.last) {
                 if (job.ready) {
                     check_cuda(cudaEventDestroy(job.ready), "cudaEventDestroy");
@@ -308,7 +395,9 @@ private:
     int unreleased_ = 0;  // jobs whose device block is not yet handed back
     bool stop_ = false;
     std::exception_ptr error_;
-    double busy_ = 0.0, wait_ = 0.0, bytes_ = 0.0;
+    double busy_ = 0.0, wait_ = 0.0, bytes_ = 0.0, setup_ = 0.0, store_ = 0.0;
+    struct Store { const Segment* seg; size_t lo, hi; };
+    std::vector<Store> stores_;  // (the worker's)
 };
 
 }  // namespace gpu

@@ -10,6 +10,7 @@
 #include "parent_transition.hpp"
 #include "owner_deferred.hpp"
 #include "verification.hpp"
+#include "partial.hpp"
 #include "h2_gpu/factorization_driver.hpp"
 #include "core/omp_region.hpp"
 
@@ -340,7 +341,9 @@ void hierarchical_factorization_unstructured(
     gpu_options.is_symmetric = is_symmetric;
     gpu_options.is_hermitian = is_hermitian;
     gpu_options.occupancy = true;
-    gpu_options.compress_factors = compress_factors;
+    // (H2_partial: the F22 records instead, tree->partial_compress_records;
+    // the F22 step reads the near blocks raw)
+    gpu_options.compress_factors = tree->partial() ? 0 : compress_factors;
     gpu::ColorGpuDriver<CoordType, DataType, KernelType> gpu_driver(tree, kernel, gpu_options);
     {
         // as the full-grid loop: before the first level (the kernels and
@@ -360,6 +363,12 @@ void hierarchical_factorization_unstructured(
     }
 #endif
 
+    if (tree->partial()) {
+        // H2_partial (partial.hpp): the levels see the split, the root state starts clean
+        for (auto& lvl : tree->levels) lvl.partial_count = tree->partial_count;
+        tree->partial_root = fmm::PartialRootFactor<DataType>{};
+        tree->partial_solve_data.clear();
+    }
     for (int current_level = leaf_level; current_level >= 1; current_level--) {
         auto level_start = std::chrono::high_resolution_clock::now();
 #ifdef H2_HAVE_GPU
@@ -1331,6 +1340,10 @@ void hierarchical_factorization_unstructured(
                     std::exception_ptr mirror_exception;
                     std::mutex mirror_exception_mutex;
                     std::atomic<bool> mirror_failed{false};
+                    if (!is_symmetric) {
+                        prepare_unstructured_owner_deferred_xnn_mirror_nonsymmetric(
+                            level, wave_xnn_mirror_targets);
+                    }
 
                     omp_parallel_if(wave_xnn_candidate_boxes.size() > 1, [&] {
                         #pragma omp for schedule(static)
@@ -1519,6 +1532,32 @@ void hierarchical_factorization_unstructured(
 #endif
 
             const auto occupied_indices = occupied_local_indices(level);
+            if (tree->partial() && current_level > 1) {
+                // H2_partial (partial.hpp): the F22 parts skeletonized and
+                // sparsified, the live sets reduced to S11, S22 (on a device
+                // level its boxes' steps on the device)
+                const auto f22_start = clock::now();
+#ifdef H2_HAVE_GPU
+                if (gpu_driver.f22_on_device()) {
+                    const std::function<void(std::vector<PartialF22Work<DataType>>&)> ids_on_device =
+                        [&](std::vector<PartialF22Work<DataType>>& works) { gpu_driver.f22_ids(works); };
+                    const std::function<void(std::vector<PartialF22Work<DataType>>&)> records_on_device =
+                        [&](std::vector<PartialF22Work<DataType>>& works) { gpu_driver.f22_records(works); };
+                    const std::function<void(const PartialF22Kept&)> blocks_back =
+                        [&](const PartialF22Kept& kept) { gpu_driver.end_partial_level(kept); };
+                    partial_f22_phase(tree, level, kernel, tolerance, occupied_indices,
+                                      print_detail && rank == level_print_rank, level_comm, ids_on_device,
+                                      records_on_device, blocks_back);
+                } else
+#endif
+                partial_f22_phase(tree, level, kernel, tolerance, occupied_indices,
+                                  print_detail && rank == level_print_rank, level_comm);
+                if (print_detail && rank == level_print_rank) {
+                    std::cout << "  F22 phase time: "
+                              << std::chrono::duration<double, std::milli>(clock::now() - f22_start).count()
+                              << " ms" << std::endl;
+                }
+            }
             for (int64_t local_index : occupied_indices) {
                 const auto& box =
                     level.local_boxes[static_cast<size_t>(local_index)];
@@ -2063,7 +2102,18 @@ void hierarchical_factorization_unstructured(
         bool root_on_device = false;
         int64_t n = root_box.num_points;
 #ifdef H2_HAVE_GPU
-        if (gpu_driver.holds_root_block()) {
+        if (gpu_driver.holds_root_block() && tree->partial()) {
+            // H2_partial: the partial root on the device, its factors to the host
+            const auto root_start = clock::now();
+            partial_root_setup(*tree, root_box);
+            root_on_device = gpu_driver.partial_root(root_box, tree->partial_root);
+            if (print_detail && rank == root_print_rank) {
+                std::cout << "  ✓ Root partial LU complete (GPU): F11 " << tree->partial_root.n11 << ", F22 "
+                          << tree->partial_root.n22 << " ("
+                          << std::chrono::duration<double, std::milli>(clock::now() - root_start).count() << " ms)"
+                          << std::endl;
+            }
+        } else if (gpu_driver.holds_root_block()) {
             // root block assembled on the device by the level-1 transition
             root_on_device = gpu_driver.factor_root(
                 root_box, print_detail && rank == root_print_rank);
@@ -2084,7 +2134,7 @@ void hierarchical_factorization_unstructured(
 
 #ifdef H2_HAVE_GPU
         // LU of the host-assembled root on the device when the heap has room
-        root_on_device = gpu_driver.factor_root(root_box, false);
+        if (!tree->partial()) root_on_device = gpu_driver.factor_root(root_box, false);
         if (root_on_device && print_detail && rank == root_print_rank) {
             std::cout << "  ✓ Root LU factorization complete (GPU)" << std::endl;
         }
@@ -2122,6 +2172,17 @@ void hierarchical_factorization_unstructured(
                 std::cout << "  ✓ Root Cholesky factorization complete" << std::endl;
             }
 
+        } else if (factorization_method == FactorizationMethod::LU && tree->partial()) {
+            // H2_partial: A11's LU into X_RR, W, A21 and the Schur complement
+            // on the F22 points (unstructured/partial.hpp)
+            const auto root_start = clock::now();
+            partial_root_factorize(*tree, root_box);
+            if (print_detail && rank == root_print_rank) {
+                std::cout << "  ✓ Root partial LU complete: F11 " << tree->partial_root.n11
+                          << ", F22 " << tree->partial_root.n22 << " ("
+                          << std::chrono::duration<double, std::milli>(clock::now() - root_start).count() << " ms)"
+                          << std::endl;
+            }
         } else if (factorization_method == FactorizationMethod::LU) {
             root_box.X_RR.data = root_box.schur_complement.data;
             root_box.X_RR_pivots.resize(static_cast<size_t>(n));
@@ -2279,7 +2340,8 @@ void hierarchical_factorization_unstructured(
             std::cout << "logdet: " << phase << " " << logabsdet << std::endl;
         }
 
-        (void)h2_quick_verification_unstructured(tree, kernel);
+        if (tree->partial()) (void)h2_quick_verification_partial(tree, kernel);
+        else (void)h2_quick_verification_unstructured(tree, kernel);
     }
     // (reported apart from the factor time, as the full-grid loop does)
     h2_verification_seconds() = std::chrono::duration<double>(clock::now() - verification_start).count();

@@ -1182,6 +1182,14 @@ contains
          val_d = option%H2_s_op
          valid_opt = 1
       endif
+      if (trim(str) == 'H2_partial' .or. trim(str) == 'h2_partial') then
+         val_d = option%H2_partial
+         valid_opt = 1
+      endif
+      if (trim(str) == 'H2_partial_extract' .or. trim(str) == 'h2_partial_extract') then
+         val_d = option%H2_partial_extract
+         valid_opt = 1
+      endif
 
       if (valid_opt == 0) write (*, *) 'invalid BPACK option: '//trim(str)
       deallocate (str)
@@ -1549,6 +1557,16 @@ contains
       if (trim(str) == 'H2_ID_proxy_points' .or. trim(str) == 'h2_id_proxy_points') then
          call c_f_pointer(val_Cptr, val_i)
          option%H2_ID_proxy_points = val_i
+         valid_opt = 1
+      endif
+      if (trim(str) == 'H2_partial' .or. trim(str) == 'h2_partial') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%H2_partial = val_i
+         valid_opt = 1
+      endif
+      if (trim(str) == 'H2_partial_extract' .or. trim(str) == 'h2_partial_extract') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%H2_partial_extract = val_i
          valid_opt = 1
       endif
 

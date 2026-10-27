@@ -1009,6 +1009,17 @@ public:
                (reduction_ahead || parent_level.is_process_active) && !opt_.is_hermitian;
     }
 
+    // ---- H2_partial's F22 step (unstructured/partial.hpp) on a device level:
+    // the boxes' two passes on the device, then the level's blocks sliced there to
+    // the new live sets (the transition builds the parents from them, or
+    // takes them to the host)
+    bool f22_on_device() const { return level_ != nullptr && tree_->partial(); }
+    void f22_ids(std::vector<PartialF22Work<DataType>>& works) { level_->f22_ids(works); }
+    void f22_records(std::vector<PartialF22Work<DataType>>& works) { level_->f22_records(works); }
+    void end_partial_level(const PartialF22Kept& kept) {
+        if (level_) level_->f22_slice(kept);
+    }
+
     // Device transition: this level's blocks never leave the device, and the
     // parent's go to the next level's eliminator (or to the host when that
     // level runs there).  Each rank builds the parents of its own boxes, with
@@ -1562,6 +1573,16 @@ public:
 
     // The level-1 transition assembled the root block on the device.
     bool holds_root_block() const { return blocks_ != nullptr; }
+
+    // H2_partial: the partial root (its setup done) from the root block the
+    // level-1 transition left on the device, its factors to the host
+    // (partial_root_on_device); false without that block.
+    bool partial_root(Box& root, PartialRootFactor<DataType>& pr) {
+        if (!blocks_) return false;
+        partial_root_on_device(*blocks_, root, pr);
+        blocks_.reset();
+        return true;
+    }
 
     // The root's LU on the device: of the block the level-1 transition
     // assembled there, or of the host-assembled block (multi-rank runs)

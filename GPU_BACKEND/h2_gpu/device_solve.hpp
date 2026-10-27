@@ -194,6 +194,15 @@ struct DeviceSolveLevel {
     const SolveAccum* d_items = nullptr;
     const SolvePart* d_parts = nullptr;
     const SolveCopy* d_copies = nullptr;
+    // H2_partial: the F22 step of the sparsified boxes, T22 over the box's
+    // live set S' (after the step) and its R22, run by the forward and
+    // backward kernels as a T-only box (no X_SR, X_NR or LU): x_R22 -=
+    // T22^T x_S' after the partial forward's waves, x_S' -= T22 x_R22 before
+    // the partial backward's
+    std::vector<SolveBox> f22_boxes;
+    const SolveBox* d_f22_boxes = nullptr;
+    const int* d_f22_list = nullptr;
+    int nf22 = 0, f22_max_n = 0;
 };
 
 // Factors of a level kept on the device during the factorization (all ranks
@@ -776,11 +785,20 @@ inline DeviceSolveStore& device_solve_store() {
     return (*stores)[operator_context().active];
 }
 
+// Other stores of an operator's device data that a new factorization
+// replaces (H2_partial's records: partial_device.hpp), registered at their
+// first use.
+inline std::vector<std::function<void()>>& device_store_invalidators() {
+    static auto* list = new std::vector<std::function<void()>>;  // (never freed: see DeviceHeap)
+    return *list;
+}
+
 // A factorization or compression replaces the factors: drop the device
 // copies (the solve's factors, and the blocks of a compression-only H2).
 inline void invalidate_device_solve() {
     device_solve_store().release();
     device_matvec_store().release();
+    for (const auto& invalidate : device_store_invalidators()) invalidate();
 }
 
 // ---------------------------------------------------------------------------
@@ -1919,6 +1937,9 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
         const int leaf = tree->num_levels - 1;
         // a nonsymmetric matrix: X_RS and X_RN too (the backward sweep's)
         const bool nonsym = !tree->factor_symmetric;
+        // H2_partial: the F11 factors index the skeletons before the F22 phase
+        // (factor_skeleton), and the sparsified boxes' T22 come too
+        const bool partial = tree->partial();
         int rank = 0;
         MPI_Comm_rank(tree->comm, &rank);
 
@@ -1936,6 +1957,10 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
             if (!lvl.is_process_active) continue;
             double& need = level_need[static_cast<size_t>(level)];
             const bool ca = tree->level_uses_CA(level) && !lvl.ca_home_factors;
+            if (partial && tree->level_uses_CA(level)) {
+                reason = "H2_partial with CA levels";
+                break;
+            }
             if (ca && store.ca_levels.count(level) == 0) {
                 if (host_levels_allowed) {
                     host_only[static_cast<size_t>(level)] = 1;
@@ -1950,7 +1975,7 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
                 level_staged[static_cast<size_t>(level)] = static_cast<double>(store.kept.at(level).staged_bytes);
             }
             auto check = [&](const BoxData<CoordType, DataType>& box, bool kept_box) {
-                const int64_t n = box.num_points, k = static_cast<int64_t>(box.skeleton_indices.size()),
+                const int64_t n = box.num_points, k = static_cast<int64_t>(factor_skeleton(box).size()),
                               r = static_cast<int64_t>(box.redundant_indices.size());
                 if ((static_cast<size_t>(n) + kSolveChunkRows) * D > kSolveSharedLimit) {
                     reason = "boxes too large";
@@ -1965,6 +1990,11 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
                 const int64_t ntot = box.X_NR.is_allocated() ? box.X_NR.rows : 0;
                 const int64_t factors = 2 * k * r + ntot * r + r * r + (nonsym ? k * r + ntot * r : 0);
                 need += static_cast<double>((kept_box ? 0 : factors * D) + (r + k + r) * I + 1024);
+                if (partial && box.f22.sparsified && !box.f22.redundant.empty()) {
+                    const int64_t kp = static_cast<int64_t>(box.skeleton_indices.size()),
+                                  r22 = static_cast<int64_t>(box.f22.redundant.size());
+                    need += static_cast<double>(kp * r22 * D + (kp + r22) * I + sizeof(SolveBox) + 1024);
+                }
             };
             for (const auto& box : lvl.local_boxes) {
                 if (reason.empty()) check(box, kept_level);
@@ -2309,8 +2339,9 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
                         L.readers[static_cast<size_t>(m - lvl.local_morton_start)].push_back(static_cast<int>(i));
                         reply[i].head.push_back(m);
                         reply[i].head.push_back(box.num_points);
-                        reply[i].head.push_back(static_cast<int64_t>(box.skeleton_indices.size()));
-                        reply[i].head.insert(reply[i].head.end(), box.skeleton_indices.begin(), box.skeleton_indices.end());
+                        const auto& fsk = factor_skeleton(box);
+                        reply[i].head.push_back(static_cast<int64_t>(fsk.size()));
+                        reply[i].head.insert(reply[i].head.end(), fsk.begin(), fsk.end());
                     }
                 }
                 register_seconds += exchange_peer_messages(tree->comm, L.peers, reply, got, 743);
@@ -2350,7 +2381,7 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
                 if (b == nb) L.local_points = L.points;
                 base[b] = L.points;
                 L.points += box.num_points;
-                const size_t k = box.skeleton_indices.size(), r = box.redundant_indices.size();
+                const size_t k = factor_skeleton(box).size(), r = box.redundant_indices.size();
                 const bool eliminated = k > 0 && r > 0;
                 solve_detail::BoxLayout& l = lay[b];
                 // (a kept box's X_NR, X_SR and LU may have no host copy: its
@@ -2429,7 +2460,7 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
                 std::vector<Piece> pieces;
                 for (size_t b = chunk_first[c]; b < chunk_first[c + 1]; ++b) {
                     const Box& box = *bx[b];
-                    const size_t k = box.skeleton_indices.size(), r = box.redundant_indices.size();
+                    const size_t k = factor_skeleton(box).size(), r = box.redundant_indices.size();
                     pieces.push_back(Piece{b, 4, 0, 0});
                     if (k == 0 || r == 0 || kept_box[b] != nullptr) continue;
                     auto split = [&](int what, size_t rows) {
@@ -2449,7 +2480,8 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
                     const Box& box = *bx[pc.box];
                     const solve_detail::BoxLayout& l = lay[pc.box];
                     char* p = h + offset_in[pc.box];
-                    const size_t k = box.skeleton_indices.size(), r = box.redundant_indices.size();
+                    const auto& fsk = factor_skeleton(box);
+                    const size_t k = fsk.size(), r = box.redundant_indices.size();
                     auto put = [&](size_t at, const MatrixStorage<DataType>& m, size_t rows) {
                         DataType* d = reinterpret_cast<DataType*>(p + at);
                         for (size_t j = pc.col0; j < pc.col1; ++j)
@@ -2474,7 +2506,7 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
                                 std::memcpy(p + l.ipiv, box.X_RR_pivots.data(), r * I);
                             }
                             int* sk = reinterpret_cast<int*>(p + l.skel);
-                            for (size_t i = 0; i < k; ++i) sk[i] = static_cast<int>(box.skeleton_indices[i]);
+                            for (size_t i = 0; i < k; ++i) sk[i] = static_cast<int>(fsk[i]);
                             int* rd = reinterpret_cast<int*>(p + l.red);
                             for (size_t i = 0; i < r; ++i) rd[i] = static_cast<int>(box.redundant_indices[i]);
                         }
@@ -2503,7 +2535,7 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
                 SolveBox& sb = L.boxes[b];
                 sb.vec = base[b];
                 sb.n = static_cast<int>(box.num_points);
-                sb.k = static_cast<int>(box.skeleton_indices.size());
+                sb.k = static_cast<int>(factor_skeleton(box).size());
                 sb.r = static_cast<int>(box.redundant_indices.size());
                 sb.ntot = ntot[b];
                 sb.skel = reinterpret_cast<const int*>(p + l.skel);
@@ -2622,7 +2654,7 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
                         sl.ghost = 0;
                         sl.vec = base[nbx];
                         sl.n = static_cast<int>(nbox.num_points);
-                        sl.count = full ? sl.n : static_cast<int>(nbox.skeleton_indices.size());
+                        sl.count = full ? sl.n : static_cast<int>(factor_skeleton(nbox).size());
                         sl.skel = reinterpret_cast<const int*>(chunks[chunk_of[nbx]] + offset_in[nbx] + lay[nbx].skel);
                     } else {
                         auto it = L.ghost_of.find(m);
@@ -2644,6 +2676,66 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
                     ++sb.nslots;
                 }
                 if (row != ntot[b]) throw std::runtime_error("device solve: X_NR rows do not match the neighbors");
+            }
+            // ---- H2_partial: the F22 step's boxes, T22 and the S', R22 lists
+            if (partial) {
+                std::vector<size_t> f22b;
+                size_t bytes = 0;
+                for (size_t b = 0; b < nb; ++b) {
+                    const Box& box = *bx[b];
+                    if (!box.f22.sparsified || box.f22.redundant.empty()) continue;
+                    const size_t kp = box.skeleton_indices.size(), r22 = box.f22.redundant.size();
+                    if (box.f22.T.compressed() || static_cast<size_t>(box.f22.T.rows) != kp ||
+                        static_cast<size_t>(box.f22.T.cols) != r22) {
+                        throw std::runtime_error("device solve: the F22 T of box " + std::to_string(box.morton_index) +
+                                                 " does not match its live set");
+                    }
+                    f22b.push_back(b);
+                    bytes += align_up(kp * r22 * D) + align_up(kp * I) + align_up(r22 * I);
+                }
+                L.nf22 = static_cast<int>(f22b.size());
+                if (!f22b.empty()) {
+                    char* dev = heap.alloc_resident(bytes);
+                    L.blocks.push_back(dev);
+                    std::vector<char> host(bytes);
+                    L.f22_boxes.assign(f22b.size(), SolveBox{});
+                    size_t at = 0;
+                    for (size_t q = 0; q < f22b.size(); ++q) {
+                        const Box& box = *bx[f22b[q]];
+                        const size_t kp = box.skeleton_indices.size(), r22 = box.f22.redundant.size();
+                        SolveBox& fb = L.f22_boxes[q];
+                        fb.vec = base[f22b[q]];
+                        fb.n = static_cast<int>(box.num_points);
+                        fb.k = static_cast<int>(kp);
+                        fb.r = static_cast<int>(r22);
+                        std::memcpy(host.data() + at, box.f22.T.data.data(), kp * r22 * D);
+                        fb.T = dev + at;
+                        at = align_up(at + kp * r22 * D);
+                        int* sk = reinterpret_cast<int*>(host.data() + at);
+                        for (size_t i = 0; i < kp; ++i) sk[i] = static_cast<int>(box.skeleton_indices[i]);
+                        fb.skel = reinterpret_cast<const int*>(dev + at);
+                        at = align_up(at + kp * I);
+                        int* rd = reinterpret_cast<int*>(host.data() + at);
+                        for (size_t j = 0; j < r22; ++j) rd[j] = static_cast<int>(box.f22.redundant[j]);
+                        fb.red = reinterpret_cast<const int*>(dev + at);
+                        at = align_up(at + r22 * I);
+                        L.f22_max_n = std::max(L.f22_max_n, fb.n);
+                    }
+                    check_cuda(cudaMemcpyAsync(dev, host.data(), bytes, cudaMemcpyHostToDevice, stream), "F22 upload");
+                    const size_t boxes_at = align_up(f22b.size() * sizeof(SolveBox));
+                    const size_t table = boxes_at + align_up(f22b.size() * I);
+                    char* tdev = heap.alloc_resident(table);
+                    L.blocks.push_back(tdev);
+                    std::vector<char> th(table);
+                    std::memcpy(th.data(), L.f22_boxes.data(), f22b.size() * sizeof(SolveBox));
+                    int* list = reinterpret_cast<int*>(th.data() + boxes_at);
+                    for (size_t q = 0; q < f22b.size(); ++q) list[q] = static_cast<int>(q);
+                    check_cuda(cudaMemcpyAsync(tdev, th.data(), table, cudaMemcpyHostToDevice, stream), "F22 upload");
+                    check_cuda(cudaStreamSynchronize(stream), "F22 upload");  // (the host buffers go)
+                    L.d_f22_boxes = reinterpret_cast<const SolveBox*>(tdev);
+                    L.d_f22_list = reinterpret_cast<const int*>(tdev + boxes_at);
+                    store.bytes += static_cast<double>(bytes + table);
+                }
             }
             // ---- the sweeps' tables
             store.bytes += static_cast<double>(
@@ -2702,6 +2794,7 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
 struct DeviceSolveTimes {
     double forward = 0.0, diagonal = 0.0, backward = 0.0, transfer = 0.0, comm = 0.0;
     double halo = 0.0;  // CA halo packing and unpacking (device copies)
+    double f22 = 0.0;   // H2_partial: the F22 steps
     int64_t direct_messages = 0, staged_messages = 0;  // exchanges moving data: in device memory, through the host
     // H2_compress_factors: the waves' X_NR decompression, timed on the stream
     // (CUDA events, so the sweeps are not serialized to measure it)
@@ -2995,8 +3088,11 @@ public:
         times.transfer += seconds_since(t0);
     }
 
-    // The forward waves of a level, then its diagonal solves.
-    void forward(DeviceSolveLevel& L, S* vec) {
+    // The forward waves of a level, then its diagonal solves (unless
+    // `diagonal` is false: H2_partial's forward solve leaves them to the
+    // backward one, as the host's does).
+    void forward(DeviceSolveLevel& L, S* vec, bool diagonal = true) {
+        if (!diagonal && L.streamed) throw std::logic_error("device solve: a streamed level's diagonal solves run with its waves");
         const auto t0 = std::chrono::steady_clock::now();
         S* work = alloc_points(L.work_points);
         S* outbox = alloc_message(L.out_max);
@@ -3021,10 +3117,34 @@ public:
         free_message(outbox);
         free_message(inbox);
         times.forward += seconds_since(t0);
+        if (diagonal) this->diagonal(L, vec);
+    }
+
+    // A level's diagonal solves x_R = X_RR^{-1} x_R (after its forward waves;
+    // H2_partial's backward solve: before its backward waves).
+    void diagonal(DeviceSolveLevel& L, S* vec) {
         const auto t1 = std::chrono::steady_clock::now();
         if (!L.streamed) launch_solve_diagonal(L.d_boxes, L.d_diag, L.ndiag, vec, nrhs_, L.max_r, stream_, trans_);
         check_cuda(cudaStreamSynchronize(stream_), "diagonal solves");
         times.diagonal += seconds_since(t1);
+    }
+
+    // H2_partial's F22 step of a level (its sparsified boxes, independent of
+    // each other): x_R22 -= T22^T x_S' after the forward waves, x_S' -= T22
+    // x_R22 before the backward ones.
+    void f22_forward(DeviceSolveLevel& L, S* vec) {
+        const auto t0 = std::chrono::steady_clock::now();
+        launch_solve_forward(L.d_f22_boxes, L.d_f22_list, L.nf22, vec, static_cast<S*>(nullptr), nrhs_, L.f22_max_n, stream_,
+                             false);
+        check_cuda(cudaStreamSynchronize(stream_), "F22 step");
+        times.f22 += seconds_since(t0);
+    }
+    void f22_backward(DeviceSolveLevel& L, S* vec) {
+        const auto t0 = std::chrono::steady_clock::now();
+        launch_solve_backward(L.d_f22_boxes, static_cast<const SolveSlot*>(nullptr), L.d_f22_list, L.nf22, vec,
+                              static_cast<const S*>(nullptr), static_cast<S*>(nullptr), nrhs_, L.f22_max_n, 0, stream_, false);
+        check_cuda(cudaStreamSynchronize(stream_), "F22 step");
+        times.f22 += seconds_since(t0);
     }
 
     // The backward waves of a level, in reverse, other ranks' neighbor
@@ -3707,6 +3827,94 @@ void device_mul_sweeps(ParallelTree<CoordType, DataType>* tree,
         }
         std::fflush(stdout);
     }
+}
+
+// H2_partial's partial solves on the device: the levels' sweeps (the host
+// solve, unstructured/solver_impl.hpp, runs the root's partial solve and
+// the F22 passes: partial.hpp).  forward (the forward partial solve): from
+// the leaf up, each level's forward waves and its F22 step, then the
+// hand-off to the parent; no diagonal solves.  Otherwise the backward one
+// (after the root's): from the top down, the hand-off from the parent, each
+// level's diagonal solves, its F22 step and its backward waves.  The
+// diagonal solves read only the F11 redundant entries, which neither the
+// hand-offs nor the F22 passes and steps touch, so they give what the host's
+// give before its backward sweep.  Collective over the tree's ranks;
+// solve_data as the host path holds it.
+template<typename CoordType, typename DataType>
+void device_partial_sweeps(ParallelTree<CoordType, DataType>* tree,
+                           std::vector<std::vector<SolveDataRequest<CoordType, DataType>>>& solve_data, int nrhs,
+                           bool forward, int verbosity) {
+    using clock = std::chrono::steady_clock;
+    const auto t0 = clock::now();
+    Context::instance().activate();
+    DeviceSolveStore& store = device_solve_store();
+    const int leaf = tree->num_levels - 1;
+    int rank = 0;
+    MPI_Comm_rank(tree->comm, &rank);
+    DeviceSolveRun<CoordType, DataType> run(tree, nrhs, false);
+    double host_seconds = 0.0;
+    auto level_of = [&](int level) -> DeviceSolveLevel& {
+        DeviceSolveLevel& L = store.levels[static_cast<size_t>(level)];
+        if (L.ca || L.host || L.streamed) throw std::logic_error("device partial solve: a CA, host or streamed level");
+        return L;
+    };
+    if (forward) {
+        for (int level = leaf; level >= 1; --level) {
+            auto& lvl = tree->levels[static_cast<size_t>(level)];
+            if (level >= 2 && lvl.is_process_active) {
+                DeviceSolveLevel& L = level_of(level);
+                auto* vec = run.upload(L, solve_data[static_cast<size_t>(level)]);
+                run.forward(L, vec, false);
+                run.f22_forward(L, vec);
+                run.download(L, vec, solve_data[static_cast<size_t>(level)]);
+            }
+            const auto th = clock::now();
+            gather_skeleton_to_parent(lvl, tree->levels[static_cast<size_t>(level - 1)], solve_data[static_cast<size_t>(level)],
+                                      solve_data[static_cast<size_t>(level - 1)], tree->dimension, tree->comm);
+            host_seconds += std::chrono::duration<double>(clock::now() - th).count();
+        }
+    } else {
+        for (int level = 1; level <= leaf; ++level) {
+            auto& lvl = tree->levels[static_cast<size_t>(level)];
+            auto& parent = tree->levels[static_cast<size_t>(level - 1)];
+            const auto ts = clock::now();
+            if (lvl.is_process_active || parent.is_process_active) {
+                scatter_solution_to_children(lvl, parent, solve_data[static_cast<size_t>(level)],
+                                             solve_data[static_cast<size_t>(level - 1)], tree->dimension, tree->comm);
+            }
+            host_seconds += std::chrono::duration<double>(clock::now() - ts).count();
+            if (level >= 2 && lvl.is_process_active) {
+                DeviceSolveLevel& L = level_of(level);
+                auto* vec = run.upload(L, solve_data[static_cast<size_t>(level)]);
+                run.diagonal(L, vec);
+                run.f22_backward(L, vec);
+                run.backward(L, vec);
+                run.download(L, vec, solve_data[static_cast<size_t>(level)]);
+            }
+        }
+    }
+    const double total = std::chrono::duration<double>(clock::now() - t0).count();
+    if (verbosity >= 0 && rank == 0) {
+        const auto& t = run.times;
+        std::printf("GPU partial %s sweeps: %.3f s (rank 0: waves %.3f, diagonal %.3f, F22 steps %.3f, of which MPI %.3f; "
+                    "vector transfers %.3f; host level hand-off %.3f)\n",
+                    forward ? "forward" : "backward", total, forward ? t.forward : t.backward, t.diagonal, t.f22, t.comm,
+                    t.transfer, host_seconds);
+        std::fflush(stdout);
+    }
+}
+
+// Whether H2_partial's partial solves run their sweeps on the device
+// (device_partial_sweeps): the device solve's decision (collective), the
+// factors on the device from the first solve on.
+template<typename CoordType, typename DataType>
+bool device_partial_ready(ParallelTree<CoordType, DataType>* tree, int verbosity) {
+    activate_operator(tree);
+    if (device_solve_suspended() || !color_gpu_enabled()) {
+        materialize_host_factors(tree);
+        return false;
+    }
+    return prepare_device_solve(tree, verbosity, false);
 }
 
 // The solve (multiply = false) or the multiply F x of the host solvers

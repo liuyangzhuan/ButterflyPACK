@@ -115,7 +115,7 @@ void factorize(H2<CoordType, DataType>* solver,
         MPI_IN_PLACE, &solver->last_factor_rankmax, 1,
         MPI_INT64_T, MPI_MAX, solver->comm);
     solver->factorized = true;
-    solver->build_state = H2BuildState::RS_FACTORIZED;
+    solver->build_state = solver->tree->partial() ? H2BuildState::RS_PARTIAL : H2BuildState::RS_FACTORIZED;
     } else {
         throw std::runtime_error(
             "color_unstructured only supports double precision");
