@@ -20,7 +20,10 @@
 #
 # Environment: NS, BDIAG_LEVEL, BDIAG_TOL (H2 block tolerance, bdiag_tol_rand), TOL_COMP (the tensor's compression
 # tolerance, default 1e-2; it also names the field slice files), N_ITER, TOL_ITERSOL, ITER_SOLVER
-# (2 GMRES, 1 TFQMR), GMRES_RESTART, IVELO (9: linear velocity profile, 11: random shapes, see EXTRA_ARGS),
+# (2 GMRES, 1 TFQMR), GMRES_RESTART, IVELO (9: linear velocity profile, 11: random shapes read from a file made by
+# EXAMPLE/slowness_model3d_generator.py, see below), NSHAPE, SMIN, SMAX (ivelo 11: the generator's num_shapes,
+# slowness_min and slowness_max, which name the file), H2_UNSTRUCTURED (1: unstructured H2 blocks, needed when the
+# scatterer does not fill the box, as with ivelo 11),
 # IVELO9_GRAD_SCALE (factor on the ivelo 9 velocity gradient), CASE (h2 | none: no preconditioner), RPN, BLAS
 # (omp: the OpenMP-threaded OpenBLAS preloaded, 17% faster H2 blocks | seq: the build's sequential one),
 # EXTRA_ARGS, EXTRA_PRELOAD, WRAP (a launcher before the application, e.g. a perf wrapper), TAG, OUTDIR (logs and
@@ -81,14 +84,24 @@ TAG=${TAG:-cpu_n${NS}}
 H=0.00125
 X0=$(python3 -c "print(${NS}*${H})")
 OMEGA=402.1238597   # 6.25 points per wavelength of the background slowness 2 at h = 0.00125
-COMMON="--ivelo ${IVELO:-9} --ivelo9_grad_scale ${IVELO9_GRAD_SCALE:-1} --pad_s2s 1 --trans_invariant 2 --scaleGreen 1 \
+IVELO=${IVELO:-9}
+IVELO11_ARGS=""
+if [ "$IVELO" = 11 ]; then
+  # the driver opens the model from its working directory, OUTDIR, under the name the generator gives it:
+  #   python3 EXAMPLE/slowness_model3d_generator.py --shape_background NS NS NS --shape NS NS NS --offset 0 0 0 \
+  #     --num_shapes NSHAPE --slowness_min SMIN --slowness_max SMAX --seed SEED --plot 0
+  IVELO11_ARGS="--nshape ${NSHAPE:-25} --smin_ivelo11 ${SMIN:-1} --smax_ivelo11 ${SMAX:-3}"
+  model=$(python3 -c "t=lambda v: ('%g' % v); print('slowness_map_shapeoutter{0}x{0}x{0}_shape{0}x{0}x{0}_off0x0x0_range{1}_{2}_nshape{3}.bin'.format(${NS}, t(${SMIN:-1}), t(${SMAX:-3}), ${NSHAPE:-25}))")
+  if [ ! -f "$OUTDIR/$model" ]; then echo "ivelo 11: $OUTDIR/$model not found"; exit 1; fi
+fi
+COMMON="--ivelo ${IVELO} ${IVELO11_ARGS} --ivelo9_grad_scale ${IVELO9_GRAD_SCALE:-1} --pad_s2s 1 --trans_invariant 2 --scaleGreen 1 \
  --omega ${OMEGA} --htensor_mvp_level_batch 1 --h ${H} \
  --x0max ${X0} --y0max ${X0} --z0max ${X0} --L ${X0} --H ${X0} --W ${X0} --vs 1 --shape 4 --knn 0 --lrlevel 5 --nbundle 8 \
  --n_iter ${N_ITER} --format 6 --iter_solver ${ITER_SOLVER:-2} --gmres_restart ${GMRES_RESTART:-200} --baca_batch 8 --knn_near_para 20.0 --elem_extract 0 --near_para 2.1d0 \
  --use_zfp 1 --use_qtt 0 --xyzsort 1 --use_fft_circulant 1 --nmin_leaf 32 --sample_para_outer 0.8 --sample_para 0.8 \
  --rmax 4 --rankrate 2.0 --itermax 1 --tol_comp ${TOL_COMP:-1e-2} --tol_rand 1e-5 --tol_Rdetect 0.3e-5 --fastsample_tensor 2 \
  --verbosity 1 --bdiag_level ${BDIAG_LEVEL} --bdiag_lrlevel 0 --bdiag_tol_rand ${BDIAG_TOL} --tol_itersol ${TOL_ITERSOL} --precon 2 ${EXTRA_ARGS:-}"
-H2OPTS="--H2_use_gpu 0 --H2_XRR_factor 1 --h2_use_sketch 2 --h2_lazy_schur 2 --CA_level 10000"
+H2OPTS="--H2_use_gpu 0 --H2_XRR_factor 1 --h2_use_sketch 2 --h2_lazy_schur 2 --CA_level 10000 --h2_unstructured ${H2_UNSTRUCTURED:-0}"
 CASE=${CASE:-h2}   # h2: H2 diagonal blocks on the CPU; none: no preconditioner
 if [ "$CASE" = none ]; then EXTRA="--bdiag_precon 0"; else EXTRA="--bdiag_precon 1 --bdiag_format 7 ${H2OPTS}"; fi
 log=vie_${TAG}_${CASE}.log
