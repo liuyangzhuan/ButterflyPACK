@@ -2123,7 +2123,9 @@ void hierarchical_factorization_unstructured(
         // At level 0, the assembled matrix is just the schur complement
         if (!root_box.schur_complement.is_allocated()) {
             throw std::runtime_error(
-                "hierarchical_factorization_parallel: Root box schur complement not allocated");
+                "hierarchical_factorization_parallel: root box Schur complement not "
+                "allocated; the level-1 transition assembles it, so an H2 tree of one "
+                "level never does (see require_h2_tree_depth)");
         }
 
         n = root_box.schur_complement.rows;
