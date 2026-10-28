@@ -98,6 +98,7 @@ implicit none
 		real(kind=8), allocatable:: near_ub(:), near_vb(:) ! (u,v) of the target's closest point on the patch of each near pair (on-the-fly mode)
 		integer:: npair = 0
 		integer(kind=8):: nweights_computed = 0 ! number of weight rows computed on the fly (diagnostic)
+		integer(kind=8):: nentries = 0, nsubmat = 0 ! number of matrix entries and submatrices requested through Zsubmatrix_CHEB (diagnostic)
 		integer(kind=8):: nweights_cat(3) = 0 ! ... requested by: 1 whole leaf-patch blocks, 2 other submatrices, 3 single entries
 		integer, allocatable:: paircount(:) ! diagnostic: number of on-the-fly computations of each near pair within whole leaf-patch blocks
 
@@ -106,7 +107,36 @@ implicit none
 		integer:: gmres_restart = 0 ! >0: GMRES restart length when precon/=DIRECT (0: ButterflyPACK's default solve path, GMRES(30))
 		integer:: faceorder = 0 ! order of the six faces of the sphere/cube (the forest's base patches): 0: +x,-x,+y,-y,+z,-z; 1: sweep +z,+x,+y,-x,-y,-z
 		integer:: printstruct = 0 ! 1: write every block's rank before (fort.100000+rank) and after (fort.200000+rank) the factorization, and the cluster geometry (clusters.txt)
+		integer:: tensor = 0 ! 1: iterative solve with a forest of H-TENSOR blocks, one per pair of base patches on their (split*N) x (split*N) parameter grids (split must be a power of two)
+		integer:: tlev = 0 ! log2(split): levels of the per-dimension trees of a base patch down to single patches
+		real(kind=8):: tnear_para = 2.2d0 ! admissibility parameter of the tensor forest (option%near_para)
+		integer, allocatable:: sp_face(:), sp_is(:), sp_js(:) ! base patch and split position (is,js) of each patch
+		integer, allocatable:: nsub_ptr(:), nsub_q(:) ! patches holding self/near pairs of the targets of each patch (CSR)
+		real(kind=8), allocatable:: tnode_c(:, :, :), tnode_r(:, :) ! bounding sphere (center, radius) of every quadtree node of every base patch (tnode_id)
 	end type quant_ACOUSTIC_CHEB
+
+	!**** one block of the tensor forest: Z(base patch p, base patch q) as a 4-mode tensor on the two parameter grids
+	type quant_pair_CHEB
+		integer:: p = 0, q = 0
+		type(quant_ACOUSTIC_CHEB), pointer:: g => null()
+	end type quant_pair_CHEB
+
+	!**** the tensor forest: nbase x nbase H-TENSOR blocks sharing the parameter grids, the per-dimension cluster trees and
+	! the vector layout. A local vector holds the local box of every base patch, base patch after base patch.
+	type tforest_CHEB
+		integer:: nface = 0
+		integer:: Ns(2) = 0, Ns_loc(2) = 0, nloc = 0 ! grid points per dimension, local box, local entries per base patch
+		type(z_Bmatrix), allocatable:: bmat(:, :)
+		type(z_mesh), allocatable:: msh(:, :, :) ! msh(dim, p, q)
+		type(z_kernelquant), allocatable:: ker(:, :)
+		type(z_Hstat), allocatable:: stats(:, :)
+		type(quant_pair_CHEB), allocatable:: pair(:, :)
+		integer, allocatable:: gidx(:, :) ! gidx(i, p): node (natural order) of local entry i of base patch p
+		type(z_Hoption), pointer:: option => null()
+		type(z_proctree), pointer:: ptree => null()
+		real(kind=8):: tmvp = 0d0 ! time of the products
+		integer:: nmvp = 0 ! number of products (vectors)
+	end type tforest_CHEB
 
 contains
 
@@ -129,6 +159,14 @@ contains
 		if (allocated(quant%near_W)) deallocate (quant%near_W)
 		if (allocated(quant%near_ub)) deallocate (quant%near_ub)
 		if (allocated(quant%near_vb)) deallocate (quant%near_vb)
+		if (allocated(quant%paircount)) deallocate (quant%paircount)
+		if (allocated(quant%sp_face)) deallocate (quant%sp_face)
+		if (allocated(quant%sp_is)) deallocate (quant%sp_is)
+		if (allocated(quant%sp_js)) deallocate (quant%sp_js)
+		if (allocated(quant%nsub_ptr)) deallocate (quant%nsub_ptr)
+		if (allocated(quant%nsub_q)) deallocate (quant%nsub_q)
+		if (allocated(quant%tnode_c)) deallocate (quant%tnode_c)
+		if (allocated(quant%tnode_r)) deallocate (quant%tnode_r)
 	end subroutine delete_quant_Acoustic_CHEB
 
 	!**** user-defined subroutine to sample Z_mn
@@ -332,6 +370,14 @@ contains
 		integer, allocatable:: have(:)
 
 		N2 = quant%N*quant%N
+#ifdef HAVE_OPENMP
+		!$omp atomic
+#endif
+		quant%nentries = quant%nentries + int(nr, 8)*nc
+#ifdef HAVE_OPENMP
+		!$omp atomic
+#endif
+		quant%nsubmat = quant%nsubmat + 1
 		cat = 2 ! a whole leaf-patch block: all N*N rows of one patch against all N*N columns of one patch
 		if (nr == N2 .and. nc == N2) then
 			if (minval(rows) == maxval(rows) - N2 + 1 .and. mod(minval(rows) - 1, N2) == 0 .and. &
@@ -1171,6 +1217,68 @@ contains
 		deallocate (jl, yl)
 	end function mie_farfield_soft
 
+	!**** forward-map test on the sphere: Y = P_l(ehat.xhat) at all nodes and the exact eigenvalue of the operator for degree l
+	subroutine eigtest_Y_CHEB(quant, Y, lam)
+		implicit none
+		type(quant_ACOUSTIC_CHEB):: quant
+		real(kind=8), allocatable:: Y(:)
+		complex(kind=8) lam
+		real(kind=8) ehat(3)
+		integer n
+		ehat = (/0.3d0, -0.5d0, 0.8d0/)
+		ehat = ehat/sqrt(sum(ehat**2))
+		lam = sphere_eigenvalue(quant%wavenum, quant%radius, quant%eigtest)
+		allocate (Y(quant%Nunk))
+		do n = 1, quant%Nunk
+			Y(n) = legendreP(quant%eigtest, dot_product(ehat, quant%xyz(:, n))/sqrt(sum(quant%xyz(:, n)**2)))
+		enddo
+	end subroutine eigtest_Y_CHEB
+
+	!**** forward-map test report: vout(i) is the compressed operator applied to Y at the local node gi(i); also applies the
+	! uncompressed entries on a sample of the local rows
+	subroutine forward_map_report_CHEB(quant, ptree, Nloc, gi, vout, Y, lam)
+		implicit none
+		type(quant_ACOUSTIC_CHEB):: quant
+		type(z_proctree):: ptree
+		integer Nloc, gi(Nloc), ii, n, nsamp, kk, ierr
+		complex(kind=8) vout(Nloc), lam, val
+		real(kind=8) Y(:), errs(4), errg(4)
+
+		errs = 0d0
+		do ii = 1, Nloc
+			errs(1) = max(errs(1), abs(vout(ii) - lam*Y(gi(ii))))
+			errs(2) = max(errs(2), abs(lam*Y(gi(ii))))
+		enddo
+		nsamp = min(Nloc, 16)
+		do kk = 1, nsamp
+			ii = 1 + ((kk - 1)*Nloc)/nsamp
+			val = 0d0
+#ifdef HAVE_OPENMP
+			!$omp parallel do default(shared) private(n) reduction(+:val)
+#endif
+			do n = 1, quant%Nunk
+				if (quant%unknown == UNK_PSI) then
+					val = val + Zentry_CHEB(quant, gi(ii), n)*Y(n)*quant%e(n)
+				else
+					val = val + Zentry_CHEB(quant, gi(ii), n)*Y(n)
+				endif
+			enddo
+#ifdef HAVE_OPENMP
+			!$omp end parallel do
+#endif
+			errs(3) = max(errs(3), abs(val - lam*Y(gi(ii))))
+			errs(4) = max(errs(4), abs(lam*Y(gi(ii))))
+		enddo
+		call MPI_ALLREDUCE(errs, errg, 4, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+		if (ptree%MyID == Main_ID) then
+			write (*, *) ''
+			write (*, '(A,I3,A,2Es14.6)') ' forward-map test with Y of degree', quant%eigtest, ', exact eigenvalue:', dble(lam), aimag(lam)
+			write (*, '(A,Es12.4)') '   max error, uncompressed entries (sampled rows): ', errg(3)/errg(4)
+			write (*, '(A,Es12.4)') '   max error, compressed operator (all rows):      ', errg(1)/errg(2)
+			write (*, *) ''
+		endif
+	end subroutine forward_map_report_CHEB
+
 	!**** forward-map test on the sphere: apply the operator to Y = P_l(ehat.xhat) and compare with the exact eigenvalue
 	subroutine forward_map_test_CHEB(bmat, option, msh, quant, ptree, stats)
 		use z_BPACK_Solve_Mul
@@ -1181,68 +1289,24 @@ contains
 		type(quant_ACOUSTIC_CHEB):: quant
 		type(z_proctree):: ptree
 		type(z_Hstat):: stats
-		integer Nloc, ii, gi, n, nsamp, kk, ierr
-		real(kind=8) ehat(3), errs(4), errg(4)
+		integer Nloc, ii
+		integer, allocatable:: gi(:)
 		real(kind=8), allocatable:: Y(:)
 		complex(kind=8), allocatable:: vin(:, :), vout(:, :)
-		complex(kind=8) lam, val
+		complex(kind=8) lam
 
 		if (quant%geo /= CHEB_SPHERE .or. quant%eigtest <= 0) return
-		ehat = (/0.3d0, -0.5d0, 0.8d0/)
-		ehat = ehat/sqrt(sum(ehat**2))
-		lam = sphere_eigenvalue(quant%wavenum, quant%radius, quant%eigtest)
-		allocate (Y(quant%Nunk))
-		do n = 1, quant%Nunk
-			Y(n) = legendreP(quant%eigtest, dot_product(ehat, quant%xyz(:, n))/sqrt(sum(quant%xyz(:, n)**2)))
-		enddo
-
-		! compressed operator
+		call eigtest_Y_CHEB(quant, Y, lam)
 		Nloc = msh%idxe - msh%idxs + 1
-		allocate (vin(Nloc, 1), vout(Nloc, 1))
+		allocate (gi(Nloc), vin(Nloc, 1), vout(Nloc, 1))
 		do ii = 1, Nloc
-			gi = msh%new2old(msh%idxs + ii - 1)
-			vin(ii, 1) = Y(gi)
-			if (quant%unknown == UNK_PSI) vin(ii, 1) = vin(ii, 1)*quant%e(gi)
+			gi(ii) = msh%new2old(msh%idxs + ii - 1)
+			vin(ii, 1) = Y(gi(ii))
+			if (quant%unknown == UNK_PSI) vin(ii, 1) = vin(ii, 1)*quant%e(gi(ii))
 		enddo
 		call z_BPACK_Mult('N', Nloc, 1, vin, vout, bmat, ptree, option, stats, use_blockcopy=0) ! forward blocks, not their post-factorization copy
-		errs = 0d0
-		do ii = 1, Nloc
-			gi = msh%new2old(msh%idxs + ii - 1)
-			errs(1) = max(errs(1), abs(vout(ii, 1) - lam*Y(gi)))
-			errs(2) = max(errs(2), abs(lam*Y(gi)))
-		enddo
-
-		! uncompressed entries on a sample of rows
-		nsamp = min(Nloc, 16)
-		do kk = 1, nsamp
-			ii = 1 + ((kk - 1)*Nloc)/nsamp
-			gi = msh%new2old(msh%idxs + ii - 1)
-			val = 0d0
-#ifdef HAVE_OPENMP
-			!$omp parallel do default(shared) private(n) reduction(+:val)
-#endif
-			do n = 1, quant%Nunk
-				if (quant%unknown == UNK_PSI) then
-					val = val + Zentry_CHEB(quant, gi, n)*Y(n)*quant%e(n)
-				else
-					val = val + Zentry_CHEB(quant, gi, n)*Y(n)
-				endif
-			enddo
-#ifdef HAVE_OPENMP
-			!$omp end parallel do
-#endif
-			errs(3) = max(errs(3), abs(val - lam*Y(gi)))
-			errs(4) = max(errs(4), abs(lam*Y(gi)))
-		enddo
-		call MPI_ALLREDUCE(errs, errg, 4, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
-		if (ptree%MyID == Main_ID) then
-			write (*, *) ''
-			write (*, '(A,I3,A,2Es14.6)') ' forward-map test with Y of degree', quant%eigtest, ', exact eigenvalue:', dble(lam), aimag(lam)
-			write (*, '(A,Es12.4)') '   max error, uncompressed entries (sampled rows): ', errg(3)/errg(4)
-			write (*, '(A,Es12.4)') '   max error, compressed operator (all rows):      ', errg(1)/errg(2)
-			write (*, *) ''
-		endif
-		deallocate (Y, vin, vout)
+		call forward_map_report_CHEB(quant, ptree, Nloc, gi, vout(:, 1), Y, lam)
+		deallocate (Y, gi, vin, vout)
 	end subroutine forward_map_test_CHEB
 
 	!**** GMRES(restart) on the compressed operator (precon=NOPRECON) or preconditioned by its factorization (precon=BPACKPRECON); same as BPACK_Z_iter but with a user-chosen restart length
@@ -1282,18 +1346,16 @@ contains
 		type(quant_ACOUSTIC_CHEB):: quant
 		type(z_proctree):: ptree
 		type(z_Hstat):: stats
-		integer Nloc, ii, gi, m, ierr, iter
-		real(kind=8) e1(3), xh(3), gam, t1, t2, errmax, fmax, relres
-		complex(kind=8), allocatable:: x(:, :), b(:, :), ffloc(:), ff(:)
-		complex(kind=8) coef, umie
-		real(kind=8) k
+		integer Nloc, ii, iter
+		integer, allocatable:: gi(:)
+		real(kind=8) t1, t2, relres
+		complex(kind=8), allocatable:: x(:, :), b(:, :)
 
-		k = quant%wavenum
 		Nloc = msh%idxe - msh%idxs + 1
-		allocate (x(Nloc, 1), b(Nloc, 1))
+		allocate (gi(Nloc), x(Nloc, 1), b(Nloc, 1))
 		do ii = 1, Nloc
-			gi = msh%new2old(msh%idxs + ii - 1)
-			b(ii, 1) = -exp(BPACK_junit*k*dot_product(quant%dinc, quant%xyz(:, gi)))
+			gi(ii) = msh%new2old(msh%idxs + ii - 1)
+			b(ii, 1) = -exp(BPACK_junit*quant%wavenum*dot_product(quant%dinc, quant%xyz(:, gi(ii))))
 		enddo
 		x = 0d0
 		t1 = MPI_Wtime()
@@ -1307,7 +1369,23 @@ contains
 			t2 = MPI_Wtime()
 		endif
 		if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'Solving:', t2 - t1, 'Seconds'
+		call farfield_CHEB(quant, ptree, Nloc, gi, x(:, 1))
+		deallocate (gi, x, b)
+	end subroutine solve_scattering_CHEB
 
+	!**** far field of the solution x (x(i) at the local node gi(i)) on the great circle containing the incident direction,
+	! written to farfield_CHEB.out, and its error against the Mie series on the sphere
+	subroutine farfield_CHEB(quant, ptree, Nloc, gi, x)
+		implicit none
+		type(quant_ACOUSTIC_CHEB):: quant
+		type(z_proctree):: ptree
+		integer Nloc, gi(Nloc), ii, m, ierr
+		complex(kind=8) x(Nloc)
+		real(kind=8) e1(3), xh(3), gam, errmax, fmax, k
+		complex(kind=8), allocatable:: ffloc(:), ff(:)
+		complex(kind=8) coef, umie
+
+		k = quant%wavenum
 		! a unit vector orthogonal to the incident direction
 		if (abs(quant%dinc(1)) < 0.9d0) then
 			call z_rrcurl(quant%dinc, (/1d0, 0d0, 0d0/), e1)
@@ -1322,15 +1400,14 @@ contains
 			gam = BPACK_pi*(m - 1)/max(1, quant%nfar - 1)
 			xh = cos(gam)*quant%dinc + sin(gam)*e1
 			do ii = 1, Nloc
-				gi = msh%new2old(msh%idxs + ii - 1)
 				if (quant%closed) then
-					coef = -BPACK_junit*k*(dot_product(xh, quant%nrm(:, gi)) + 1d0)
+					coef = -BPACK_junit*k*(dot_product(xh, quant%nrm(:, gi(ii))) + 1d0)
 				else
 					coef = 1d0
 				endif
-				coef = coef*exp(-BPACK_junit*k*dot_product(xh, quant%xyz(:, gi)))*quant%Jw(gi)/(4d0*BPACK_pi)
-				if (quant%unknown == UNK_PHI) coef = coef*quant%e(gi) ! psi = e*phi
-				ffloc(m) = ffloc(m) + coef*x(ii, 1)
+				coef = coef*exp(-BPACK_junit*k*dot_product(xh, quant%xyz(:, gi(ii))))*quant%Jw(gi(ii))/(4d0*BPACK_pi)
+				if (quant%unknown == UNK_PHI) coef = coef*quant%e(gi(ii)) ! psi = e*phi
+				ffloc(m) = ffloc(m) + coef*x(ii)
 			enddo
 		enddo
 		call MPI_ALLREDUCE(ffloc, ff, quant%nfar, MPI_DOUBLE_COMPLEX, MPI_SUM, ptree%Comm, ierr)
@@ -1355,7 +1432,748 @@ contains
 			if (any(ff /= ff)) write (*, *) 'WARNING: the far field contains NaN, the solve failed'
 			if (quant%geo == CHEB_SPHERE) write (*, '(A,Es12.4)') ' far-field error vs. Mie series (relative to max): ', errmax/fmax
 		endif
-		deallocate (x, b, ffloc, ff)
-	end subroutine solve_scattering_CHEB
+		deallocate (ffloc, ff)
+	end subroutine farfield_CHEB
+
+	!**** on-the-fly near field: how often the weight rows were computed during the construction, and whether every
+	! self/near pair was computed exactly once in a dense leaf block (forest and tensor forest)
+	subroutine nearfield_report_CHEB(quant, ptree)
+		implicit none
+		type(quant_ACOUSTIC_CHEB):: quant
+		type(z_proctree):: ptree
+		integer(kind=8) nweights, ncat(3), nent(2)
+		integer ii, kk, nshow, ierr
+
+		call MPI_ALLREDUCE((/quant%nentries, quant%nsubmat/), nent, 2, MPI_INTEGER8, MPI_SUM, ptree%Comm, ierr)
+		if (ptree%MyID == Main_ID) write (*, '(A,I14,A,F10.4,A,I12,A)') ' matrix entries requested during construction:', nent(1), &
+			&	' (', dble(nent(1))/(dble(quant%Nunk)**2), ' of the dense matrix) in', nent(2), ' submatrices'
+		if (quant%onthefly /= 1) return
+		call MPI_ALLREDUCE(quant%nweights_computed, nweights, 1, MPI_INTEGER8, MPI_SUM, ptree%Comm, ierr)
+		call MPI_ALLREDUCE(quant%nweights_cat, ncat, 3, MPI_INTEGER8, MPI_SUM, ptree%Comm, ierr)
+		if (ptree%MyID == Main_ID) write (*, '(A,I12,A,F10.3,A)') ' near-field weight rows computed during construction:', nweights, &
+			&	' (', dble(nweights)/quant%npair, ' per near pair)'
+		if (ptree%MyID == Main_ID) write (*, '(A,3I12)') '   requested by leaf-patch blocks / other submatrices / single entries:', ncat
+		call MPI_ALLREDUCE(MPI_IN_PLACE, quant%paircount, quant%npair, MPI_INTEGER, MPI_SUM, ptree%Comm, ierr)
+		if (ptree%MyID == Main_ID) then
+			write (*, '(A,4I10)') '   near pairs computed 0/1/2/>2 times in leaf-patch blocks:', count(quant%paircount == 0), count(quant%paircount == 1), &
+				&	count(quant%paircount == 2), count(quant%paircount > 2)
+			if ((quant%forest == 1 .or. quant%tensor == 1) .and. count(quant%paircount /= 1) > 0) write (*, '(A,I10,A)') ' WARNING:', count(quant%paircount /= 1), &
+				&	' near pairs are not in exactly one dense leaf block (some lie in admissible blocks); increase -option --near_para'
+			nshow = 0
+			do ii = 1, quant%Nunk
+				do kk = quant%near_ptr(ii), quant%near_ptr(ii + 1) - 1
+					if (quant%paircount(kk) > 1 .and. nshow < 5) then
+						nshow = nshow + 1
+						write (*, '(A,I8,A,I6,A,I6,A,I3)') '     e.g. target', ii, ' (patch', (ii - 1)/quant%N**2 + 1, ') and patch', quant%near_q(kk), ': computed', quant%paircount(kk)
+					endif
+				enddo
+			enddo
+		endif
+	end subroutine nearfield_report_CHEB
+
+	!======================================================================================== tensor forest (quant%tensor=1)
+	! Each base patch is split into split x split patches with N x N Fejer nodes each, so its nodes form a product grid of
+	! split*N points along s times split*N points along t of the base patch. The interaction of base patches p and q is a
+	! 4-mode tensor on these grids, compressed as one H-TENSOR (option%format=HTENSOR) per pair (p,q): the per-dimension
+	! cluster trees are the binary trees of the split (a leaf is one patch), so every quadtree node of the patch hierarchy is
+	! a product of one node per dimension. The product with the whole matrix sums the nbase x nbase H-TENSOR products.
+
+	!**** (is,js) of the patch at position pos (1..S*S) of its base patch: the inverse of subpatch_pos
+	subroutine subpatch_ij(pos, S, forest, is, js)
+		implicit none
+		integer pos, S, forest, is, js, b
+		if (forest == 0) then
+			is = mod(pos - 1, S) + 1
+			js = (pos - 1)/S + 1
+		else
+			is = 1
+			js = 1
+			b = 0
+			do while (2**b < S)
+				is = is + ibits(pos - 1, 2*b + 1, 1)*2**b
+				js = js + ibits(pos - 1, 2*b, 1)*2**b
+				b = b + 1
+			enddo
+		endif
+	end subroutine subpatch_ij
+
+	!**** node (natural order) of the grid point (isig,itau) of base patch p, isig = (is-1)*N+i along s and itau = (js-1)*N+j along t
+	integer function tnode_CHEB(quant, p, isig, itau)
+		implicit none
+		type(quant_ACOUSTIC_CHEB):: quant
+		integer p, isig, itau, is, js, N
+		N = quant%N
+		is = (isig - 1)/N + 1
+		js = (itau - 1)/N + 1
+		tnode_CHEB = ((p - 1)*quant%split**2 + subpatch_pos(is, js, quant%split, quant%forest) - 1)*N*N &
+			&	+ (itau - (js - 1)*N - 1)*N + isig - (is - 1)*N
+	end function tnode_CHEB
+
+	!**** index of the quadtree node at level l and position (a,b) (along s and t) of a base patch
+	integer function tnode_id(l, a, b)
+		implicit none
+		integer l, a, b
+		tnode_id = (4**l - 1)/3 + (b - 1)*2**l + a
+	end function tnode_id
+
+	!**** tensor forest: the split position of every patch, the patches holding self/near pairs of the targets of every
+	! patch, and the bounding spheres of the quadtree nodes of every base patch
+	subroutine tensor_setup_CHEB(quant, ptree)
+		implicit none
+		type(quant_ACOUSTIC_CHEB):: quant
+		type(z_proctree):: ptree
+		integer S, Lt, N2, q, pos, is, js, t, m, kk, k, l, a, b, c, id, p
+		integer, allocatable:: mark(:)
+		real(kind=8) cen(3), r
+
+		S = quant%split
+		if (iand(S, S - 1) /= 0) then
+			if (ptree%MyID == Main_ID) write (*, *) 'the tensor forest requires split to be a power of two'
+			stop
+		endif
+		Lt = 0
+		do while (2**Lt < S)
+			Lt = Lt + 1
+		enddo
+		quant%tlev = Lt
+		N2 = quant%N**2
+
+		allocate (quant%sp_face(quant%npatch), quant%sp_is(quant%npatch), quant%sp_js(quant%npatch))
+		do q = 1, quant%npatch
+			quant%sp_face(q) = (q - 1)/S**2 + 1
+			pos = q - (quant%sp_face(q) - 1)*S**2
+			call subpatch_ij(pos, S, quant%forest, is, js)
+			quant%sp_is(q) = is
+			quant%sp_js(q) = js
+		enddo
+
+		allocate (mark(quant%npatch), quant%nsub_ptr(quant%npatch + 1))
+		mark = 0
+		quant%nsub_ptr(1) = 1
+		do t = 1, quant%npatch
+			k = 0
+			do m = (t - 1)*N2 + 1, t*N2
+				do kk = quant%near_ptr(m), quant%near_ptr(m + 1) - 1
+					if (mark(quant%near_q(kk)) /= t) then
+						mark(quant%near_q(kk)) = t
+						k = k + 1
+					endif
+				enddo
+			enddo
+			quant%nsub_ptr(t + 1) = quant%nsub_ptr(t) + k
+		enddo
+		allocate (quant%nsub_q(quant%nsub_ptr(quant%npatch + 1) - 1))
+		mark = 0
+		do t = 1, quant%npatch
+			k = quant%nsub_ptr(t) - 1
+			do m = (t - 1)*N2 + 1, t*N2
+				do kk = quant%near_ptr(m), quant%near_ptr(m + 1) - 1
+					if (mark(quant%near_q(kk)) /= t) then
+						mark(quant%near_q(kk)) = t
+						k = k + 1
+						quant%nsub_q(k) = quant%near_q(kk)
+					endif
+				enddo
+			enddo
+		enddo
+		deallocate (mark)
+
+		allocate (quant%tnode_c(3, (4**(Lt + 1) - 1)/3, quant%nbase), quant%tnode_r((4**(Lt + 1) - 1)/3, quant%nbase))
+		do p = 1, quant%nbase
+			do js = 1, S
+				do is = 1, S
+					q = (p - 1)*S**2 + subpatch_pos(is, js, S, quant%forest)
+					quant%tnode_c(:, tnode_id(Lt, is, js), p) = quant%patches(q)%bcenter
+					quant%tnode_r(tnode_id(Lt, is, js), p) = quant%patches(q)%bradius
+				enddo
+			enddo
+			do l = Lt - 1, 0, -1
+				do b = 1, 2**l
+					do a = 1, 2**l
+						cen = 0d0
+						do c = 0, 3
+							cen = cen + quant%tnode_c(:, tnode_id(l + 1, 2*a - 1 + mod(c, 2), 2*b - 1 + c/2), p)/4d0
+						enddo
+						r = 0d0
+						do c = 0, 3
+							id = tnode_id(l + 1, 2*a - 1 + mod(c, 2), 2*b - 1 + c/2)
+							r = max(r, sqrt(sum((quant%tnode_c(:, id, p) - cen)**2)) + quant%tnode_r(id, p))
+						enddo
+						quant%tnode_c(:, tnode_id(l, a, b), p) = cen
+						quant%tnode_r(tnode_id(l, a, b), p) = r
+					enddo
+				enddo
+			enddo
+		enddo
+	end subroutine tensor_setup_CHEB
+
+	!**** range lo..hi of patch positions (along one dimension of a base patch) and quadtree level l of the group grp of a
+	! per-dimension cluster tree (a complete binary tree whose level tlev holds single patches; deeper groups lie in one patch)
+	subroutine tgroup_range(quant, grp, lo, hi, l)
+		implicit none
+		type(quant_ACOUSTIC_CHEB):: quant
+		integer grp, lo, hi, l, g
+		l = 0
+		do while (2**(l + 1) <= grp)
+			l = l + 1
+		enddo
+		g = grp
+		do while (l > quant%tlev)
+			g = g/2
+			l = l - 1
+		enddo
+		lo = (g - 2**l)*2**(quant%tlev - l) + 1
+		hi = lo + 2**(quant%tlev - l) - 1
+	end subroutine tgroup_range
+
+	!**** bounding sphere of the patches lo(1)..hi(1) x lo(2)..hi(2) of base patch p: their quadtree node if both dimensions
+	! are at the same level, otherwise merged from the patches
+	subroutine tcluster_sphere(quant, p, lo, hi, lv, cen, r)
+		implicit none
+		type(quant_ACOUSTIC_CHEB):: quant
+		integer p, lo(2), hi(2), lv(2), is, js, id
+		real(kind=8) cen(3), r
+		if (lv(1) == lv(2)) then
+			id = tnode_id(lv(1), (lo(1) - 1)/(hi(1) - lo(1) + 1) + 1, (lo(2) - 1)/(hi(2) - lo(2) + 1) + 1)
+			cen = quant%tnode_c(:, id, p)
+			r = quant%tnode_r(id, p)
+		else
+			cen = 0d0
+			do js = lo(2), hi(2)
+				do is = lo(1), hi(1)
+					cen = cen + quant%tnode_c(:, tnode_id(quant%tlev, is, js), p)
+				enddo
+			enddo
+			cen = cen/((hi(1) - lo(1) + 1)*(hi(2) - lo(2) + 1))
+			r = 0d0
+			do js = lo(2), hi(2)
+				do is = lo(1), hi(1)
+					id = tnode_id(quant%tlev, is, js)
+					r = max(r, sqrt(sum((quant%tnode_c(:, id, p) - cen)**2)) + quant%tnode_r(id, p))
+				enddo
+			enddo
+		endif
+	end subroutine tcluster_sphere
+
+	!**** near (0) or far (1) for the target groups gm (on base patch p) and the source groups gn (on base patch q): far if
+	! the bounding spheres are farther apart than tnear_para*(r1+r2)/2 and no target in gm has a self/near pair with a patch in gn
+	integer function tensor_nearfar_CHEB(quant, p, q, gm, gn)
+		implicit none
+		type(quant_ACOUSTIC_CHEB):: quant
+		integer p, q, gm(2), gn(2), lo(2, 2), hi(2, 2), lv(2, 2), d, is, js, t, kk, sp
+		real(kind=8) cen(3, 2), r(2)
+		do d = 1, 2
+			call tgroup_range(quant, gm(d), lo(d, 1), hi(d, 1), lv(d, 1))
+			call tgroup_range(quant, gn(d), lo(d, 2), hi(d, 2), lv(d, 2))
+		enddo
+		call tcluster_sphere(quant, p, lo(:, 1), hi(:, 1), lv(:, 1), cen(:, 1), r(1))
+		call tcluster_sphere(quant, q, lo(:, 2), hi(:, 2), lv(:, 2), cen(:, 2), r(2))
+		tensor_nearfar_CHEB = 0
+		if (sqrt(sum((cen(:, 1) - cen(:, 2))**2)) <= quant%tnear_para*(r(1) + r(2))/2d0) return
+		do js = lo(2, 1), hi(2, 1)
+			do is = lo(1, 1), hi(1, 1)
+				t = (p - 1)*quant%split**2 + subpatch_pos(is, js, quant%split, quant%forest)
+				do kk = quant%nsub_ptr(t), quant%nsub_ptr(t + 1) - 1
+					sp = quant%nsub_q(kk)
+					if (quant%sp_face(sp) == q .and. quant%sp_is(sp) >= lo(1, 2) .and. quant%sp_is(sp) <= hi(1, 2) &
+						&	.and. quant%sp_js(sp) >= lo(2, 2) .and. quant%sp_js(sp) <= hi(2, 2)) return
+				enddo
+			enddo
+		enddo
+		tensor_nearfar_CHEB = 1
+	end function tensor_nearfar_CHEB
+
+	!**** user-defined subroutine to sample one entry of the H-TENSOR block of base patches (p,q) (ButterflyPACK's
+	! FuncZmn_MD interface); m and n are grid indices (along s, along t) in natural order
+	subroutine Zelem_tensor_CHEB(Ndim, m, n, value, quant)
+		implicit none
+		integer, INTENT(IN):: Ndim
+		integer, INTENT(IN):: m(Ndim), n(Ndim)
+		complex(kind=8) value
+		class(*), pointer :: quant
+		select TYPE (quant)
+		type is (quant_pair_CHEB)
+			value = Zentry_CHEB(quant%g, tnode_CHEB(quant%g, quant%p, m(1), m(2)), tnode_CHEB(quant%g, quant%q, n(1), n(2)))
+		class default
+			write (*, *) "unexpected type"
+			stop
+		end select
+	end subroutine Zelem_tensor_CHEB
+
+	!**** user-defined subroutine to sample a list of subtensors of the H-TENSOR block of base patches (p,q) (ButterflyPACK's
+	! FuncZmnBlock_MD interface, used with option%elem_extract=2). allrows(:,d), allcols(:,d) hold the concatenated grid
+	! indices along dimension d of all subtensors; each subtensor is returned as a column-major matrix whose rows and columns
+	! are the target and source multi-indices, dimension 1 fastest
+	subroutine Zelem_tensor_CHEB_block(Ndim, Ninter, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps, quant)
+		implicit none
+		integer, INTENT(IN):: Ndim
+		class(*), pointer :: quant
+		integer:: Ninter
+		integer:: allrows(:, :), allcols(:, :)
+		complex(kind=8), target:: alldat_loc(:)
+		integer:: colidx(Ndim, Ninter), rowidx(Ndim, Ninter), pgidx(Ninter)
+		integer:: Npmap, pmaps(Npmap, 3)
+		integer nn, nthreads
+		integer, allocatable:: roff(:, :), coff(:, :)
+		integer(kind=8), allocatable:: voff(:)
+
+		select TYPE (quant)
+		type is (quant_pair_CHEB)
+			allocate (roff(Ndim, Ninter), coff(Ndim, Ninter), voff(Ninter))
+			roff(:, 1) = 0
+			coff(:, 1) = 0
+			voff(1) = 0
+			do nn = 2, Ninter
+				roff(:, nn) = roff(:, nn - 1) + rowidx(:, nn - 1)
+				coff(:, nn) = coff(:, nn - 1) + colidx(:, nn - 1)
+				voff(nn) = voff(nn - 1) + int(product(rowidx(:, nn - 1)), 8)*product(colidx(:, nn - 1))
+			enddo
+			nthreads = 1
+#ifdef HAVE_OPENMP
+			nthreads = omp_get_max_threads()
+#endif
+			if (Ninter >= nthreads) then ! many subtensors: one thread per subtensor
+#ifdef HAVE_OPENMP
+				!$omp parallel do default(shared) private(nn) schedule(dynamic,1)
+#endif
+				do nn = 1, Ninter
+					call tensor_subtensor_CHEB(quant, rowidx(:, nn), colidx(:, nn), allrows(roff(1, nn) + 1:, 1), allrows(roff(2, nn) + 1:, 2), &
+						&	allcols(coff(1, nn) + 1:, 1), allcols(coff(2, nn) + 1:, 2), alldat_loc(voff(nn) + 1:), 0)
+				enddo
+#ifdef HAVE_OPENMP
+				!$omp end parallel do
+#endif
+			else ! few subtensors: the threads share the rows of each
+				do nn = 1, Ninter
+					call tensor_subtensor_CHEB(quant, rowidx(:, nn), colidx(:, nn), allrows(roff(1, nn) + 1:, 1), allrows(roff(2, nn) + 1:, 2), &
+						&	allcols(coff(1, nn) + 1:, 1), allcols(coff(2, nn) + 1:, 2), alldat_loc(voff(nn) + 1:), 1)
+				enddo
+			endif
+			deallocate (roff, coff, voff)
+		class default
+			write (*, *) "unexpected type"
+			stop
+		end select
+	end subroutine Zelem_tensor_CHEB_block
+
+	!**** one subtensor: rows r1 x r2 of base patch p against columns c1 x c2 of base patch q, as the submatrix of the nodes
+	subroutine tensor_subtensor_CHEB(pq, nr, nc, r1, r2, c1, c2, dat, par)
+		implicit none
+		type(quant_pair_CHEB):: pq
+		integer nr(2), nc(2), r1(*), r2(*), c1(*), c2(*), par, a, b
+		complex(kind=8) dat(*)
+		integer, allocatable:: rows(:), cols(:)
+		allocate (rows(nr(1)*nr(2)), cols(nc(1)*nc(2)))
+		do b = 1, nr(2)
+			do a = 1, nr(1)
+				rows(a + (b - 1)*nr(1)) = tnode_CHEB(pq%g, pq%p, r1(a), r2(b))
+			enddo
+		enddo
+		do b = 1, nc(2)
+			do a = 1, nc(1)
+				cols(a + (b - 1)*nc(1)) = tnode_CHEB(pq%g, pq%q, c1(a), c2(b))
+			enddo
+		enddo
+		call Zsubmatrix_CHEB(pq%g, nr(1)*nr(2), nc(1)*nc(2), rows, cols, dat, par)
+		deallocate (rows, cols)
+	end subroutine tensor_subtensor_CHEB
+
+	!**** user-defined compressibility of the H-TENSOR block of base patches (p,q) (ButterflyPACK's FuncNearFar_MD interface,
+	! option%nogeo=2): groupm, groupn are groups of the per-dimension cluster trees
+	subroutine NearFar_tensor_CHEB(Ndim, groupm, groupn, val, quant)
+		implicit none
+		integer, INTENT(IN):: Ndim
+		integer, INTENT(IN):: groupm(Ndim), groupn(Ndim)
+		integer:: val
+		class(*), pointer :: quant
+		select TYPE (quant)
+		type is (quant_pair_CHEB)
+			val = tensor_nearfar_CHEB(quant%g, quant%p, quant%q, groupm, groupn)
+		class default
+			write (*, *) "unexpected type"
+			stop
+		end select
+	end subroutine NearFar_tensor_CHEB
+
+	!**** construct the nbase x nbase H-TENSOR blocks, and the node of every local entry
+	subroutine tensor_build_CHEB(tf, quant, option, ptree)
+		use z_BPACK_constr
+		use z_BPACK_utilities
+		implicit none
+		type(tforest_CHEB), target:: tf
+		type(quant_ACOUSTIC_CHEB), target:: quant
+		type(z_Hoption), target:: option
+		type(z_proctree), target:: ptree
+		integer P, p1, q1, verb, a1, a2, i, ierr, l, lmax
+		integer Ns_loc(2), idxs(2)
+		integer, allocatable:: tree(:, :), perm(:, :)
+		real(kind=8) t1, t2, tsum, mem(2), memg(2), memtot(2), tp, te, tesum
+		integer rkmax, rk(0:63)
+
+		P = quant%nbase
+		tf%nface = P
+		tf%Ns = quant%split*quant%N
+		tf%option => option
+		tf%ptree => ptree
+		allocate (tf%bmat(P, P), tf%msh(2, P, P), tf%ker(P, P), tf%stats(P, P), tf%pair(P, P))
+		allocate (tree(quant%split, 2), perm(maxval(tf%Ns), 2))
+		verb = option%verbosity
+		tsum = 0d0
+		tesum = 0d0
+		memtot = 0d0
+		rk = 0
+		if (ptree%MyID == Main_ID) then
+			write (*, *) ''
+			write (*, '(A,I3,A,I3,A,I6,A,I6,A)') ' tensor forest: ', P, ' x', P, ' H-TENSOR blocks on', tf%Ns(1), ' x', tf%Ns(2), ' parameter grids'
+			write (*, '(A)') '   p   q   construction (s)   entry evaluation (s)   compressed (MB)   dense (MB)   max rank'
+		endif
+		do q1 = 1, P
+			do p1 = 1, P
+				tf%pair(p1, q1)%p = p1
+				tf%pair(p1, q1)%q = q1
+				tf%pair(p1, q1)%g => quant
+				call z_InitStat(tf%stats(p1, q1))
+				tf%ker(p1, q1)%QuantApp => tf%pair(p1, q1)
+				tf%ker(p1, q1)%FuncZmn_MD => Zelem_tensor_CHEB
+				tf%ker(p1, q1)%FuncZmnBlock_MD => Zelem_tensor_CHEB_block
+				tf%ker(p1, q1)%FuncNearFar_MD => NearFar_tensor_CHEB
+				if (p1 /= 1 .or. q1 /= 1) option%verbosity = -1 ! ButterflyPACK's output for the first block only
+				tree = quant%N
+				t1 = MPI_Wtime()
+				call z_BPACK_MD_construction_Init(tf%Ns, 2, perm, Ns_loc, tf%bmat(p1, q1), option, tf%stats(p1, q1), tf%msh(:, p1, q1), &
+					&	tf%ker(p1, q1), ptree, tree=tree)
+				call z_BPACK_MD_construction_Element(2, tf%bmat(p1, q1), option, tf%stats(p1, q1), tf%msh(:, p1, q1), tf%ker(p1, q1), ptree)
+				t2 = MPI_Wtime()
+				option%verbosity = verb
+				if (p1 == 1 .and. q1 == 1) then
+					tf%Ns_loc = Ns_loc
+				else
+					call z_assert(all(Ns_loc == tf%Ns_loc), 'tensor forest: the H-TENSOR blocks have different vector layouts')
+				endif
+				call MPI_ALLREDUCE(t2 - t1, tp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+				call MPI_ALLREDUCE(tf%stats(p1, q1)%Time_Entry, te, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+				tsum = tsum + tp
+				tesum = tesum + te
+				mem = (/tf%stats(p1, q1)%Mem_Comp_for, tf%stats(p1, q1)%Mem_Direct_for/)
+				call MPI_ALLREDUCE(mem, memg, 2, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+				memtot = memtot + memg
+				lmax = ubound(tf%stats(p1, q1)%rankmax_of_level_global, 1)
+				rkmax = maxval(tf%stats(p1, q1)%rankmax_of_level_global)
+				do l = 0, min(lmax, 63)
+					rk(l) = max(rk(l), tf%stats(p1, q1)%rankmax_of_level_global(l))
+				enddo
+				if (ptree%MyID == Main_ID) write (*, '(2I4,F16.3,F20.3,2F18.3,I11)') p1, q1, tp, te, memg(1), memg(2), rkmax
+			enddo
+		enddo
+		if (ptree%MyID == Main_ID) then
+			write (*, '(A,F12.3,A,F12.3,A)') ' tensor forest construction time:', tsum, ' s, of which entry evaluation', tesum, ' s'
+			write (*, '(A,F12.3,A,F12.3,A,F12.3,A)') ' tensor forest memory: ', memtot(1), ' MB compressed + ', memtot(2), ' MB dense = ', sum(memtot), ' MB'
+			write (*, '(A,64I5)') ' tensor forest max rank per level:', rk(0:min(lmax, 63))
+		endif
+		tf%Ns_loc = Ns_loc
+		tf%nloc = product(tf%Ns_loc)
+		do l = 1, 2
+			idxs(l) = tf%msh(l, 1, 1)%idxs
+		enddo
+		allocate (tf%gidx(tf%nloc, P))
+		do p1 = 1, P
+			do a2 = 1, tf%Ns_loc(2)
+				do a1 = 1, tf%Ns_loc(1)
+					i = a1 + (a2 - 1)*tf%Ns_loc(1)
+					tf%gidx(i, p1) = tnode_CHEB(quant, p1, tf%msh(1, 1, 1)%new2old(idxs(1) + a1 - 1), tf%msh(2, 1, 1)%new2old(idxs(2) + a2 - 1))
+				enddo
+			enddo
+		enddo
+		deallocate (tree, perm)
+	end subroutine tensor_build_CHEB
+
+	!**** Vout = Z*Vin with the tensor forest; local vectors hold the local boxes of the base patches one after another
+	subroutine tensor_mult_CHEB(tf, nvec, Vin, Vout)
+		use z_BPACK_Solve_Mul
+		implicit none
+		type(tforest_CHEB):: tf
+		integer nvec, p1, q1, nl, verb
+		complex(kind=8) Vin(:, :), Vout(:, :)
+		complex(kind=8), allocatable:: vq(:, :), vp(:, :)
+		real(kind=8) t1
+		t1 = MPI_Wtime()
+		verb = tf%option%verbosity
+		if (verb < 2) tf%option%verbosity = min(verb, 0) ! per-level timing of every block product only at verbosity >= 2
+		nl = tf%nloc
+		allocate (vq(max(nl, 1), nvec), vp(max(nl, 1), nvec))
+		Vout(1:nl*tf%nface, 1:nvec) = 0d0
+		do q1 = 1, tf%nface
+			vq(1:nl, :) = Vin((q1 - 1)*nl + 1:q1*nl, 1:nvec)
+			do p1 = 1, tf%nface
+				call z_BPACK_MD_Mult(2, 'N', tf%Ns_loc, nvec, vq, vp, tf%bmat(p1, q1), tf%ptree, tf%option, tf%stats(p1, q1), tf%msh(:, p1, q1))
+				Vout((p1 - 1)*nl + 1:p1*nl, 1:nvec) = Vout((p1 - 1)*nl + 1:p1*nl, 1:nvec) + vp(1:nl, :)
+			enddo
+		enddo
+		deallocate (vq, vp)
+		tf%option%verbosity = verb
+		tf%tmvp = tf%tmvp + MPI_Wtime() - t1
+		tf%nmvp = tf%nmvp + nvec
+	end subroutine tensor_mult_CHEB
+
+	!**** product timers of ButterflyPACK on this rank, summed over the face pairs: redistribution in, levels, redistribution out, final update,
+	!**** within the levels the dense blocks and the stages of the tensor-butterfly blocks (init, right, all2all, middle, left, cleanup),
+	!**** the stages of the cached-plan redistributions (setup/alloc/free, self copy, pack, MPI, unpack, total),
+	!**** the wall time of the concurrent products with single-rank blocks, and the flops
+	subroutine tensor_mvp_timers_CHEB(tf, t)
+		implicit none
+		type(tforest_CHEB):: tf
+		real(kind=8) t(19)
+		integer p1, q1
+		t = 0d0
+		do q1 = 1, tf%nface
+			do p1 = 1, tf%nface
+				associate (s => tf%stats(p1, q1))
+					t = t + [s%Time_C_Mult_RedistIn, s%Time_C_Mult_Level, s%Time_C_Mult_RedistOut, s%Time_C_Mult_Final, s%Time_C_Mult_Full, &
+						s%Time_C_Mult_Init, s%Time_C_Mult_Right, s%Time_C_Mult_All2All, s%Time_C_Mult_Middle, s%Time_C_Mult_Left, s%Time_C_Mult_Cleanup, &
+						s%Time_C_Mult_RedistSetup + s%Time_C_Mult_RedistAlloc + s%Time_C_Mult_RedistFree, s%Time_C_Mult_RedistSelf, &
+						s%Time_C_Mult_RedistPack, s%Time_C_Mult_RedistMPI, s%Time_C_Mult_RedistUnpack, s%Time_C_Mult_RedistTotal, &
+						s%Time_C_Mult_Local, s%Flop_C_Mult]
+				end associate
+			enddo
+		enddo
+	end subroutine tensor_mvp_timers_CHEB
+
+	!**** per-product breakdown of the tensor-forest product between two snapshots of tensor_mvp_timers_CHEB (max over ranks)
+	subroutine tensor_mvp_profile_CHEB(tf, ptree, t0, t1, twall, nprod)
+		implicit none
+		type(tforest_CHEB):: tf
+		type(z_proctree):: ptree
+		real(kind=8) t0(19), t1(19), twall, tl(20), tg(20), fl
+		integer nprod, p1, q1, ll, bb, nlev, nbf, nfull, nshared, cnt(4), cntg(4), ierr
+
+		tl(1:19) = (t1 - t0)/max(1, nprod)
+		tl(20) = twall/max(1, nprod)
+		call MPI_ALLREDUCE(tl, tg, 20, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+		call MPI_ALLREDUCE(tl(19), fl, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+		nlev = 0
+		nbf = 0
+		nfull = 0
+		nshared = 0
+		do q1 = 1, tf%nface
+			do p1 = 1, tf%nface
+				associate (bp => tf%bmat(p1, q1)%h_mat_md%BP)
+					nlev = nlev + (bp%Lplus - 1 + max(1, tf%option%htensor_mvp_level_batch) - 1)/max(1, tf%option%htensor_mvp_level_batch)
+					do ll = 2, bp%Lplus
+						do bb = 1, bp%LL(ll)%Nbound_loc
+							if (bp%LL(ll)%matrices_block(bb)%style == 1) then
+								nfull = nfull + 1
+							else
+								nbf = nbf + 1
+							endif
+							if (tf%ptree%pgrp(bp%LL(ll)%matrices_block(bb)%pgno)%nproc > 1) nshared = nshared + 1
+						enddo
+					enddo
+				end associate
+			enddo
+		enddo
+		cnt = [nlev, nbf, nfull, nshared]
+		call MPI_ALLREDUCE(cnt, cntg, 4, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
+		if (ptree%MyID == Main_ID) then
+			write (*, '(A,I6,A,I6,A,I6,A)') ' tensor forest product profile (s per product, max over ranks;', cntg(1), ' level calls,', &
+				cntg(2), ' butterfly and', cntg(3), ' dense blocks on the busiest rank):'
+			write (*, '(A,F10.4,A,F10.4,A,F10.4,A,F10.4,A,F10.4)') '   wall', tg(20), '  redist in', tg(1), '  levels', tg(2), '  redist out', tg(3), '  final', tg(4)
+			write (*, '(A,F10.4,A,I8,A,F10.3,A)') '   levels: single-rank blocks (concurrent, wall)', tg(18), '   blocks shared by several ranks:', cntg(4), &
+				'   flops per product:', fl/1d9, ' GFlop (all ranks)'
+			write (*, '(A,F10.4,A,F10.4,A,F10.4,A,F10.4,A,F10.4,A,F10.4,A,F10.4)') '   levels (summed over threads): dense', tg(5), '  BF init', tg(6), '  right', tg(7), &
+				'  all2all', tg(8), '  middle', tg(9), '  left', tg(10), '  cleanup', tg(11)
+			write (*, '(A,F10.4,A,F10.4,A,F10.4,A,F10.4,A,F10.4,A,F10.4)') '   redistribution (in + out): setup', tg(12), '  self copy', tg(13), &
+				'  pack', tg(14), '  MPI', tg(15), '  unpack', tg(16), '  total', tg(17)
+		endif
+	end subroutine tensor_mvp_profile_CHEB
+
+	!**** ButterflyPACK's HMatVec interface for GMRES: the product with the tensor forest
+	subroutine tensor_blackbox_MVP_CHEB(trans, M, N, num_vect, Vin, Vout, ker)
+		implicit none
+		character trans
+		integer, INTENT(IN):: M, N, num_vect
+		complex(kind=8):: Vin(:, :), Vout(:, :)
+		type(z_kernelquant):: ker
+		select TYPE (tf => ker%QuantApp)
+		type is (tforest_CHEB)
+			call tensor_mult_CHEB(tf, num_vect, Vin, Vout)
+		class default
+			write (*, *) "unexpected type"
+			stop
+		end select
+	end subroutine tensor_blackbox_MVP_CHEB
+
+	!**** ButterflyPACK's HMatVec interface: no preconditioner
+	subroutine identity_MVP_CHEB(trans, M, N, num_vect, Vin, Vout, ker)
+		implicit none
+		character trans
+		integer, INTENT(IN):: M, N, num_vect
+		complex(kind=8):: Vin(:, :), Vout(:, :)
+		type(z_kernelquant):: ker
+		Vout(1:M, 1:num_vect) = Vin(1:M, 1:num_vect)
+	end subroutine identity_MVP_CHEB
+
+	!**** accuracy of the tensor-forest product: Z*x for a random x against the uncompressed entries on a sample of rows
+	subroutine tensor_mvp_check_CHEB(tf, quant, ptree)
+		implicit none
+		type(tforest_CHEB):: tf
+		type(quant_ACOUSTIC_CHEB):: quant
+		type(z_proctree):: ptree
+		integer nl, nsamp, kk, ii, n, ierr
+		real(kind=8), allocatable:: xr(:, :)
+		complex(kind=8), allocatable:: x(:, :), y(:, :), xg(:)
+		complex(kind=8) val
+		real(kind=8) errs(2), errg(2)
+
+		nl = tf%nloc*tf%nface
+		allocate (xr(max(nl, 1), 2), x(max(nl, 1), 1), y(max(nl, 1), 1), xg(quant%Nunk))
+		call random_number(xr)
+		x(:, 1) = cmplx(xr(:, 1) - 0.5d0, xr(:, 2) - 0.5d0, kind=8)
+		xg = 0d0
+		do ii = 1, nl
+			xg(tf%gidx(mod(ii - 1, tf%nloc) + 1, (ii - 1)/tf%nloc + 1)) = x(ii, 1)
+		enddo
+		call MPI_ALLREDUCE(MPI_IN_PLACE, xg, quant%Nunk, MPI_DOUBLE_COMPLEX, MPI_SUM, ptree%Comm, ierr)
+		call tensor_mult_CHEB(tf, 1, x, y)
+		errs = 0d0
+		nsamp = min(nl, 8)
+		do kk = 1, nsamp
+			ii = 1 + ((kk - 1)*nl)/nsamp
+			val = 0d0
+#ifdef HAVE_OPENMP
+			!$omp parallel do default(shared) private(n) reduction(+:val)
+#endif
+			do n = 1, quant%Nunk
+				val = val + Zentry_CHEB(quant, tf%gidx(mod(ii - 1, tf%nloc) + 1, (ii - 1)/tf%nloc + 1), n)*xg(n)
+			enddo
+#ifdef HAVE_OPENMP
+			!$omp end parallel do
+#endif
+			errs(1) = errs(1) + abs(y(ii, 1) - val)**2
+			errs(2) = errs(2) + abs(val)**2
+		enddo
+		call MPI_ALLREDUCE(errs, errg, 2, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+		if (ptree%MyID == Main_ID) write (*, '(A,Es12.4)') ' tensor forest product vs. uncompressed entries (random vector, sampled rows):', sqrt(errg(1)/errg(2))
+		deallocate (xr, x, y, xg)
+	end subroutine tensor_mvp_check_CHEB
+
+	!**** forward-map test of the tensor forest on the sphere
+	subroutine tensor_forward_map_test_CHEB(tf, quant, ptree)
+		implicit none
+		type(tforest_CHEB):: tf
+		type(quant_ACOUSTIC_CHEB):: quant
+		type(z_proctree):: ptree
+		integer nl, ii
+		integer, allocatable:: gi(:)
+		real(kind=8), allocatable:: Y(:)
+		complex(kind=8), allocatable:: vin(:, :), vout(:, :)
+		complex(kind=8) lam
+
+		if (quant%geo /= CHEB_SPHERE .or. quant%eigtest <= 0) return
+		call eigtest_Y_CHEB(quant, Y, lam)
+		nl = tf%nloc*tf%nface
+		allocate (gi(max(nl, 1)), vin(max(nl, 1), 1), vout(max(nl, 1), 1))
+		do ii = 1, nl
+			gi(ii) = tf%gidx(mod(ii - 1, tf%nloc) + 1, (ii - 1)/tf%nloc + 1)
+			vin(ii, 1) = Y(gi(ii))
+			if (quant%unknown == UNK_PSI) vin(ii, 1) = vin(ii, 1)*quant%e(gi(ii))
+		enddo
+		call tensor_mult_CHEB(tf, 1, vin, vout)
+		call forward_map_report_CHEB(quant, ptree, nl, gi, vout(:, 1), Y, lam)
+		deallocate (Y, gi, vin, vout)
+	end subroutine tensor_forward_map_test_CHEB
+
+	!**** solve for a plane wave by GMRES with the tensor-forest product (no preconditioner) and evaluate the far field
+	subroutine tensor_solve_CHEB(tf, quant, option, ptree)
+		use z_BPACK_Solve_Mul
+		use z_BPACK_utilities
+		implicit none
+		type(tforest_CHEB), target:: tf
+		type(quant_ACOUSTIC_CHEB):: quant
+		type(z_Hoption):: option
+		type(z_proctree):: ptree
+		type(z_kernelquant):: kert
+		type(z_Hstat):: stats_sol
+		integer nl, ii, iter, restart, nmvp0
+		integer, allocatable:: gi(:)
+		real(kind=8) t1, t2, relres, tmvp0, tp0(19), tp1(19)
+		complex(kind=8), allocatable:: x(:, :), b(:, :)
+
+		nl = tf%nloc*tf%nface
+		allocate (gi(max(nl, 1)), x(max(nl, 1), 1), b(max(nl, 1), 1))
+		do ii = 1, nl
+			gi(ii) = tf%gidx(mod(ii - 1, tf%nloc) + 1, (ii - 1)/tf%nloc + 1)
+			b(ii, 1) = -exp(BPACK_junit*quant%wavenum*dot_product(quant%dinc, quant%xyz(:, gi(ii))))
+		enddo
+		x = 0d0
+		call z_InitStat(stats_sol)
+		kert%QuantApp => tf
+		restart = 30
+		if (quant%gmres_restart > 0) restart = quant%gmres_restart
+		iter = 0
+		relres = option%tol_itersol
+		tmvp0 = tf%tmvp
+		nmvp0 = tf%nmvp
+		call tensor_mvp_timers_CHEB(tf, tp0)
+		t1 = MPI_Wtime()
+		call z_BPACK_Zgmres_usermatvec_precon(option%n_iter, nl, b, x, relres, iter, tensor_blackbox_MVP_CHEB, identity_MVP_CHEB, &
+			&	ptree, option, stats_sol, kert, restart_in=restart)
+		t2 = MPI_Wtime()
+		call tensor_mvp_timers_CHEB(tf, tp1)
+		if (ptree%MyID == Main_ID) then
+			write (*, '(A,I5,A,I6,A,Es12.4)') ' GMRES(', restart, ') iterations:', iter, '   relative residual:', relres
+			write (*, '(A,F12.3,A,F10.4,A)') ' tensor forest solve time:', t2 - t1, ' s,', (tf%tmvp - tmvp0)/max(1, tf%nmvp - nmvp0), ' s per product'
+		endif
+		call tensor_mvp_profile_CHEB(tf, ptree, tp0, tp1, tf%tmvp - tmvp0, tf%nmvp - nmvp0)
+		call farfield_CHEB(quant, ptree, nl, gi, x(:, 1))
+		call z_delete_Hstat(stats_sol)
+		deallocate (gi, x, b)
+	end subroutine tensor_solve_CHEB
+
+	!**** delete the tensor forest
+	subroutine tensor_delete_CHEB(tf)
+		use z_BPACK_utilities
+		implicit none
+		type(tforest_CHEB):: tf
+		integer p1, q1, d
+		do q1 = 1, tf%nface
+			do p1 = 1, tf%nface
+				call z_BPACK_delete(tf%bmat(p1, q1))
+				do d = 1, 2
+					call z_delete_mesh(tf%msh(d, p1, q1))
+				enddo
+				call z_delete_kernelquant(tf%ker(p1, q1))
+				call z_delete_Hstat(tf%stats(p1, q1))
+			enddo
+		enddo
+		deallocate (tf%bmat, tf%msh, tf%ker, tf%stats, tf%pair)
+		if (allocated(tf%gidx)) deallocate (tf%gidx)
+	end subroutine tensor_delete_CHEB
+
+	!**** the tensor-forest pipeline: construction, accuracy checks, iterative solve and far field (quant%tensor=1)
+	subroutine tensor_run_CHEB(quant, option, ptree)
+		use z_BPACK_utilities
+		implicit none
+		type(quant_ACOUSTIC_CHEB), target:: quant
+		type(z_Hoption), target:: option
+		type(z_proctree), target:: ptree
+		type(tforest_CHEB), target:: tf
+
+		option%format = HTENSOR
+		option%nogeo = 2 ! admissibility by NearFar_tensor_CHEB: the geometric test of the HTENSOR format assumes a Cartesian grid
+		option%xyzsort = NATURAL
+		option%Nmin_leaf = quant%N ! a leaf of a per-dimension tree is one patch
+		option%knn = 0
+		option%trans_invariant = 0
+		if (option%elem_extract == 0) option%elem_extract = 2 ! subtensor extraction: each near-field weight row once per subtensor
+		quant%tnear_para = option%near_para
+		call tensor_setup_CHEB(quant, ptree)
+		call z_PrintOptions(option, ptree)
+		call tensor_build_CHEB(tf, quant, option, ptree)
+		call nearfield_report_CHEB(quant, ptree)
+		call tensor_forward_map_test_CHEB(tf, quant, ptree)
+		call tensor_mvp_check_CHEB(tf, quant, ptree)
+		call tensor_solve_CHEB(tf, quant, option, ptree)
+		call tensor_delete_CHEB(tf)
+	end subroutine tensor_run_CHEB
 
 end module Acoustic_SURF_MODULE_CHEB

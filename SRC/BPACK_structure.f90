@@ -161,6 +161,7 @@ contains
       type(mesh)::msh(Ndim)
       ! procedure(F_Compressibility), POINTER :: proc1
       procedure(C_Compressibility_MD), POINTER :: proc1_c_md
+      procedure(F_Compressibility_MD), POINTER :: proc1_md
 
       if (option%nogeo == 0 .or. option%nogeo == 4) then  ! geometrical information is provided
          near_or_far_user_MD = near_or_far_geo_MD(group_m, group_n, Ndim, msh, option, ker, para)
@@ -175,10 +176,9 @@ contains
             call c_f_procpointer(ker%C_FuncNearFar_MD, proc1_c_md)
             call proc1_c_md(Ndim, group_m, group_n, near_or_far_user_MD, ker%C_QuantApp)
          else
-            ! proc1 => ker%FuncNearFar
-            ! call proc1(group_m, group_n, near_or_far_user, ker%QuantApp)
-            write(*,*)"near_or_far_user_MD with nogeo=2 has not been implemented in the Fortran interface"
-            stop
+            call assert(associated(ker%FuncNearFar_MD), 'option%nogeo=2 requires ker%FuncNearFar_MD')
+            proc1_md => ker%FuncNearFar_MD
+            call proc1_md(Ndim, group_m, group_n, near_or_far_user_MD, ker%QuantApp)
          endif
       endif
 

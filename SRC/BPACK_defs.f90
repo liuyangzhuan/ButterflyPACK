@@ -884,6 +884,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         real(kind=8) Time_C_Mult_RedistIn, Time_C_Mult_RedistOut, Time_C_Mult_Level, Time_C_Mult_TransPlan
         real(kind=8) Time_C_Mult_RedistSelf, Time_C_Mult_RedistPack, Time_C_Mult_RedistMPI, Time_C_Mult_RedistUnpack
         real(kind=8) Time_C_Mult_RedistSetup, Time_C_Mult_RedistSetupLocal, Time_C_Mult_RedistAlloc, Time_C_Mult_RedistFree, Time_C_Mult_RedistTotal
+        real(kind=8) Time_C_Mult_Local !< wall time of the products with the single-rank blocks of MD layers (Bplus_MD_local_blocks_MVP)
         real(kind=8) Time_C_Mult_Pack, Time_C_Mult_Full, Time_C_Mult_Unpack, Time_C_Mult_Final
         real(kind=8) Time_C_Mult_Reshape, Time_C_Mult_Gemm
         real(kind=8) Time_C_Mult_Reshape_Init, Time_C_Mult_Reshape_Right, Time_C_Mult_Reshape_Middle, Time_C_Mult_Reshape_Left, Time_C_Mult_Reshape_Final
@@ -928,6 +929,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         procedure(F_Zelem_MD), nopass, pointer :: FuncZmn_MD => null() !< Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing one element of Z (as tensors)
         procedure(F_Dist), nopass, pointer :: FuncDistmn => null() !< Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing distance between one row and one column
         procedure(F_Compressibility), nopass, pointer :: FuncNearFar => null() !< Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for determining whether a block in Z (after permutation) is compressible or not
+        procedure(F_Compressibility_MD), nopass, pointer :: FuncNearFar_MD => null() !< Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for determining whether a block in Z (as tensors, after permutation) is compressible or not (option%nogeo=2)
         procedure(F_Zelem_block), nopass, pointer :: FuncZmnBlock => null() !< Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing a list of intersection of indices from Z (data layout needs to be provided)
         procedure(F_Zelem_MD_block), nopass, pointer :: FuncZmnBlock_MD => null() !< Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing a list of intersection of indices from Z (data layout needs to be provided) (as tensors)
         procedure(F_HMatVec), nopass, pointer :: FuncHMatVec => null() !< Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing matvec of Z
@@ -1051,6 +1053,14 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
             integer, INTENT(IN):: groupm, groupn
             integer::val
         end subroutine F_Compressibility
+
+        !> interface of user-defined compressibility routine in Fortran for tensors. groupm,groupn represents (multi-dimensional) groups in the permuted order; val=0: near (inadmissible), val=1: far (compressible)
+        subroutine F_Compressibility_MD(Ndim, groupm, groupn, val, quant)
+            class(*), pointer :: quant
+            integer, INTENT(IN):: Ndim
+            integer, INTENT(IN):: groupm(Ndim), groupn(Ndim)
+            integer::val
+        end subroutine F_Compressibility_MD
 
         !> interface of user-defined element extraction routine in Fortran. allrows,allcols represents indices in natural order
         subroutine F_Zelem_block(Ninter, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps, quant)

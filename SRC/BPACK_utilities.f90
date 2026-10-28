@@ -793,6 +793,7 @@ contains
       stats_o%Time_C_Mult_RedistAlloc = stats_i%Time_C_Mult_RedistAlloc
       stats_o%Time_C_Mult_RedistFree = stats_i%Time_C_Mult_RedistFree
       stats_o%Time_C_Mult_RedistTotal = stats_i%Time_C_Mult_RedistTotal
+      stats_o%Time_C_Mult_Local = stats_i%Time_C_Mult_Local
       stats_o%Time_C_Mult_Pack = stats_i%Time_C_Mult_Pack
       stats_o%Time_C_Mult_Full = stats_i%Time_C_Mult_Full
       stats_o%Time_C_Mult_Unpack = stats_i%Time_C_Mult_Unpack
@@ -933,6 +934,7 @@ contains
       stats%Time_C_Mult_RedistAlloc = 0
       stats%Time_C_Mult_RedistFree = 0
       stats%Time_C_Mult_RedistTotal = 0
+      stats%Time_C_Mult_Local = 0
       stats%Time_C_Mult_Pack = 0
       stats%Time_C_Mult_Full = 0
       stats%Time_C_Mult_Unpack = 0
