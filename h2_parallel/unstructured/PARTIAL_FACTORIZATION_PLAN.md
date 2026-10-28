@@ -582,7 +582,7 @@ point set and on a plain cube split, dense checks at small N.
     4 ranks: rank 0's RSS 4.20 -> 2.76 GB.  Raw records at 64^3: level 3
     keeps 7.04 GB, the store cannot take the rest, so they spill at the first
     CB use and the host runs (as before G4).
-  - **G5 done 2026-10-26 (uncommitted): the CB entries' exchanges GPU to
+  - **G5 done 2026-10-26 (committed f783fd7): the CB entries' exchanges GPU to
     GPU.**  The two exchanges of partial_schur_blocks_device (the level
     terms' remote blocks, tag 620, and the parent blocks of another rank's
     parent, 621) carried the values inside host byte messages: gathered and
@@ -611,3 +611,59 @@ point set and on a plain cube split, dense checks at small N.
     ranks' sum order).  Not done: NCCL (the exchanges are now under a fifth
     of the round); the product's exchanges (610/611) carry host vectors -
     the product keeps its vectors on the host (G2), 0.063 s at 4 ranks.
+- **Proxy modes (2026-10-28, uncommitted): `H2_ID_proxy` 1 and 2 in the
+  partial factorization, CPU and GPU.**  The option check refused both.
+  Mode 1's static training rows were already evaluated against each
+  target's own columns - the F11 step's box points, the F22 step's live
+  slots before it - on the host (gather_id_target_streamed_nonsymmetric's
+  rows_of over column_ids) and on the device (the sketch plan's row blocks
+  over the plan's columns), so mode 1 needed the check lifted only.  Mode 2
+  (adaptive rows) selected its rows with a plain ID over all of a target's
+  columns and evaluated them against the box's first points: in the F22
+  phase the columns are the live slots (column_slots), so the rows were
+  evaluated against the wrong points, and in both steps the ID the rows are
+  judged under was not the step's (the F11 columns alone, compute_id_partial;
+  the F22 columns, before the near F11 rows join them).  Now:
+  - host: append_adaptive_id_training_rows takes the columns' points and the
+    columns the ID is over, selects on a copy of those, and returns its rows
+    zero in the others, which no ID reads; gather_id_target_streamed_nonsymmetric
+    passes the F11 columns, or in the F22 phase the F22 ones;
+  - device, the F11 step: the selector's targets are the F11 columns, the
+    first nk of the moved sketch (their slots a device list, IndexList::ptr,
+    which outlives the rounds' images); the moving gathers honour the taller
+    target's leading dimension; a box without F11 columns takes no ID (its
+    rank and flag zeroed); T comes from the selector's block;
+  - device, the F22 step: sketch_wave starts no selector for it any more;
+    f22_adaptive_rows runs one after the far sketches, over each box's F22
+    columns, and its targets (the sketch's F22 columns, then the selected
+    rows) head the F22 ID targets;
+  - BPACK_TRACE=id also writes the F22 IDs (`F22 L.. m=.. n22 k22 rows
+    adaptive=...`), the same lines on the host and the device;
+  - the driver's partial checks run on the tree-order handle
+    (`--distributed64 0`), which the proxy modes need (every rank holds the
+    points' global order) and which is how STRUMPACK sets up its H2: a
+    rank's rows map to input points through the construct-init permutation.
+  Validation (Laplace, skew 0.5, tol 1e-6; dense checks against LAPACK):
+  - 20^3, F11 = 1200, 1 and 3 ranks, proxy 0/1/2: CPU and GPU print the same
+    dense check digits and the same F22 counts in every mode (e.g. proxy 2,
+    1 rank: schur_mult 6.600e-07, extract 1.999e-07, forward 6.048e-07,
+    backward 4.276e-06, against proxy 0's 7.168e-07 / 2.595e-07 / 6.972e-07
+    / 4.289e-06); BPACK_CHECK=solve: every partial forward/backward, CB
+    product and CB entries call GPU = host to 2.4e-15;
+  - BPACK_TRACE=id, CPU against GPU box by box: k of the F11 IDs and k22,
+    target rows of the F22 IDs identical in all 64 boxes, the adaptive
+    statistics too (proxy 2: 16 boxes take 173 rows in the F11 step, 64
+    boxes 1472 rows in the F22 step; 1 and 3 ranks);
+  - 32^3, F11 = 4096, 8 ranks (two F22 levels), proxy 1 and 2: CPU = GPU to
+    every printed digit (proxy 2 backward 2.787e-05, residual ~1e-06, as
+    proxy 0's 3.0e-05 on this case, cond1(A11) 714); checks <= 5.1e-15;
+  - proxy 2 with H2_compress_factors 1 (3 ranks, GPU): the records'
+    quantization moves the checks in the third digit (2.017e-07 ->
+    2.021e-07);
+  - unchanged paths bitwise (old library against new, same job): the full
+    nonsymmetric factorization with proxy 2 (logdet -116124.48982492738 CPU,
+    ...792 GPU) and the partial factorization with proxy 0 on the
+    distributed64 handle (CPU and GPU, dense checks and logdet).
+  Runs: /pscratch/sd/l/liuyangz/bpack_partial_runs/proxy (t_, u_, v_, x_
+  logs; cmp_traces.py compares two traces).  Not measured: the modes' cost
+  at scale (20^3: the device F22 step 35 -> 48 ms with proxy 2).

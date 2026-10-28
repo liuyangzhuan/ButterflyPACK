@@ -684,6 +684,11 @@ void partial_f22_phase(fmm::ParallelTree<CoordType, DataType>* tree, fmm::TreeLe
                 t_id += MPI_Wtime() - t0;
                 const int64_t k22 = static_cast<int64_t>(id.skeleton_indices.size());
                 const int64_t r22 = static_cast<int64_t>(id.redundant_indices.size());
+                if (fmm::h2_id_trace_enabled()) {  // (BPACK_TRACE=id; the device's F22 step writes the same)
+                    fmm::h2_id_trace_write("F22 L" + std::to_string(level.level) + " m=" + std::to_string(b.morton_index) +
+                                           " n22=" + std::to_string(n22) + " k22=" + std::to_string(k22) +
+                                           " rows=" + std::to_string(rows) + fmm::h2_id_adaptive_trace(scratch.id_adaptive));
+                }
                 kept_points += k22;
                 // nothing to sparsify: the box stays as it is (its live set
                 // unchanged, no records)

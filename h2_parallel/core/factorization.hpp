@@ -5215,6 +5215,10 @@ std::vector<DataType> compute_adaptive_id_residual(
 // A nonsymmetric matrix (is_symmetric false): each sampled or hold-out far
 // point gives the two rows the stacked ID target holds of it, K(p, B) and
 // K(B, p)^T (the points' K(P, B) rows, then their K(B, P)^T rows).
+// column_ids: the points of the workspace's columns (null: the box's first
+// workspace_cols points).  id_columns (H2_partial): the columns the box's ID
+// is taken over, one part's; the selection runs on those alone, and the rows
+// it appends are zero in the others, which no ID reads.
 template<typename CoordType, typename DataType, typename KernelType>
 void append_adaptive_id_training_rows(
     const ParallelTree<CoordType, DataType>* tree,
@@ -5225,10 +5229,41 @@ void append_adaptive_id_training_rows(
     std::vector<DataType>& workspace,
     int64_t& workspace_rows,
     int64_t workspace_cols,
-    IDAdaptiveStats* stats = nullptr) {
+    IDAdaptiveStats* stats = nullptr,
+    const int64_t* column_ids = nullptr,
+    const std::vector<int64_t>* id_columns = nullptr) {
 
     if (stats != nullptr) *stats = IDAdaptiveStats{};
     if (tree->id_proxy_mode != 2 || workspace_cols == 0) return;
+    if (column_ids == nullptr) column_ids = box->point_indices.data();
+    if (id_columns != nullptr && static_cast<int64_t>(id_columns->size()) != workspace_cols) {
+        const int64_t nk = static_cast<int64_t>(id_columns->size());
+        if (nk == 0) return;
+        std::vector<int64_t> sub_ids(static_cast<size_t>(nk));
+        std::vector<DataType> sub(static_cast<size_t>(workspace_rows * nk));
+        for (int64_t j = 0; j < nk; ++j) {
+            const int64_t c = (*id_columns)[static_cast<size_t>(j)];
+            sub_ids[static_cast<size_t>(j)] = column_ids[c];
+            std::copy_n(workspace.data() + c * workspace_rows, workspace_rows, sub.data() + j * workspace_rows);
+        }
+        int64_t sub_rows = workspace_rows;
+        append_adaptive_id_training_rows(tree, box, kernel, tolerance, is_symmetric, sub, sub_rows, nk, stats,
+                                         sub_ids.data());
+        if (sub_rows == workspace_rows) return;
+        const int64_t old_rows = workspace_rows;
+        std::vector<DataType> expanded(static_cast<size_t>(sub_rows * workspace_cols), DataType{0});
+        for (int64_t c = 0; c < workspace_cols; ++c) {
+            std::copy_n(workspace.data() + c * old_rows, old_rows, expanded.data() + c * sub_rows);
+        }
+        for (int64_t j = 0; j < nk; ++j) {
+            const int64_t c = (*id_columns)[static_cast<size_t>(j)];
+            std::copy_n(sub.data() + j * sub_rows + old_rows, sub_rows - old_rows,
+                        expanded.data() + c * sub_rows + old_rows);
+        }
+        workspace.swap(expanded);
+        workspace_rows = sub_rows;
+        return;
+    }
     // H2_s_op: the IDs' absolute floor, and the residual tests' floor
     // (threshold = max(tol ||W||_F, tol s_op))
     const double abs_tolerance = id_absolute_tolerance(tree, tolerance);
@@ -5242,11 +5277,11 @@ void append_adaptive_id_training_rows(
         const int64_t m = is_symmetric ? p : 2 * p;
         rows.assign(static_cast<size_t>(m * workspace_cols), DataType{0});
         kernel->evaluate_block_by_index(
-            points.data(), p, box->point_indices.data(), workspace_cols, rows.data(), m);
+            points.data(), p, column_ids, workspace_cols, rows.data(), m);
         if (!is_symmetric) {
             std::vector<DataType> kbp(static_cast<size_t>(workspace_cols * p));
             kernel->evaluate_block_by_index(
-                box->point_indices.data(), workspace_cols, points.data(), p, kbp.data(), workspace_cols);
+                column_ids, workspace_cols, points.data(), p, kbp.data(), workspace_cols);
             for (int64_t c = 0; c < workspace_cols; ++c) {
                 for (int64_t i = 0; i < p; ++i) {
                     rows[static_cast<size_t>(p + i + c * m)] = kbp[static_cast<size_t>(c + i * workspace_cols)];
@@ -10053,9 +10088,19 @@ void gather_id_target_streamed_nonsymmetric(
     for (int64_t j = 0; j < n; ++j) {
         for (int64_t i = 0; i < d; ++i) Y[static_cast<size_t>(i + j * d)] = Oacc[static_cast<size_t>(i * n + j)];
     }
-    // adaptive far rows (H2_ID_proxy 2), as gather_id_target_streamed's
+    // adaptive far rows (H2_ID_proxy 2), as gather_id_target_streamed's;
+    // H2_partial: selected for the columns the box's ID takes, the F11 ones
+    // (compute_id_partial), or in the F22 phase (column_slots) the F22 ones
     int64_t sketch_rows = d;
-    append_adaptive_id_training_rows(tree, box, kernel, id_tolerance, false, Y, sketch_rows, n, &scratch.id_adaptive);
+    std::vector<int64_t> id_columns;
+    const bool partial_ids = level.partial_count > 0 && tree->id_proxy_mode == 2;
+    if (partial_ids) {
+        for (int64_t c = 0; c < n; ++c) {
+            if ((column_ids[c] < level.partial_count) == (column_slots == nullptr)) id_columns.push_back(c);
+        }
+    }
+    append_adaptive_id_training_rows(tree, box, kernel, id_tolerance, false, Y, sketch_rows, n, &scratch.id_adaptive,
+                                     column_ids, partial_ids ? &id_columns : nullptr);
     scratch.workspace_rows = total_rows + (sketch_rows - d);
     scratch.workspace_cols = n;
     scratch.streamed_sketch_rows = sketch_rows;
