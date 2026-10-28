@@ -69,6 +69,11 @@ public:
     ColorGpuDriver(Tree* tree, KernelType* kernel, const Options& options)
         : tree_(tree), kernel_(kernel), opt_(options) {}
 
+    // The chunks pinned ahead for this factorization are waited for here, so
+    // that no pinning thread is left running into the CUDA runtime's teardown
+    // at process exit (PinnedChunkPool::drain).
+    ~ColorGpuDriver() { pinned_chunk_pool().drain(); }
+
     // Before the first level of the process's first factorization (of this
     // data type): the batched LU, the two solves of X_RR^{-1} and the three
     // GEMM forms once per size range, so no level pays the first-use loading
