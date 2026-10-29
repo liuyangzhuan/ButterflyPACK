@@ -611,7 +611,7 @@ point set and on a plain cube split, dense checks at small N.
     ranks' sum order).  Not done: NCCL (the exchanges are now under a fifth
     of the round); the product's exchanges (610/611) carry host vectors -
     the product keeps its vectors on the host (G2), 0.063 s at 4 ranks.
-- **Proxy modes (2026-10-28, uncommitted): `H2_ID_proxy` 1 and 2 in the
+- **Proxy modes (2026-10-28, committed 99f9b43): `H2_ID_proxy` 1 and 2 in the
   partial factorization, CPU and GPU.**  The option check refused both.
   Mode 1's static training rows were already evaluated against each
   target's own columns - the F11 step's box points, the F22 step's live
@@ -667,3 +667,47 @@ point set and on a plain cube split, dense checks at small N.
   Runs: /pscratch/sd/l/liuyangz/bpack_partial_runs/proxy (t_, u_, v_, x_
   logs; cmp_traces.py compares two traces).  Not measured: the modes' cost
   at scale (20^3: the device F22 step 35 -> 48 ms with proxy 2).
+- **Entries through a collective callback (2026-10-28, uncommitted).**  The
+  STRUMPACK session's testH2Partial (BPACKMatrix over F11 then F22, its
+  entries from a block callback, elem_extract 1) threw "H2 entries: a block
+  not fetched yet (collective callback)" once the tree was deep enough (16^3,
+  leaf 64; leaf 256 passed), on the CPU.  The F22 step's host passes asked
+  for kernel blocks - the far sketch, a box's self block when the F11 step
+  formed none, and the near blocks of the pairs no elimination touched -
+  outside an entry item, where a miss throws at once (collective_entries.hpp)
+  instead of being recorded for a round.  Now:
+  - host: both passes run as entry phases (run_entry_phase).  A box asks for
+    all its blocks before its checkpoint and changes nothing outside itself
+    before it: the kernel's self block is kept by the item until then, and
+    a pair without a view takes its X_RN block (pass 1) or X_NR block
+    (pass 2) over all of S_old, the rows or columns the ID keeps then sliced
+    from it (the same entries as the two blocks over posR and posS; the ID
+    is not known before the checkpoint).  A box abandoned at its checkpoint
+    runs again from the start after the round;
+  - device: the passes fetch on the spot (the collective evaluator) as
+    before; the driver quiesces the level's ranks after f22_ids and
+    f22_records, before the step's exchanges between ranks;
+  - the driver reproduces it without STRUMPACK: `--extract_ranks P
+    --H2_partial n11` (the partial H2 from a compression-only H2's entries;
+    the source no longer inherits H2_partial).
+  Validation (skew Laplace or STRUMPACK's test kernel, tol 1e-6):
+  - testH2Partial 16^3, F11 2048, leaf 64, 1 rank: the old library throws,
+    the new one passes (CB entries 8.5e-07, product 7.8e-07, forward 1.4e-06,
+    backward 1.8e-06 against dense LAPACK), CPU = GPU to every printed digit;
+    20^3 (F11 4000) too; leaf 256 (which passed before): old = new bitwise.
+    Its runs on 2+ ranks crash in the first level's waves for the full
+    factorization (F11 0) as well, old library and new: its callback is
+    BPACK_block_evaluation_seq, which fills every intersection of a round
+    into the local buffer (a round's intersections are the asking ranks'),
+    a limit of the test, not of the H2;
+  - the driver with `--extract_ranks 1`, 16^3, F11 2048, leaf 64: the old
+    library throws; the new one passes on 1, 4 and 8 ranks (CPU) and 1 and
+    4 GPUs, the dense checks the same digits on 4 ranks CPU and GPU and 8
+    ranks (schur_mult 2.605e-06, extract 1.012e-06, forward 2.173e-06,
+    backward 1.918e-05; 1 rank 2.499e-06 / 1.018e-06 / 2.146e-06 / 2.305e-05,
+    the source's compression error included), proxy 2 CPU = GPU;
+  - unchanged bitwise (old library against new, entries direct): 20^3,
+    F11 1200, proxy 0 on 1 and 3 ranks CPU and GPU and proxy 2, and 16^3
+    leaf 64: logdets, dense checks and every box's BPACK_TRACE=id line.
+  Runs: /pscratch/sd/l/liuyangz/bpack_partial_runs/coll (s_ STRUMPACK's
+  test, x_ the driver from a source, d_ direct; cmp.sh).

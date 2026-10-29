@@ -1506,7 +1506,11 @@ int main(int argc, char** argv) {
       // callback on its own ranks)
       d_c_bpack_set_I_option(&source.option, "ErrSol", 0);
       d_c_bpack_set_I_option(&source.option, "elem_extract", 2);
-      if (driver_options.format == 7) d_c_bpack_set_I_option(&source.option, "precon", 2);
+      if (driver_options.format == 7) {
+        // (with --H2_partial the H2 under test is the partial one)
+        d_c_bpack_set_I_option(&source.option, "precon", 2);
+        d_c_bpack_set_I_option(&source.option, "H2_partial", 0);
+      }
       int point_count = static_cast<int>(point_count_64);
       int nlevel = 0;
       int user_tree = point_count;

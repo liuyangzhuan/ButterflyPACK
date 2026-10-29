@@ -542,13 +542,49 @@ void partial_f22_phase(fmm::ParallelTree<CoordType, DataType>* tree, fmm::TreeLe
                                                                       : v->a_ns(ps[static_cast<size_t>(i)], qs[static_cast<size_t>(c)]);
             return out;
         };
-        // ---- pass 1: the IDs and the own records
+        // a pair without a view: its block over all of S_old (asked for
+        // before the box's checkpoint, the positions the ID keeps not known
+        // yet), and its rows or columns at positions ps
+        auto all_positions = [](int64_t k) {
+            std::vector<int64_t> ps(static_cast<size_t>(k));
+            std::iota(ps.begin(), ps.end(), int64_t{0});
+            return ps;
+        };
+        auto rows_at = [](const std::vector<DataType>& a, int64_t lda, const std::vector<int64_t>& ps, int64_t n) {
+            const int64_t m = static_cast<int64_t>(ps.size());
+            std::vector<DataType> out(static_cast<size_t>(m * n));
+            for (int64_t c = 0; c < n; ++c)
+                for (int64_t i = 0; i < m; ++i)
+                    out[static_cast<size_t>(i + c * m)] = a[static_cast<size_t>(ps[static_cast<size_t>(i)] + c * lda)];
+            return out;
+        };
+        auto cols_at = [](const std::vector<DataType>& a, int64_t m, const std::vector<int64_t>& ps) {
+            const int64_t n = static_cast<int64_t>(ps.size());
+            std::vector<DataType> out(static_cast<size_t>(m * n));
+            for (int64_t c = 0; c < n; ++c)
+                std::copy_n(a.data() + ps[static_cast<size_t>(c)] * m, m, out.data() + c * m);
+            return out;
+        };
+        // ---- pass 1: the IDs and the own records.  (Entries through a
+        // collective callback: a box asks for its kernel blocks - the far
+        // sketch's, the near F11 rows', its self block's and the X_RN blocks
+        // of its pairs without a view - before its checkpoint and changes
+        // nothing outside itself before it, so one abandoned there for a
+        // block not fetched yet runs again from the start after the round.)
+        std::vector<int64_t> boxes(occupied_local.size());
+        std::iota(boxes.begin(), boxes.end(), int64_t{0});
+        fmm::run_entry_phase(fmm::kernel_entries(kernel, 0), std::move(boxes), [&](const std::vector<int64_t>& items) {
+        std::vector<int64_t> abandoned;
+        int64_t n_boxes = 0, n_points = 0, n_kept = 0;
+        double s_sketch = 0.0, s_target = 0.0, s_id = 0.0, s_records = 0.0;
 #pragma omp parallel
     {
         fmm::FactorizationThreadScratch<CoordType, DataType> scratch;
-#pragma omp for schedule(dynamic, 1) reduction(+ : sparsified_boxes, sparsified_points, kept_points, t_sketch, t_target, t_id, t_records)
-        for (int64_t oi = 0; oi < static_cast<int64_t>(occupied_local.size()); ++oi) {
+#pragma omp for schedule(dynamic, 1) reduction(+ : n_boxes, n_points, n_kept, s_sketch, s_target, s_id, s_records)
+        for (int64_t item = 0; item < static_cast<int64_t>(items.size()); ++item) {
+            const int64_t oi = items[static_cast<size_t>(item)];
             try {
+                fmm::entry_item_begin();
                 Box& b = level.local_boxes[static_cast<size_t>(occupied_local[static_cast<size_t>(oi)])];
                 const std::vector<int64_t>& S_old = b.skeleton_before_f22;
                 const int64_t k_old = static_cast<int64_t>(S_old.size());
@@ -558,24 +594,26 @@ void partial_f22_phase(fmm::ParallelTree<CoordType, DataType>* tree, fmm::TreeLe
                     else pos22.push_back(q);
                 }
                 const int64_t n22 = static_cast<int64_t>(pos22.size()), k11 = static_cast<int64_t>(pos11.size());
-                if (n22 == 0) continue;
+                if (n22 == 0) {
+                    fmm::entry_item_end();
+                    continue;
+                }
+                MS kernel_self;  // (the box's at its checkpoint)
                 if (!b.schur_complement.is_allocated() && k_old == b.num_points) {
                     // a box nothing eliminated and no update reached keeps no
                     // self block on the device path: it is the kernel's
                     std::vector<int64_t> pts(static_cast<size_t>(k_old));
                     for (int64_t q = 0; q < k_old; ++q)
                         pts[static_cast<size_t>(q)] = b.point_indices[static_cast<size_t>(S_old[static_cast<size_t>(q)])];
-                    MS block;
-                    block.allocate(k_old, k_old, MS::FULL);
-                    kernel->evaluate_block_by_index(pts.data(), k_old, pts.data(), k_old, block.data.data(), k_old);
-                    b.schur_complement = std::move(block);
+                    kernel_self.allocate(k_old, k_old, MS::FULL);
+                    kernel->evaluate_block_by_index(pts.data(), k_old, pts.data(), k_old, kernel_self.data.data(), k_old);
                 }
-                if (!b.schur_complement.is_allocated() || b.schur_complement.rows != k_old) {
+                const MS* A = kernel_self.is_allocated() ? &kernel_self : &b.schur_complement;
+                if (!A->is_allocated() || A->rows != k_old) {
                     throw std::runtime_error("F22 phase: box " + std::to_string(b.morton_index) +
                                              " has no Schur block over its skeleton");
                 }
-                const MS& A = b.schur_complement;
-                auto Aat = [&](int64_t i, int64_t j) { return A.data[static_cast<size_t>(i + j * A.lda)]; };
+                auto Aat = [&](int64_t i, int64_t j) { return A->data[static_cast<size_t>(i + j * A->lda)]; };
                 // ---- the ID target: the far ring's sketch (columns = S_old),
                 // the near field's live F11 rows and the box's own, both orientations
                 // (the gather resets use_full_set for eliminated neighbours; the
@@ -585,7 +623,7 @@ void partial_f22_phase(fmm::ParallelTree<CoordType, DataType>* tree, fmm::TreeLe
                 fmm::gather_id_target_streamed_nonsymmetric(tree, &b, level, kernel, scratch, b.on_boundary, tolerance,
                                                              &S_old);
                 b.use_full_set = use_full_at_f11;
-                t_sketch += MPI_Wtime() - t0;
+                s_sketch += MPI_Wtime() - t0;
                 t0 = MPI_Wtime();
                 if (!scratch.streamed_sketch_valid || scratch.workspace_cols != k_old) {
                     throw std::runtime_error("F22 phase: no streamed sketch for box " + std::to_string(b.morton_index));
@@ -677,11 +715,23 @@ void partial_f22_phase(fmm::ParallelTree<CoordType, DataType>* tree, fmm::TreeLe
                         target[static_cast<size_t>(at + i + c * rows)] = Aat(pos22[static_cast<size_t>(c)], pos11[static_cast<size_t>(i)]);
                 at += k11;
                 if (at != rows) throw std::logic_error("F22 phase: target rows");
-                t_target += MPI_Wtime() - t0;
+                // K(b, nb raw F22) of the pairs without a view, for X_RN
+                std::vector<std::vector<DataType>> b_nb22(b.one_hop.size());
+                const std::vector<int64_t> all_old = all_positions(k_old);
+                for (size_t idx = 0; idx < b.one_hop.size(); ++idx) {
+                    if (near[idx].b_nb == nullptr && !near[idx].q22.empty())
+                        b_nb22[idx] = coupling_b_nb(b, near[idx], all_old, near[idx].q22);  // k_old x n
+                }
+                fmm::entry_checkpoint();  // (the box's requests are all made)
+                if (kernel_self.is_allocated()) {
+                    b.schur_complement = std::move(kernel_self);
+                    A = &b.schur_complement;
+                }
+                s_target += MPI_Wtime() - t0;
                 t0 = MPI_Wtime();
                 fmm::IDResult<DataType> id = fmm::compute_id_complex(target.data(), rows, n22, rows, tolerance, 0, abs_tol);
                 fmm::ensure_nonempty_box_id_rank(id, n22);
-                t_id += MPI_Wtime() - t0;
+                s_id += MPI_Wtime() - t0;
                 const int64_t k22 = static_cast<int64_t>(id.skeleton_indices.size());
                 const int64_t r22 = static_cast<int64_t>(id.redundant_indices.size());
                 if (fmm::h2_id_trace_enabled()) {  // (BPACK_TRACE=id; the device's F22 step writes the same)
@@ -689,10 +739,13 @@ void partial_f22_phase(fmm::ParallelTree<CoordType, DataType>* tree, fmm::TreeLe
                                            " n22=" + std::to_string(n22) + " k22=" + std::to_string(k22) +
                                            " rows=" + std::to_string(rows) + fmm::h2_id_adaptive_trace(scratch.id_adaptive));
                 }
-                kept_points += k22;
+                n_kept += k22;
                 // nothing to sparsify: the box stays as it is (its live set
                 // unchanged, no records)
-                if (r22 == 0) continue;
+                if (r22 == 0) {
+                    fmm::entry_item_end();
+                    continue;
+                }
                 // the ID's skeleton and redundant columns in their order in S_old
                 // (T's rows and columns permuted alike): S_old is S11 then F22
                 // (compute_id_partial), so S' = S11, S22 keeps S_old's order, and
@@ -760,8 +813,11 @@ void partial_f22_phase(fmm::ParallelTree<CoordType, DataType>* tree, fmm::TreeLe
                     const int64_t n = f.neighbor_f22_counts[idx];
                     if (n == 0) continue;
                     // K(b, nb raw F22) over (posR, posS)
-                    std::vector<DataType> A_RN = coupling_b_nb(b, near[idx], posR, near[idx].q22);  // r22 x n
-                    const auto A_SN = coupling_b_nb(b, near[idx], posS, near[idx].q22);           // kp x n
+                    const bool raw = near[idx].b_nb == nullptr;
+                    std::vector<DataType> A_RN = raw ? rows_at(b_nb22[idx], k_old, posR, n)
+                                                     : coupling_b_nb(b, near[idx], posR, near[idx].q22);  // r22 x n
+                    const auto A_SN = raw ? rows_at(b_nb22[idx], k_old, posS, n)
+                                          : coupling_b_nb(b, near[idx], posS, near[idx].q22);  // kp x n
                     partial_gemm<DataType>('T', 'N', r22, n, kp, DataType(-1), T, kp, A_SN.data(), kp, DataType(1), A_RN.data(), r22);
                     std::copy_n(A_RN.data(), static_cast<size_t>(r22 * n), f.X_RN.data.data() + col0 * r22);
                     col0 += n;
@@ -769,19 +825,37 @@ void partial_f22_phase(fmm::ParallelTree<CoordType, DataType>* tree, fmm::TreeLe
                 if (tree->partial_compress_records) {
                     for (auto* m : {&f.X_SR, &f.X_RS, &f.X_RR, &f.X_RN}) fmm::compress_record_host(*m, tolerance);
                 }
-                t_records += MPI_Wtime() - t0;
+                s_records += MPI_Wtime() - t0;
                 st.pos11 = std::move(pos11);
                 st.near = std::move(near);
                 kept[static_cast<size_t>(oi)] = st.posS;
-                ++sparsified_boxes;
-                sparsified_points += r22;
+                ++n_boxes;
+                n_points += r22;
+                fmm::entry_item_end();
+            } catch (const fmm::H2EntryMiss&) {
+#pragma omp critical(partial_f22_phase_abandoned)
+                abandoned.push_back(oi);
             } catch (...) {
+                if (fmm::entry_item_abandoned()) {
+#pragma omp critical(partial_f22_phase_abandoned)
+                    abandoned.push_back(oi);
+                    continue;
+                }
 #pragma omp critical(partial_f22_phase_failure)
                 if (!failure) failure = std::current_exception();
             }
         }
     }
         if (failure) std::rethrow_exception(failure);
+        sparsified_boxes += n_boxes;
+        sparsified_points += n_points;
+        kept_points += n_kept;
+        t_sketch += s_sketch;
+        t_target += s_target;
+        t_id += s_id;
+        t_records += s_records;
+        return abandoned;
+        });
         publish_kept();
         index_live();
         for (size_t oi = 0; oi < occupied_local.size(); ++oi) {
@@ -793,18 +867,38 @@ void partial_f22_phase(fmm::ParallelTree<CoordType, DataType>* tree, fmm::TreeLe
             }
         }
         // ---- pass 2: X_NR = A_NR - A_NS T over the neighbours' raw F22 points
-        // that stay live
-#pragma omp parallel for schedule(dynamic, 1) reduction(+ : t_records)
-        for (int64_t oi = 0; oi < static_cast<int64_t>(occupied_local.size()); ++oi) {
+        // that stay live (entries through a collective callback: as pass 1,
+        // a box's blocks of its pairs without a view before its checkpoint)
+        std::vector<int64_t> sparsified;
+        for (size_t oi = 0; oi < occupied_local.size(); ++oi) {
+            if (level.local_boxes[static_cast<size_t>(occupied_local[oi])].f22.sparsified) {
+                sparsified.push_back(static_cast<int64_t>(oi));
+            }
+        }
+        fmm::run_entry_phase(fmm::kernel_entries(kernel, 0), std::move(sparsified), [&](const std::vector<int64_t>& items) {
+        std::vector<int64_t> abandoned;
+        double s_records = 0.0;
+#pragma omp parallel for schedule(dynamic, 1) reduction(+ : s_records)
+        for (int64_t item = 0; item < static_cast<int64_t>(items.size()); ++item) {
+            const int64_t oi = items[static_cast<size_t>(item)];
             try {
+                fmm::entry_item_begin();
                 Box& b = level.local_boxes[static_cast<size_t>(occupied_local[static_cast<size_t>(oi)])];
                 auto& f = b.f22;
-                if (!f.sparsified) continue;
                 const double t0 = MPI_Wtime();
                 const Step& st = steps[static_cast<size_t>(oi)];
                 const int64_t kp = static_cast<int64_t>(st.posS.size()), r22 = static_cast<int64_t>(st.posR.size());
                 const DataType* T = f.T.data.data();
                 const size_t nn = b.one_hop.size();
+                // K(nb live F22, b) of the pairs without a view
+                const int64_t k_old = static_cast<int64_t>(b.skeleton_before_f22.size());
+                std::vector<std::vector<DataType>> nb22_b(nn);
+                for (size_t idx = 0; idx < nn; ++idx) {
+                    const auto& nr = st.near[idx];
+                    if (nr.nb_b == nullptr && !nr.q22_nr.empty())
+                        nb22_b[idx] = coupling_nb_b(b, nr, nr.q22_nr, all_positions(k_old));  // m x k_old
+                }
+                fmm::entry_checkpoint();  // (the box's requests are all made)
                 f.neighbor_nr_counts.assign(nn, 0);
                 f.neighbor_nr_slots.assign(nn, {});
                 for (size_t idx = 0; idx < nn; ++idx) {
@@ -818,19 +912,34 @@ void partial_f22_phase(fmm::ParallelTree<CoordType, DataType>* tree, fmm::TreeLe
                     const int64_t m = static_cast<int64_t>(nr.q22_nr.size());
                     if (m == 0) continue;
                     // K(nb live F22, b) over (posR, posS)
-                    std::vector<DataType> A_NR = coupling_nb_b(b, nr, nr.q22_nr, st.posR);  // m x r22
-                    const auto A_NS = coupling_nb_b(b, nr, nr.q22_nr, st.posS);           // m x kp
+                    const bool raw = nr.nb_b == nullptr;
+                    std::vector<DataType> A_NR = raw ? cols_at(nb22_b[idx], m, st.posR)
+                                                     : coupling_nb_b(b, nr, nr.q22_nr, st.posR);  // m x r22
+                    const auto A_NS = raw ? cols_at(nb22_b[idx], m, st.posS)
+                                          : coupling_nb_b(b, nr, nr.q22_nr, st.posS);  // m x kp
                     partial_gemm<DataType>('N', 'N', m, r22, kp, DataType(-1), A_NS.data(), m, T, kp, DataType(1), A_NR.data(), m);
                     f.X_NR[idx].assign(m, r22, A_NR);
                     if (tree->partial_compress_records) fmm::compress_record_host(f.X_NR[idx], tolerance);
                 }
-                t_records += MPI_Wtime() - t0;
+                s_records += MPI_Wtime() - t0;
+                fmm::entry_item_end();
+            } catch (const fmm::H2EntryMiss&) {
+#pragma omp critical(partial_f22_phase_abandoned)
+                abandoned.push_back(oi);
             } catch (...) {
+                if (fmm::entry_item_abandoned()) {
+#pragma omp critical(partial_f22_phase_abandoned)
+                    abandoned.push_back(oi);
+                    continue;
+                }
 #pragma omp critical(partial_f22_phase_failure)
                 if (!failure) failure = std::current_exception();
             }
         }
         if (failure) std::rethrow_exception(failure);
+        t_records += s_records;
+        return abandoned;
+        });
     }
     const double t_loop = MPI_Wtime() - t_loop0;
     if (!sliced_on_device) {
