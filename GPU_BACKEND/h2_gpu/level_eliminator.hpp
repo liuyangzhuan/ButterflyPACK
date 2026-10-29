@@ -2706,6 +2706,10 @@ private:
         std::vector<S*> y;                                // out
         std::vector<int> d;                               // out
         char* y_block = nullptr;                          // out
+        // H2_ID_proxy 2 (f22_adaptive_rows): y and d become the targets over
+        // the F22 columns with their adaptive rows, of leading dimensions ld
+        std::vector<int> ld;
+        bool f22_columns = false;
     };
     void sketch_wave(const std::vector<int64_t>& wave, std::vector<WaveBox>& boxes, int& boundary_count,
                      F22Columns* f22 = nullptr);
@@ -2715,6 +2719,10 @@ public:
     void f22_slice(const PartialF22Kept& kept) override;
 private:
     void f22_id_chunk(std::vector<PartialF22Work<DataType>>& works, const std::vector<size_t>& at_works);
+    using F22Selector = AdaptiveRowSelector<CoordType, DataType>;
+    std::unique_ptr<F22Selector> f22_adaptive_rows(const std::vector<PartialF22Work<DataType>>& works,
+                                                   const std::vector<size_t>& at_works, F22Columns& cols,
+                                                   char*& block);
     void f22_record_chunk(std::vector<PartialF22Work<DataType>>& works, const std::vector<size_t>& at_works);
     template<typename Each>
     void f22_submit_records(S* d_rec, size_t front_elems, size_t block_bytes, Each&& each);
@@ -4340,7 +4348,9 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
     // adaptive ID rows (H2_ID_proxy 2): each sketch heads a taller block that
     // the selected far rows join, and the ID runs in a copy (d_f)
     using Selector = AdaptiveRowSelector<CoordType, DataType>;
-    const bool adaptive = tree_->id_proxy_mode == 2;
+    // (the F22 step selects its rows afterwards, over the F22 columns:
+    // f22_adaptive_rows)
+    const bool adaptive = tree_->id_proxy_mode == 2 && !f22;
     size_t y_bytes = 0;
     for (Plan& p : plans) {
         p.off_y = y_bytes;
@@ -4672,46 +4682,11 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
     // (the F22 step takes its ID elsewhere: f22_ids)
     char* d_id = f22 ? nullptr : heap_.alloc_resident(std::max<size_t>(id_bytes, 1), ResidentKind::Lists);  // pivots: the level's skeleton lists
     if (d_id != nullptr) level_allocs_.push_back(d_id);  // its pivots are the device skeleton lists
-    std::vector<QrcpItem> id_items(adaptive || f22 ? 0 : plans.size());
-    std::unique_ptr<Selector> selector;
-    if (adaptive) {
-        typename Selector::Hooks hooks;
-        hooks.place_points = [this](const std::vector<int64_t>& ids, cudaStream_t s) {
-            return place_scratch_points(ids, s);
-        };
-        hooks.eval = [this](const std::vector<EvalItem>& items, MetaBuilder& meta, const char* image, size_t offset,
-                            int max_m, int max_n, cudaStream_t s) {
-            eval_blocks(items, meta, image, offset, max_m, max_n, s);
-        };
-        selector = std::make_unique<Selector>(tree_, tolerance_, heap_, std::move(hooks), nonsym_);
-        std::vector<typename Selector::Target> targets(plans.size());
-        for (size_t bi = 0; bi < plans.size(); ++bi) {
-            const Plan& p = plans[bi];
-            typename Selector::Target& target = targets[bi];
-            target.box = writable_box(wave[bi]);
-            target.n = p.n;
-            target.d = p.d;
-            target.cols.base = state_of(wave[bi]).slot;
-            target.w = p.Y;
-            target.f = reinterpret_cast<S*>(d_f + p.off_y);
-            target.cap = p.ldy;
-            target.jpvt = reinterpret_cast<int*>(d_id + id_jpvt[bi]);
-            target.rank = reinterpret_cast<int*>(d_id + id_rank) + bi;
-            target.norm = reinterpret_cast<double*>(d_id + id_norm) + bi;
-            target.flag = reinterpret_cast<int*>(d_id + id_flag) + bi;
-        }
-        selector->start(std::move(targets));
-    }
-    for (size_t bi = 0; bi < id_items.size(); ++bi) {
-        const Plan& p = plans[bi];
-        id_items[bi] = QrcpItem{p.Y, p.d, p.n, p.d, reinterpret_cast<int*>(d_id + id_jpvt[bi]),
-                                reinterpret_cast<int*>(d_id + id_rank) + bi, reinterpret_cast<double*>(d_id + id_norm) + bi,
-                                reinterpret_cast<int*>(d_id + id_flag) + bi};
-    }
     // H2_partial: the ID of a box's F11 columns only, as compute_id_partial.
     // The sketch's columns are permuted to the F11 ones first (perm: the box's
-    // slots in that order), the QRCP takes those, and the F22 columns join the
-    // skeleton with zero rows of T (after the ID, below).
+    // slots in that order), the QRCP (or the adaptive rows' selection) takes
+    // those, and the F22 columns join the skeleton with zero rows of T (after
+    // the ID, below).
     struct PartialCols {
         std::vector<int> perm;  // F11 slots, then F22 slots
         int nk = 0;             // F11 columns
@@ -4722,7 +4697,6 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
     int perm_max_d = 0, perm_max_n = 0;
     S* d_perm = nullptr;  // the moved columns' scratch, freed once its gathers are queued
     if (!pcols.empty()) {
-        if (adaptive) throw std::logic_error("LevelEliminator: H2_partial with adaptive ID rows");
         size_t perm_elems = 0;
         for (size_t bi = 0; bi < plans.size(); ++bi) {
             const Plan& p = plans[bi];
@@ -4737,11 +4711,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
             pc.perm.insert(pc.perm.end(), forced.begin(), forced.end());
             for (int c = 0; c < p.n && !pc.permute; ++c) pc.permute = pc.perm[static_cast<size_t>(c)] != c;
             if (pc.nk == 0 || pc.nk == p.n) pc.permute = false;
-            if (pc.permute) {
-                if (p.ldy != p.d) throw std::logic_error("LevelEliminator: H2_partial needs the sketch's own leading dimension");
-                perm_elems += static_cast<size_t>(p.d) * p.n;
-            }
-            id_items[bi].n = pc.nk;
+            if (pc.permute) perm_elems += static_cast<size_t>(p.d) * p.n;
         }
         if (perm_elems > 0) d_perm = heap_.alloc<S>(perm_elems * sizeof(S));
         size_t at = 0;
@@ -4750,12 +4720,67 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
             if (!pc.permute) continue;
             const Plan& p = plans[bi];
             const int64_t off = static_cast<int64_t>(meta_.append(pc.perm));
-            perm_out.push_back(GatherItem{d_perm + at, p.d, p.d, p.n, p.Y, 1, p.d, IndexList{}, IndexList{off, 0, nullptr}});
-            perm_back.push_back(GatherItem{p.Y, p.d, p.d, p.n, d_perm + at, 1, p.d, IndexList{}, IndexList{}});
+            // (the sketch's d rows; adaptive rows: Y in a taller block, ld ldy)
+            perm_out.push_back(GatherItem{d_perm + at, p.d, p.d, p.n, p.Y, 1, p.ldy, IndexList{}, IndexList{off, 0, nullptr}});
+            perm_back.push_back(GatherItem{p.Y, p.ldy, p.d, p.n, d_perm + at, 1, p.d, IndexList{}, IndexList{}});
             perm_max_d = std::max(perm_max_d, p.d);
             perm_max_n = std::max(perm_max_n, p.n);
             at += static_cast<size_t>(p.d) * p.n;
         }
+    }
+    std::vector<QrcpItem> id_items(adaptive || f22 ? 0 : plans.size());
+    std::unique_ptr<Selector> selector;
+    int* d_cols = nullptr;  // (H2_partial) the F11 columns of the moved boxes, the selector's targets' columns
+    if (adaptive) {
+        typename Selector::Hooks hooks;
+        hooks.place_points = [this](const std::vector<int64_t>& ids, cudaStream_t s) {
+            return place_scratch_points(ids, s);
+        };
+        hooks.eval = [this](const std::vector<EvalItem>& items, MetaBuilder& meta, const char* image, size_t offset,
+                            int max_m, int max_n, cudaStream_t s) {
+            eval_blocks(items, meta, image, offset, max_m, max_n, s);
+        };
+        selector = std::make_unique<Selector>(tree_, tolerance_, heap_, std::move(hooks), nonsym_);
+        // H2_partial: a box's target is its F11 columns, the first nk of the
+        // (moved) sketch; a box without them takes no ID, its rank and flag 0
+        std::vector<int> col_lists;
+        std::vector<size_t> col_at(plans.size(), 0);
+        for (size_t bi = 0; bi < pcols.size(); ++bi) {
+            const PartialCols& pc = pcols[bi];
+            if (!pc.permute) continue;
+            col_at[bi] = col_lists.size();
+            col_lists.insert(col_lists.end(), pc.perm.begin(), pc.perm.begin() + pc.nk);
+        }
+        if (!col_lists.empty()) {
+            d_cols = heap_.alloc<int>(col_lists.size() * sizeof(int));
+            check_cuda(cudaMemcpyAsync(d_cols, col_lists.data(), col_lists.size() * sizeof(int), cudaMemcpyHostToDevice,
+                                       stream), "partial ID: the F11 columns");
+        }
+        if (!pcols.empty()) check_cuda(cudaMemsetAsync(d_id + id_rank, 0, id_norm - id_rank, stream), "partial ID: ranks");
+        std::vector<typename Selector::Target> targets(plans.size());
+        for (size_t bi = 0; bi < plans.size(); ++bi) {
+            const Plan& p = plans[bi];
+            typename Selector::Target& target = targets[bi];
+            target.box = writable_box(wave[bi]);
+            target.n = pcols.empty() ? p.n : pcols[bi].nk;
+            target.d = p.d;
+            target.cols.base = state_of(wave[bi]).slot;
+            if (!pcols.empty() && pcols[bi].permute) target.cols.ptr = d_cols + col_at[bi];
+            target.w = p.Y;
+            target.f = reinterpret_cast<S*>(d_f + p.off_y);
+            target.cap = p.ldy;
+            target.jpvt = reinterpret_cast<int*>(d_id + id_jpvt[bi]);
+            target.rank = reinterpret_cast<int*>(d_id + id_rank) + bi;
+            target.norm = reinterpret_cast<double*>(d_id + id_norm) + bi;
+            target.flag = reinterpret_cast<int*>(d_id + id_flag) + bi;
+        }
+        selector->start(std::move(targets));
+    }
+    for (size_t bi = 0; bi < id_items.size(); ++bi) {
+        const Plan& p = plans[bi];
+        id_items[bi] = QrcpItem{p.Y, p.d, pcols.empty() ? p.n : pcols[bi].nk, p.d,
+                                reinterpret_cast<int*>(d_id + id_jpvt[bi]), reinterpret_cast<int*>(d_id + id_rank) + bi,
+                                reinterpret_cast<double*>(d_id + id_norm) + bi, reinterpret_cast<int*>(d_id + id_flag) + bi};
     }
     const size_t off_perm_out = meta_.append(perm_out);
     const size_t off_perm_back = meta_.append(perm_back);
@@ -5003,6 +5028,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
     // d_id stays: its pivot arrays are the device skeleton lists of the boxes
     if (adaptive) {
         heap_.free(d_y);        // the targets (their launches have run)
+        if (d_cols != nullptr) heap_.free(d_cols);
         wave_sketch_ = d_f;     // T lives here until the elimination has run,
         wave_sketch_extra_ = selector->take_factor_blocks();  // or in the block of a target that grew
     } else {
@@ -5054,8 +5080,10 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
                 wb.n = n;
                 wb.k = static_cast<int>(box->skeleton_indices.size());
                 wb.r = static_cast<int>(box->redundant_indices.size());
-                wb.ldt = p.d;
-                wb.T = p.Y + static_cast<size_t>(ke) * wb.ldt;
+                // (adaptive rows: the ID in its own block, over the F11 columns)
+                wb.ldt = adaptive ? selector->id_ld(static_cast<size_t>(bi)) : p.d;
+                wb.T = (adaptive ? const_cast<S*>(selector->id_factor(static_cast<size_t>(bi))) : p.Y) +
+                       static_cast<size_t>(ke) * wb.ldt;
                 if (r > 0 && nf > 0) {
                     check_cuda(cudaMemset2DAsync(wb.T + ke, static_cast<size_t>(wb.ldt) * sizeof(S), 0,
                                                  static_cast<size_t>(nf) * sizeof(S), static_cast<size_t>(r), stream),
@@ -5067,6 +5095,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
                     std::ostringstream tail;
                     tail << std::setprecision(10) << " | rows=" << p.total_rows << " d=" << p.d
                          << " sketch_norm=" << norms[bi] << " f11=" << nk;
+                    if (adaptive) tail << h2_id_adaptive_trace(selector->stats(static_cast<size_t>(bi)));
                     h2_id_trace_write(
                         "L" + std::to_string(level_.level) + " m=" + std::to_string(box->morton_index) +
                         " local=" + std::to_string(is_local(box->morton_index) ? 1 : 0) +
@@ -7911,6 +7940,123 @@ void LevelEliminator<CoordType, DataType, KernelType>::f22_records(std::vector<P
     }
 }
 
+// H2_ID_proxy 2 in H2_partial's F22 step: each box's sketch over its F22
+// columns heads a target that the adaptive far rows join, selected as the F11
+// step's are (AdaptiveRowSelector) and over the columns the F22 ID takes, as
+// on the host (gather_id_target_streamed_nonsymmetric).  cols' y and d become
+// those targets and their rows (ld their leading dimensions); they live in
+// block and in the returned selector, which the caller keeps until the
+// targets' reads have run.
+template<typename CoordType, typename DataType, typename KernelType>
+auto LevelEliminator<CoordType, DataType, KernelType>::f22_adaptive_rows(
+    const std::vector<PartialF22Work<DataType>>& works, const std::vector<size_t>& at_works, F22Columns& cols,
+    char*& block) -> std::unique_ptr<F22Selector> {
+    Context& ctx = Context::instance();
+    cudaStream_t stream = ctx.stream();
+    const size_t D = sizeof(S), I = sizeof(int);
+    const size_t nb = at_works.size();
+    // per box the target (the first capacity), its copy for the ID and the
+    // ID's pivots; then every box's rank, flag and norm, and the F22 columns'
+    // slots (the box's, in pos22 order)
+    std::vector<size_t> off_w(nb), off_f(nb), off_jpvt(nb), col_at(nb);
+    std::vector<int> cap(nb), col_lists;
+    size_t bytes = 0;
+    for (size_t i = 0; i < nb; ++i) {
+        const auto& w = works[at_works[i]];
+        const size_t n22 = w.pos22.size();
+        cap[i] = F22Selector::first_capacity(tree_, cols.d[i], nonsym_);
+        off_w[i] = bytes;
+        bytes = align_up(bytes + static_cast<size_t>(cap[i]) * n22 * D);
+        off_f[i] = bytes;
+        bytes = align_up(bytes + static_cast<size_t>(cap[i]) * n22 * D);
+        off_jpvt[i] = bytes;
+        bytes = align_up(bytes + n22 * I);
+        col_at[i] = col_lists.size();
+        for (int64_t q : w.pos22) col_lists.push_back(static_cast<int>(w.S_old[static_cast<size_t>(q)]));
+    }
+    const size_t off_rank = bytes;
+    bytes = align_up(bytes + nb * I);
+    const size_t off_flag = bytes;
+    bytes = align_up(bytes + nb * I);
+    const size_t off_norm = bytes;
+    bytes = align_up(bytes + nb * sizeof(double));
+    const size_t off_cols = bytes;
+    bytes = align_up(bytes + col_lists.size() * I);
+    block = heap_.alloc(std::max<size_t>(bytes, 1), ResidentKind::Adaptive);
+    if (!col_lists.empty()) {
+        check_cuda(cudaMemcpyAsync(block + off_cols, col_lists.data(), col_lists.size() * I, cudaMemcpyHostToDevice,
+                                   stream), "F22 step: the adaptive rows' columns");
+    }
+    check_cuda(cudaMemsetAsync(block + off_rank, 0, off_norm - off_rank, stream), "F22 step: the adaptive rows' IDs");
+
+    typename F22Selector::Hooks hooks;
+    hooks.place_points = [this](const std::vector<int64_t>& ids, cudaStream_t s) { return place_scratch_points(ids, s); };
+    hooks.eval = [this](const std::vector<EvalItem>& items, MetaBuilder& meta, const char* image, size_t offset,
+                        int max_m, int max_n, cudaStream_t s) { eval_blocks(items, meta, image, offset, max_m, max_n, s); };
+    auto selector = std::make_unique<F22Selector>(tree_, tolerance_, heap_, std::move(hooks), nonsym_);
+    std::vector<typename F22Selector::Target> targets(nb);
+    for (size_t i = 0; i < nb; ++i) {
+        const auto& w = works[at_works[i]];
+        typename F22Selector::Target& t = targets[i];
+        t.box = writable_box(w.morton);
+        t.n = static_cast<int>(w.pos22.size());
+        t.d = cols.d[i];
+        t.cols = IndexList{-1, state_of(w.morton).slot, reinterpret_cast<const int*>(block + off_cols) + col_at[i]};
+        t.w = reinterpret_cast<S*>(block + off_w[i]);
+        t.f = reinterpret_cast<S*>(block + off_f[i]);
+        t.cap = cap[i];
+        t.jpvt = reinterpret_cast<int*>(block + off_jpvt[i]);
+        t.rank = reinterpret_cast<int*>(block + off_rank) + i;
+        t.flag = reinterpret_cast<int*>(block + off_flag) + i;
+        t.norm = reinterpret_cast<double*>(block + off_norm) + i;
+    }
+    selector->start(std::move(targets));
+
+    // the first round, after the sketches' F22 columns are in the targets;
+    // then a round an image until every box has settled
+    ++wave_stamp_;
+    meta_.clear();
+    std::vector<GatherItem> gathers;
+    int g_m = 0, g_n = 0;
+    for (size_t i = 0; i < nb; ++i) {
+        const auto& w = works[at_works[i]];
+        const int n22 = static_cast<int>(w.pos22.size());
+        if (n22 == 0) continue;
+        const IndexList l22{static_cast<int64_t>(meta_.append(std::vector<int>(w.pos22.begin(), w.pos22.end()))), 0,
+                            nullptr};
+        gathers.push_back(GatherItem{reinterpret_cast<S*>(block + off_w[i]), cap[i], cols.d[i], n22, cols.y[i], 1,
+                                     cols.d[i], IndexList{}, l22});
+        g_m = std::max(g_m, cols.d[i]);
+        g_n = std::max(g_n, n22);
+    }
+    const size_t off_gathers = meta_.append(gathers);
+    selector->plan(meta_);
+    char* md = meta_.upload(meta_device_, stream);
+    launch_gather(reinterpret_cast<const GatherItem*>(md + off_gathers), static_cast<int>(gathers.size()), g_m, g_n,
+                  md, stream);
+    const size_t status_bytes = selector->status_bytes();
+    char* h_status = static_cast<char*>(pinned_pool().result.reserve(std::max<size_t>(status_bytes, 256)));
+    for (;;) {
+        selector->launch(md, stream);
+        launch_copy_bytes(h_status, selector->status(), status_bytes, stream);
+        check_cuda(cudaStreamSynchronize(stream), "F22 step: adaptive ID rows");
+        selector->finish(h_status);
+        if (!selector->active()) break;
+        ++wave_stamp_;
+        meta_.clear();
+        selector->plan(meta_);
+        md = meta_.upload(meta_device_, stream);
+    }
+    cols.ld.resize(nb);
+    for (size_t i = 0; i < nb; ++i) {
+        cols.y[i] = const_cast<S*>(selector->target(i));
+        cols.d[i] = selector->target_rows(i);
+        cols.ld[i] = selector->target_ld(i);
+    }
+    cols.f22_columns = true;
+    return selector;
+}
+
 template<typename CoordType, typename DataType, typename KernelType>
 void LevelEliminator<CoordType, DataType, KernelType>::f22_id_chunk(std::vector<PartialF22Work<DataType>>& works,
                                                                      const std::vector<size_t>& at_works) {
@@ -7975,6 +8121,10 @@ void LevelEliminator<CoordType, DataType, KernelType>::f22_id_chunk(std::vector<
         int unused_count = 0;
         sketch_wave(wave, unused, unused_count, &cols);
     }
+    // (H2_ID_proxy 2) the adaptive far rows of the F22 columns join them
+    char* adaptive_block = nullptr;
+    std::unique_ptr<F22Selector> adaptive =
+        tree_->id_proxy_mode == 2 ? f22_adaptive_rows(works, at_works, cols, adaptive_block) : nullptr;
     lap(1);
 
     // ---- (3) the ID targets, rows [Y(:, F22); K(nb, b)(F11_nb, F22); A(S11, F22);
@@ -8030,7 +8180,9 @@ void LevelEliminator<CoordType, DataType, KernelType>::f22_id_chunk(std::vector<
             l11 = IndexList{static_cast<int64_t>(meta_.append(ints(w.pos11))), 0, nullptr};
             p11 = IndexList{static_cast<int64_t>(meta_.append(pick(w.S_old, w.pos11))), bs.slot, nullptr};
         }
-        add_gather(gathers, g_m, g_n, GatherItem{T, ld, s.d, s.n22, cols.y[i], 1, s.d, IndexList{}, l22});
+        add_gather(gathers, g_m, g_n,
+                   cols.f22_columns ? GatherItem{T, ld, s.d, s.n22, cols.y[i], 1, cols.ld[i], IndexList{}, IndexList{}}
+                                    : GatherItem{T, ld, s.d, s.n22, cols.y[i], 1, s.d, IndexList{}, l22});
         int at = s.d;
         std::vector<IndexList> lq(w.near.size()), pq(w.near.size());
         for (size_t idx = 0; idx < w.near.size(); ++idx) {  // K(nb, b)(F11_nb, F22)
@@ -8181,6 +8333,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::f22_id_chunk(std::vector<
     check_cuda(cudaMemcpyAsync(h_id, d_id, id_bytes, cudaMemcpyDeviceToHost, stream), "F22 step: ID");
     check_cuda(cudaStreamSynchronize(stream), "F22 step: ID");
     heap_.free(cols.y_block);
+    if (adaptive_block != nullptr) heap_.free(adaptive_block);  // (the selector, its grown targets, at the end)
     if (d_tmp != nullptr) heap_.free(d_tmp);
 
     // ---- (5) the ID's columns (compute_id_complex's conventions: rank 0
@@ -8201,6 +8354,12 @@ void LevelEliminator<CoordType, DataType, KernelType>::f22_id_chunk(std::vector<
         Ids& id = ids[i];
         id.ke = s.n22 > 0 ? std::max(ranks[i], 1) : 0;
         id.r = s.n22 - id.ke;
+        if (h2_id_trace_enabled()) {  // (BPACK_TRACE=id, as partial_f22_phase writes it)
+            h2_id_trace_write("F22 L" + std::to_string(level_.level) + " m=" + std::to_string(w.morton) +
+                              " n22=" + std::to_string(s.n22) + " k22=" + std::to_string(id.r > 0 ? id.ke : s.n22) +
+                              " rows=" + std::to_string(s.rows) +
+                              (adaptive ? h2_id_adaptive_trace(adaptive->stats(i)) : std::string()));
+        }
         std::vector<int> sk(jpvt, jpvt + id.ke), rd(jpvt + id.ke, jpvt + s.n22);
         id.ps.resize(sk.size());
         id.pr.resize(rd.size());

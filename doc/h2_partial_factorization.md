@@ -40,7 +40,7 @@ accuracy is that of the factorization (`tol_comp`).
 | `H2_use_sketch`, `H2_lazy_schur` | 2, 2 | |
 | `H2_XRR_factor` | 1 | LU with partial pivoting of the X_RR blocks. |
 | `precon` | 1 or 3 | A factorization (not the compression-only `precon 2`). |
-| `H2_ID_proxy` | 0 | |
+| `H2_ID_proxy` | 0, 1 or 2 | Optional: far-field rows of the IDs beyond their neighbourhood, as for a full factorization: 1 a proxy surface (`H2_ID_proxy_points` points), 2 adaptive row sampling (`BACA_Batch` rows a node). Both the F11 IDs and the F22 parts' IDs take them, on the CPU and the GPU; mode 2 selects its rows against the columns each ID is over (the F11 columns, or the F22 ones). Modes 1 and 2 need the points' global order on every rank: an H2 set up with `c_bpack_construct_init` (a rank's rows are its range of the tree order), not with `c_bpack_construct_init_distributed64`. |
 | `CA_level` | at least the number of levels | Color levels only (as for every `H2_unstructured 1` factorization). |
 | `H2_compress_factors` | 0 or 1 | Optional. 1: the F22 records are kept compressed, lossy with an error bound of 0.02 `tol_comp` (CPU and GPU builds). The F11 factors of the partial solves stay uncompressed. |
 | `H2_partial_extract` | `auto` (0), `device` (1), `host` (2) | Optional, GPU builds: where the Schur complement's entries are computed ([below](#entries-h2_partial_extract)). |
@@ -209,7 +209,7 @@ times.
 
 | Option | |
 |---|---|
-| `--H2_partial <n11>` | The partial factorization. Needs `--distributed64 1` in this driver. |
+| `--H2_partial <n11>` | The partial factorization. With `--distributed64 1` a rank's vector rows are its range of the input order, with `--distributed64 0` (which `--H2_ID_proxy 1` and `2` need) its range of the tree order. |
 | `--H2_partial_extract <auto\|device\|host>` | As the option. |
 | `--partial_check 1` | Compares the partial solves, the product and blocks of the Schur complement with a dense LU on rank 0 (N <= 40000). |
 | `--partial_extract_bench <R>` | R rounds of Schur complement blocks as a parent front reads them through `c_bpack_extractelement` (64 x 64 near-field blocks and 16 x 4096 panels), timed. |

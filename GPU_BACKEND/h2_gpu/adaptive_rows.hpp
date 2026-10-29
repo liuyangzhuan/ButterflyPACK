@@ -133,6 +133,10 @@ public:
                 State& st = states_[static_cast<size_t>(i)];
                 st.t = targets[static_cast<size_t>(i)];
                 st.rows = st.t.d;
+                if (st.t.n == 0) {  // (H2_partial: a part without columns takes no ID)
+                    st.step = Step::Done;
+                    continue;
+                }
                 st.stats.active = true;
                 const std::vector<IDAdaptiveFrame> far = make_initial_id_far_frames(tree_, st.t.box);
                 if (!far.empty()) {
@@ -173,6 +177,12 @@ public:
     const S* id_factor(size_t i) const { return states_[i].id_f; }
     int id_ld(size_t i) const { return states_[i].id_ld; }
     const IDAdaptiveStats& stats(size_t i) const { return states_[i].stats; }
+    // A finished target: the sketch, then the selected rows (target_rows of
+    // them, leading dimension target_ld), in w or the block it grew into,
+    // which lives as long as the selector.
+    const S* target(size_t i) const { return states_[i].t.w; }
+    int target_rows(size_t i) const { return states_[i].rows; }
+    int target_ld(size_t i) const { return states_[i].t.cap; }
     // Blocks that hold a final ID's factor outside the targets' own f: the
     // caller frees them with those (from the heap).
     std::vector<char*> take_factor_blocks() { return std::move(factor_blocks_); }

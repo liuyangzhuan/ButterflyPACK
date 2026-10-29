@@ -521,7 +521,7 @@ void print_usage(const char* executable) {
       << "  --partial_extract_bench <R>   (with --H2_partial: R rounds of Schur complement blocks as a\n"
       << "                            parent front would read them through c_bpack_extractelement - near\n"
       << "                            field 64 x 64 blocks and 16 x 4096 panels - timed)\n"
-      << "  --partial_check <0|1>   (with --H2_partial, distributed64 1, N <= 40000: the partial solves\n"
+      << "  --partial_check <0|1>   (with --H2_partial, N <= 40000: the partial solves\n"
          "                            and the Schur complement against dense LAPACK on rank 0)\n"
       << "  --extract_check <count>   (format=7, precon 2, distributed64 1: that many\n"
          "                             random blocks extracted from the compressed H2,\n"
@@ -881,14 +881,16 @@ void dgemm_(const char*, const char*, const int*, const int*, const int*, const 
 
 // --H2_partial: the partial solves and the Schur complement CB = F22 - F21
 // F11^-1 F12 through the C API, and with --partial_check against dense
-// LAPACK on rank 0 (the kernel over all points; distributed64 1, whose
-// local input rows are [first, first + count) in input order).
+// LAPACK on rank 0 (the kernel over all points).  A local row's input point
+// is input.global_ids (1-based): with distributed64 1 the rows
+// [first, first + count) in input order, else the rank's range of the tree
+// order.
 void partial_checks(const DriverOptions& o, const Laplace3DApplication& application, ButterflyResources& resources,
                     int rank, int mpi_size, int local_points, const DistributedInput& input) {
   const int64_t N = checked_cube(o.grid_size, "grid_size");
   const int n11 = static_cast<int>(o.h2_partial), n22 = static_cast<int>(N - o.h2_partial);
   const int nrhs = o.nrhs;
-  if (o.distributed64 != 1) throw std::invalid_argument("--H2_partial in this driver needs --distributed64 1");
+  auto global_of = [&](int r) { return input.global_ids[static_cast<size_t>(r)] - 1; };
   if (n22 == 0) {
     if (rank == 0) std::cout << "H2 partial: no F22 points (H2_partial = N), nothing more to check" << std::endl;
     return;
@@ -898,7 +900,7 @@ void partial_checks(const DriverOptions& o, const Laplace3DApplication& applicat
   for (int c = 0; c < nrhs; ++c)
     for (int r = 0; r < local_points; ++r)
       b[static_cast<size_t>(r) + static_cast<size_t>(c) * local_points] =
-          1.0 + 0.125 * c + 0.001 * ((input.first + r) % 97);
+          1.0 + 0.125 * c + 0.001 * (global_of(r) % 97);
   std::mt19937_64 rng(20261022);
   std::uniform_real_distribution<double> uni(-1.0, 1.0);
   std::vector<double> x2(static_cast<size_t>(n22) * nrhs);
@@ -918,7 +920,7 @@ void partial_checks(const DriverOptions& o, const Laplace3DApplication& applicat
   double x2_diff = 0.0;
   for (int c = 0; c < nrhs; ++c)
     for (int r = 0; r < local_points; ++r) {
-      const int64_t g = input.first + r;
+      const int64_t g = global_of(r);
       if (g >= n11) x2_diff = std::max(x2_diff, std::abs(x[static_cast<size_t>(r) + static_cast<size_t>(c) * local_points] -
                                                         x2[static_cast<size_t>(g - n11) + static_cast<size_t>(c) * n22]));
     }
@@ -1096,7 +1098,7 @@ void partial_checks(const DriverOptions& o, const Laplace3DApplication& applicat
   double d2 = 0.0, r2 = 0.0;
   for (int c = 0; c < nrhs; ++c)
     for (int r = 0; r < local_points; ++r) {
-      const int64_t g = input.first + r;
+      const int64_t g = global_of(r);
       if (g >= n11) continue;
       const double v = x[static_cast<size_t>(r) + static_cast<size_t>(c) * local_points];
       const double ref = x1d[static_cast<size_t>(g) + static_cast<size_t>(c) * n11];
@@ -1111,7 +1113,7 @@ void partial_checks(const DriverOptions& o, const Laplace3DApplication& applicat
   std::vector<double> x1h(static_cast<size_t>(n11) * nrhs, 0.0);
   for (int c = 0; c < nrhs; ++c)
     for (int r = 0; r < local_points; ++r) {
-      const int64_t g = input.first + r;
+      const int64_t g = global_of(r);
       if (g < n11) x1h[static_cast<size_t>(g) + static_cast<size_t>(c) * n11] = x[static_cast<size_t>(r) + static_cast<size_t>(c) * local_points];
     }
   MPI_Allreduce(MPI_IN_PLACE, x1h.data(), static_cast<int>(x1h.size()), MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
@@ -1591,6 +1593,14 @@ int main(int argc, char** argv) {
           &resources.matrix, &resources.option, &resources.stats,
           &resources.mesh, &kernel_quantities, &resources.process_tree,
           &distance_callback, &near_far_callback, &application);
+      // the local rows are the rank's range of the tree order: their input
+      // points (1-based), for the partial checks
+      int64_t count = local_points, first = 0;
+      MPI_Exscan(&count, &first, 1, MPI_INT64_T, MPI_SUM, MPI_COMM_WORLD);
+      if (rank == 0) first = 0;
+      distributed_input.first = first;
+      distributed_input.count = count;
+      distributed_input.global_ids.assign(permutation.begin() + first, permutation.begin() + first + count);
     }
 
     d_c_bpack_printoption(&resources.option, &resources.process_tree);
