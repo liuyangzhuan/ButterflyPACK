@@ -1284,7 +1284,7 @@ if(myrank==master_rank){
 
   if(vs==1){
     nns_ptr=new int[(int64_t)knn_pre*(int64_t)Npo];
-    data_geo.resize(Ndim*Npo);
+    data_geo.resize(static_cast<size_t>(Ndim)*Npo);
     for(int ii=0;ii<Npo;ii++){
 
       int idx0=ii;
@@ -1302,9 +1302,9 @@ if(myrank==master_rank){
 
 
 
-      data_geo[(ii) * Ndim] = idx_x*h+x0min;
-      data_geo[(ii) * Ndim+1] = idx_y*h+y0min;
-      data_geo[(ii) * Ndim+2] = idx_z*h+z0min;
+      data_geo[static_cast<size_t>(ii) * Ndim] = idx_x*h+x0min;
+      data_geo[static_cast<size_t>(ii) * Ndim+1] = idx_y*h+y0min;
+      data_geo[static_cast<size_t>(ii) * Ndim+2] = idx_z*h+z0min;
 
       int idxnn=0;
       for(int iii=-layer;iii<=layer;iii++){
@@ -1322,14 +1322,14 @@ if(myrank==master_rank){
       }
       }
 
+
+
+    }
     double val_d1;
     z_c_bpack_getoption(&option_bf, "forwardN15flag", &val_d1);
     if((int)val_d1==0){
       z_c_bpack_set_I_option(&option_bf, "nogeo", 4);
       z_c_bpack_set_I_option(&option_bf, "knn", knn_pre);
-    }
-
-
     }
     if(myrank==0){
       cout<<"smax: "<<smax<<" PPW: "<<2*pi/(w*smax)/h<<" From: "<< Npo <<" To: "<< Npo <<endl;
@@ -1480,7 +1480,7 @@ if(myrank==master_rank){
     for(int ii=0;ii<Npo*knn_pre;ii++){
       nns_ptr_s2s[ii]=-1;
     }
-    data_geo.resize(Ndim*Npo);
+    data_geo.resize(static_cast<size_t>(Ndim)*Npo);
     for(int ii=0;ii<Npo;ii++){
       int ii_glo = v_sub2glo[ii];
       int idx0=ii_glo;
@@ -1495,9 +1495,9 @@ if(myrank==master_rank){
       int idx_y = idx0 / Iint;
       int idx_x = idx0 % Iint;
 
-      data_geo[(ii) * Ndim] = idx_x*h+x0min;
-      data_geo[(ii) * Ndim+1] = idx_y*h+y0min;
-      data_geo[(ii) * Ndim+2] = idx_z*h+z0min;
+      data_geo[static_cast<size_t>(ii) * Ndim] = idx_x*h+x0min;
+      data_geo[static_cast<size_t>(ii) * Ndim+1] = idx_y*h+y0min;
+      data_geo[static_cast<size_t>(ii) * Ndim+2] = idx_z*h+z0min;
 
       int idxnn=0;
       for(int iii=-layer;iii<=layer;iii++){
@@ -1639,6 +1639,40 @@ if(myrank==master_rank){
       vie3d_gpu_register_coefficient(&bmat_bf_s2s, 2.0 * Q->_w, -1.0, 0.0, -__real__ self_value,
                                      -__imag__ self_value, 4.0 * pi, 1.0 / pow(Q->_h, 3.0), 0.0,
                                      coef.data(), Q->_n);
+    } else if (h2_use_gpu > 0 && format_s2s == 7 && scaleGreen == 0) {
+      // scaleGreen=0 for an H2: with a homogeneous scatterer (ivelo 9 with
+      // IVELO9_CONST) coef is one number and the kernel is complex symmetric
+      // again: -coef e^{i 2 w r} / (4 pi r), and -coef SampleSelf + 1 / h^3
+      // on the diagonal.  The ranks' own points check that coef is one number.
+      C_QuantApp_BF* Q = quant_ptr_bf_s2s;
+      _Complex double self_value = 0.0;
+      Q->SampleSelf(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, &self_value);
+      const double s0 = 2.0;
+      const double k0_squared = pow(s0 * Q->_w, 2.0);
+      const int nx = round(Q->_x0max / Q->_h);
+      const int ny = round(Q->_y0max / Q->_h);
+      const int nz = round(Q->_z0max / Q->_h);
+      const int64_t local_count = distributed64 == 1 ? input_count_s2s : static_cast<int64_t>(Q->_n);
+      const double* local_points = distributed64 == 1 ? input_coordinates_s2s.data() : Q->_data.data();
+      double coef_range[2] = {std::numeric_limits<double>::max(), std::numeric_limits<double>::max()};  // min, -max
+      for (int64_t n = 0; n < local_count; ++n) {
+        const double* x = local_points + n * Ndim;
+        const double s1 = slowness(x[0], x[1], x[2], Q->_slow_x0, Q->_slow_y0, Q->_slow_z0, Q->_ivelo,
+                                   Q->_slowness_array.data(), Q->_h, nx, ny, nz);
+        const double c = k0_squared * (pow(s1 / s0, 2.0) - 1);
+        coef_range[0] = std::min(coef_range[0], c);
+        coef_range[1] = std::min(coef_range[1], -c);
+      }
+      MPI_Allreduce(MPI_IN_PLACE, coef_range, 2, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
+      const double coef = coef_range[0];
+      if (-coef_range[1] - coef > 1e-12 * std::max(1.0, std::abs(coef))) {
+        throw std::invalid_argument(
+            "H2_use_gpu with scaleGreen 0 needs a homogeneous scatterer (one coefficient): coef ranges from " +
+            std::to_string(coef) + " to " + std::to_string(-coef_range[1]));
+      }
+      vie3d_gpu_register_helmholtz(&bmat_bf_s2s, 2.0 * Q->_w, -coef, 0.0,
+                                   -coef * __real__ self_value + 1.0 / pow(Q->_h, 3.0),
+                                   -coef * __imag__ self_value, 4.0 * pi);
     }
 #endif
     if (distributed64 == 1) {
