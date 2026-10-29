@@ -667,7 +667,7 @@ point set and on a plain cube split, dense checks at small N.
   Runs: /pscratch/sd/l/liuyangz/bpack_partial_runs/proxy (t_, u_, v_, x_
   logs; cmp_traces.py compares two traces).  Not measured: the modes' cost
   at scale (20^3: the device F22 step 35 -> 48 ms with proxy 2).
-- **Entries through a collective callback (2026-10-28, uncommitted).**  The
+- **Entries through a collective callback (2026-10-28, committed c0c65c9).**  The
   STRUMPACK session's testH2Partial (BPACKMatrix over F11 then F22, its
   entries from a block callback, elem_extract 1) threw "H2 entries: a block
   not fetched yet (collective callback)" once the tree was deep enough (16^3,
@@ -711,3 +711,19 @@ point set and on a plain cube split, dense checks at small N.
     leaf 64: logdets, dense checks and every box's BPACK_TRACE=id line.
   Runs: /pscratch/sd/l/liuyangz/bpack_partial_runs/coll (s_ STRUMPACK's
   test, x_ the driver from a source, d_ direct; cmp.sh).
+- **Collective rounds on 2 ranks (2026-10-28; core, not
+  partial).**  With entries through a collective callback a full or partial
+  factorization hung on 2 ranks (16^3, leaf 64; STRUMPACK's testH2Partial and
+  the driver's `--extract_ranks` alike): form_near_updates_from_generators
+  and its nonsymmetric twin (core/serialization.hpp) returned before their
+  entry phase on a rank that installed no generators in a transport, so the
+  ranks ran different numbers of phases - one waited in a round, the other in
+  the next wave's transport.  The early path now joins the phase's rounds
+  with nothing to run (every rank of a section calls every phase).  After it:
+  testH2Partial on 2, 3, 4, 6 and 8 ranks, 2 GPUs and proxy 2 on 2 ranks; the
+  driver on 2, 3, 5, 6 and 7 ranks and 2 GPUs (2 GPUs = 2 CPU ranks to every
+  digit).  Unchanged bit for bit where the rounds lined up already (4 ranks
+  full and partial, 1 rank, direct entries on 3).  The leaf-256 error on 2
+  ranks ("no region layout for 2 ranks over 2 levels") is the depth rule, not
+  this: more than one rank needs at least 3 levels (each rank builds whole
+  parent boxes, and with 2 levels the parent is the root).
