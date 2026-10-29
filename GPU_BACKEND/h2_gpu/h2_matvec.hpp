@@ -749,7 +749,7 @@ template<typename CoordType, typename DataType>
 bool run_device_h2_mul(ParallelTree<CoordType, DataType>* tree, const std::vector<DataType>& input,
                        std::vector<DataType>& output, int nrhs, bool transposed = false) {
     if constexpr (gpu_data_type<DataType>) {
-        activate_operator(tree);
+        OperatorCall call(tree);
         if (!device_matvec_usable(tree)) return false;
         if (transposed && !device_matvec_store().transposable) return false;
         device_h2_mul(tree, input, output, nrhs, transposed);

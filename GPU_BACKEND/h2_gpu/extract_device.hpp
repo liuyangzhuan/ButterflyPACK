@@ -219,7 +219,7 @@ bool extract_compressed_blocks_device(ParallelTree<CoordType, DataType>* tree,
         if (why != nullptr) *why = reason;
         return false;
     };
-    activate_operator(tree);
+    OperatorCall call(tree);
     if (!compressed_extract_ready(tree)) {
         const DeviceMatvecStore& s = device_matvec_store();
         return no(s.levels.empty() ? "the compression kept no blocks on the device"

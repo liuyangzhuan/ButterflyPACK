@@ -2594,6 +2594,9 @@ template<typename CoordType, typename DataType>
 void partial_schur_blocks(fmm::ParallelTree<CoordType, DataType>& tree, int64_t ninter, const int64_t* rows,
                           const int64_t* nrows, const int64_t* cols, const int64_t* ncols, DataType* out,
                           bool replicate, int extract_mode = 0) {
+#ifdef H2_HAVE_GPU
+    fmm::gpu::OperatorCall operator_call(&tree);  // (it may run inside another operator's build)
+#endif
     // A rank holds the chain blocks of its boxes, one a box and block of the
     // request (blocks of different ones never pair); a level's terms are
     // computed once: a box's own terms and its X_RN terms by its owner (the
@@ -3306,6 +3309,9 @@ void extract_partial_blocks(fmm::ParallelTree<CoordType, DataType>* tree, MPI_Co
 template<typename CoordType, typename DataType>
 void partial_schur_multiply(fmm::ParallelTree<CoordType, DataType>& tree, const DataType* x2, DataType* y2,
                             int64_t ncol) {
+#ifdef H2_HAVE_GPU
+    fmm::gpu::OperatorCall operator_call(&tree);  // (it may run inside another operator's build)
+#endif
     const auto& pr = tree.partial_root;
     if (pr.cb_released) throw std::runtime_error("partial Schur: released (c_bpack_partial_schur_release)");
     const int64_t pc = tree.partial_count, n22 = tree.num_points - pc;
@@ -3814,6 +3820,9 @@ void partial_schur_multiply(fmm::ParallelTree<CoordType, DataType>& tree, const 
 // Returns the bytes this rank freed (BPACK_TRACE=memory prints them).
 template<typename CoordType, typename DataType>
 size_t partial_schur_release(fmm::ParallelTree<CoordType, DataType>& tree) {
+#ifdef H2_HAVE_GPU
+    fmm::gpu::OperatorCall operator_call(&tree);  // (it may run inside another operator's build)
+#endif
     auto& pr = tree.partial_root;
     const size_t rss0 = fmm::env::trace("memory") ? h2_diag_current_rss_bytes() : 0;
     size_t records = 0, lists = 0;

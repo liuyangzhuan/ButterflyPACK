@@ -18,6 +18,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <mpi.h>
+#ifdef H2_HAVE_GPU
+#include "h2_gpu/device_heap.hpp"
+#endif
 
 #include "tree.hpp"
 #include "omp_region.hpp"
@@ -133,7 +136,7 @@ void hierarchical_logdet_parallel(fmm::ParallelTree<CoordType, DataType>* tree,
 #ifdef H2_HAVE_GPU
     // (the device stores of this operator, where its LUs kept without a host
     // copy are: another operator may have been built or used since)
-    fmm::gpu::activate_operator(tree);
+    fmm::gpu::OperatorCall operator_call(tree);
 #endif
 
     int leaf_level = tree->num_levels - 1;

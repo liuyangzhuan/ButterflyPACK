@@ -36,6 +36,9 @@ void hierarchical_solve_unstructured(
     // from mode 1, *partial_x2 the F22 solution (F22 index order,
     // replicated); the root's U part, the diagonal solves and the backward
     // sweep give the F11 solution in solve_data (rhs unused but sized).
+#ifdef H2_HAVE_GPU
+    gpu::OperatorCall operator_call(tree);  // (it may run inside another operator's build)
+#endif
     if (nrhs <= 0 || rhs.size() % static_cast<size_t>(nrhs) != 0) {
         throw std::invalid_argument(
             "hierarchical_solve_unstructured: invalid batched RHS dimensions");
@@ -1048,6 +1051,9 @@ void hierarchical_mul_unstructured(
     int nrhs,
     bool verbose,
     bool transposed = false) {
+#ifdef H2_HAVE_GPU
+    gpu::OperatorCall operator_call(tree);  // (it may run inside another operator's build)
+#endif
     if (nrhs <= 0 || input_vec.size() % static_cast<size_t>(nrhs) != 0) {
         throw std::invalid_argument(
             "hierarchical_mul_unstructured: invalid batched input dimensions");

@@ -193,6 +193,7 @@ void hierarchical_factorization_unstructured(
     H2FactorizationMemoryDiagnostics memory_diagnostics;
 #ifdef H2_HAVE_GPU
     if (color_gpu_enabled()) gpu::begin_operator_build(tree, tree->comm);
+    else gpu::activate_operator(tree);  // (the stores invalidated below are this operator's)
     gpu::invalidate_device_solve();  // the device copies of the previous factors
 #endif
     DynamicThreadingContext dynamic_threading =
