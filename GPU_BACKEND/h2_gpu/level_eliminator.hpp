@@ -3174,9 +3174,10 @@ void LevelEliminator<CoordType, DataType, KernelType>::begin() {
     // begin_operator_build)
     heap_.ensure_initialized();
     // a fresh factorization (unless earlier levels' solve factors are kept, or
-    // other operators keep their data, device_heap.hpp); otherwise the parent
-    // blocks live on
-    if (!adopt_ && device_solve_store().empty() && !other_operators_hold_data()) heap_.reset();
+    // anything else is allocated: other operators' data, device_heap.hpp, and
+    // the butterfly and HODLR backends', which no H2 store counts); otherwise
+    // the parent blocks live on
+    if (!adopt_ && device_solve_store().empty() && heap_.used() == 0) heap_.reset();
     // (a replicated CA level: its ghosts' factors too, which the device CA
     // solve eliminates again; keyed by Morton index like the local ones)
     keep_solve_ = gpu_sketch_;

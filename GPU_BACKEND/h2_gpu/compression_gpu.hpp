@@ -98,7 +98,10 @@ inline void begin_device_compression(int num_levels) {
     store.release();
     DeviceHeap& heap = DeviceHeap::instance();
     heap.ensure_initialized();
-    if (!other_operators_hold_data()) heap.reset();
+    // (a fresh heap only when nothing is allocated: the butterfly and HODLR
+    // backends keep resident data here too, F12/F21 of a STRUMPACK front for
+    // its solves, which no H2 store counts)
+    if (heap.used() == 0) heap.reset();
     heap.reset_peak();
     compression_stats() = CompressionStats{};
     store.building = true;

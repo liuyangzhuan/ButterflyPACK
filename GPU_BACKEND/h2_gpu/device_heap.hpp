@@ -882,15 +882,6 @@ inline size_t operator_bytes(const void* tree) {
     return bytes;
 }
 
-// Whether operators other than the active one hold device data.
-inline bool other_operators_hold_data() {
-    const OperatorContext& c = operator_context();
-    for (const auto& entry : c.last_use) {
-        if (entry.first != c.active && operator_bytes(entry.first) > 0) return true;
-    }
-    return false;
-}
-
 // Operator `tree` gives up its device data to make room (an eviction, on
 // every rank of the operator): its data without a host copy goes to the host
 // first (spillers), then every store releases its data.

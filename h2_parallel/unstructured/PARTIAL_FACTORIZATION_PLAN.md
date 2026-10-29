@@ -727,3 +727,27 @@ point set and on a plain cube split, dense checks at small N.
   ranks ("no region layout for 2 ranks over 2 levels") is the depth rule, not
   this: more than one rank needs at least 3 levels (each rank builds whole
   parent boxes, and with 2 levels the parent is the root).
+- **Several operators on one GPU (2026-10-29; STRUMPACK's fronts, GPU).**
+  Two bugs, neither specific to the partial path, that a multifrontal solver
+  with an H2 per front exposes:
+  - the stores of the active operator: every call activated its operator and
+    none restored the previous one, so a front's build that read its
+    children's entries through the callback went on with a child's stores
+    (its kept records freed with the child, its CB entries then from reused
+    memory: 17-21% of the device CB extractions wrong, the "ID input contains
+    NaN" at 200^3 with --h2_only 1).  The calls that may run inside a build
+    now restore it on return (OperatorCall, 2299797);
+  - the heap reset at a build's start: taken when no other H2 operator
+    reported data, but the butterfly and HODLR backends keep resident data in
+    the same heap (a four-block front's F12/F21 uploads), and the first
+    front's prepared solve tables were not counted either; the reset handed
+    their memory to the next H2 allocations, and the solve phase failed with
+    "CUDA error in solve upload" (illegal or misaligned address, 60^3 one
+    rank, four blocks).  A build now resets the heap only when nothing is
+    allocated.
+  STRUMPACK testPoisson3dMPIDist, GPU: four blocks 60^3 1 and 4 ranks and
+  100^3 4 ranks pass (BPACK_CHECK=solve: 466 checks, none off); --h2_only 1
+  100^3 4 ranks 0 of 33115 checks off; 200^3 4 ranks --h2_only 1 271.5 s,
+  4 its, four blocks 213.3 s, 7 its.  Single-operator driver runs unchanged
+  bit for bit (partial 1 and 3 GPUs with ID traces, full 2 GPUs, partial
+  from a source on 2 GPUs).
