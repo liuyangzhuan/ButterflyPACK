@@ -1464,6 +1464,33 @@ inline std::vector<std::vector<char>> partial_exchange(MPI_Comm comm, const std:
     return recv;
 }
 
+// The CB entries' block messages (partial_schur_blocks): a box's positions
+// (its live set, or a block's raw rows) inside its point list, as sent and
+// as received; a message that broke this would index past the arrays the
+// receiver sizes by them.
+template<typename Box>
+void partial_check_block_box(const Box& box, const std::vector<int64_t>& positions, int level, int rank, const char* what) {
+    const int64_t n = box.num_points;
+    const int64_t worst = positions.empty() ? -1 : *std::max_element(positions.begin(), positions.end());
+    const int64_t least = positions.empty() ? 0 : *std::min_element(positions.begin(), positions.end());
+    if (n != static_cast<int64_t>(box.point_indices.size()) || worst >= n || least < 0) {
+        throw std::logic_error("partial Schur entries: rank " + std::to_string(rank) + " " + what + " box " +
+                               std::to_string(box.morton_index) + " at level " + std::to_string(level) + " with " +
+                               std::to_string(n) + " points (" + std::to_string(box.point_indices.size()) +
+                               " in its list) and positions " + std::to_string(least) + ".." + std::to_string(worst));
+    }
+}
+inline void partial_check_received(int64_t morton, const std::vector<int64_t>& positions, int64_t n, int level, int rank,
+                                   const char* what) {
+    for (int64_t q : positions) {
+        if (q < 0 || q >= n) {
+            throw std::logic_error("partial Schur entries: rank " + std::to_string(rank) + " received box " +
+                                   std::to_string(morton) + " at level " + std::to_string(level) + " with a " + what +
+                                   " position " + std::to_string(q) + " of " + std::to_string(n));
+        }
+    }
+}
+
 template<typename T>
 void partial_put(std::vector<char>& buf, const T* v, size_t n) {
     const size_t at = buf.size();
@@ -2631,12 +2658,19 @@ void partial_schur_blocks(fmm::ParallelTree<CoordType, DataType>& tree, int64_t 
     };
 #ifdef H2_HAVE_GPU
     // H2_partial_extract: 2 the host; 1 the device when the records are on it;
-    // 0 (auto) also when the call is large enough (the same on every rank:
-    // the request and the option are).  BPACK_CHECK=solve: the host's too.
+    // 0 (auto) also when the call is large enough, or when some rank kept
+    // records on the device.  The same on every rank: the request and the
+    // option are, and the records' place is reduced over the ranks - a rank
+    // without F22 boxes keeps none, and the two paths' messages differ (a
+    // rank on the host would read the device path's).  BPACK_CHECK=solve:
+    // the host's too.
     if constexpr (fmm::gpu::gpu_data_type<DataType>) {
-        if (extract_mode != 2 &&
-            (extract_mode == 1 || ooff.back() >= kPartialExtractDeviceEntries || tree.partial_records_on_device) &&
-            fmm::gpu::partial_device_ready(&tree, 0)) {
+        int device = extract_mode == 1 || (extract_mode == 0 && ooff.back() >= kPartialExtractDeviceEntries) ? 1 : 0;
+        if (extract_mode == 0 && device == 0) {
+            device = tree.partial_records_on_device ? 1 : 0;
+            if (nranks > 1) MPI_Allreduce(MPI_IN_PLACE, &device, 1, MPI_INT, MPI_MAX, tree.comm);
+        }
+        if (device != 0 && fmm::gpu::partial_device_ready(&tree, 0)) {
             partial_schur_blocks_device(tree, ninter, rows, nrows, cols, ncols, out, roff, coff, ooff);
             if (fmm::gpu::device_solve_check()) {
                 std::vector<DataType> host(static_cast<size_t>(ooff.back()));
@@ -2823,6 +2857,7 @@ void partial_schur_blocks(fmm::ParallelTree<CoordType, DataType>& tree, int64_t 
                         // column block's X_RN terms its raw rows and values
                         std::vector<char> msg;
                         const bool row = side_id == 0;
+                        partial_check_block_box(box, row ? box.skeleton_indices : b.rows, l, me, "sends");
                         const int64_t head[8] = {side_id, box.morton_index, box.num_points, static_cast<int64_t>(b.members.size()),
                                                  row ? 0 : static_cast<int64_t>(b.rows.size()), row ? static_cast<int64_t>(b.wrows.size()) : 0,
                                                  row ? static_cast<int64_t>(box.skeleton_indices.size()) : 0, b.inter};
@@ -2862,11 +2897,14 @@ void partial_schur_blocks(fmm::ParallelTree<CoordType, DataType>& tree, int64_t 
                         p = partial_get(p, rb.wrows.data(), rb.wrows.size());
                         p = partial_get(p, rb.wv.data(), rb.wv.size());
                         p = partial_get(p, rb.skeleton.data(), rb.skeleton.size());
+                        partial_check_received(rb.morton, rb.skeleton, rb.num_points, l, me, "live set");
+                        partial_check_received(rb.morton, rb.wrows, kp, l, me, "w rows");
                         rb.wpos.assign(static_cast<size_t>(kp), -1);
                         for (int64_t t = 0; t < nw; ++t) rb.wpos[static_cast<size_t>(rb.wrows[static_cast<size_t>(t)])] = static_cast<int32_t>(t);
                     } else {
                         p = partial_get(p, rb.rows.data(), rb.rows.size());
                         p = partial_get(p, rb.v.data(), rb.v.size());
+                        partial_check_received(rb.morton, rb.rows, rb.num_points, l, me, "rows");
                         rb.rowpos.assign(static_cast<size_t>(rb.num_points), -1);
                         for (int64_t t = 0; t < nr; ++t) rb.rowpos[static_cast<size_t>(rb.rows[static_cast<size_t>(t)])] = static_cast<int32_t>(t);
                     }

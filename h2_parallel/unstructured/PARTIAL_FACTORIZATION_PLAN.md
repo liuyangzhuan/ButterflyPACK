@@ -751,3 +751,17 @@ point set and on a plain cube split, dense checks at small N.
   4 its, four blocks 213.3 s, 7 its.  Single-operator driver runs unchanged
   bit for bit (partial 1 and 3 GPUs with ID traces, full 2 GPUs, partial
   from a source on 2 GPUs).
+- **The CB entries' path, the same on every rank (2026-10-29).**  On the
+  GPU, partial_schur_blocks took the device path when the request was large
+  or when this rank kept F22 records on the device
+  (tree.partial_records_on_device) - a rank's own flag, false on a rank
+  without F22 boxes, which a 32-rank front of STRUMPACK's (200^3, 64 ranks,
+  --h2_only 1) has.  The ranks then split between the two paths, whose
+  block messages (tags 620/621) differ, and a host rank read the device
+  path's bytes: a live-set "position" that was a double's bits, a segfault
+  (partial.hpp, the received row blocks).  Up to 8 ranks every rank had F22
+  boxes.  The records' place is now reduced over the ranks before the
+  choice, and the block messages check their positions as sent and as
+  received (a named error, not a corruption).  200^3 --h2_only 1 on 64 GPUs
+  then factors in 75.7 s, 4 its; testH2Partial 2/4/8 GPUs and the driver's
+  partial runs unchanged.
