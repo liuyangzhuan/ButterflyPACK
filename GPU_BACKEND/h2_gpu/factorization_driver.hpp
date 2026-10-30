@@ -187,7 +187,7 @@ public:
         }
     }
 
-    // Before the first level of the process's first factorization: a 64 KB
+    // Before the first level of an operator's first factorization: a 64 KB
     // message with every rank this one exchanges with on a level (each
     // level's one-hop neighbour ranks), sent and received the way the levels
     // will (from and into the exchange arena with GPU-aware MPI).  A pair's
@@ -203,11 +203,13 @@ public:
     // after a Color leaf at 384^3 on 8 ranks, 6.5 s at 768^3 on 64 ranks on
     // 80 GB cards; a Color leaf paid the same in its own first waves).
     // Returns its time (0 when it already ran); collective over the tree's
-    // ranks.
+    // ranks.  Once per operator, not per process: a process's operators have
+    // communicators of their own (a STRUMPACK front each), and a flag of the
+    // process let some ranks of a front skip it while the others waited for
+    // them in it.
     double warm_up_exchange() {
-        static bool done = false;
-        if (done || !color_gpu_enabled() || tree_->mpi_size <= 1) return 0.0;
-        done = true;
+        if (tree_->gpu_exchanges_warmed || !color_gpu_enabled() || tree_->mpi_size <= 1) return 0.0;
+        tree_->gpu_exchanges_warmed = true;
         const auto t0 = std::chrono::steady_clock::now();
         std::set<int> peer_set;
         for (int l = 2; l < tree_->num_levels; ++l) {

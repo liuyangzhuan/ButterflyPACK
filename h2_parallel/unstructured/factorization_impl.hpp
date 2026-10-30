@@ -347,9 +347,10 @@ void hierarchical_factorization_unstructured(
     gpu_options.compress_factors = tree->partial() ? 0 : compress_factors;
     gpu::ColorGpuDriver<CoordType, DataType, KernelType> gpu_driver(tree, kernel, gpu_options);
     {
-        // as the full-grid loop: before the first level (the kernels and
-        // exchanges of the process's first factorization, the application's
-        // evaluator before its first use), and not in the factor time
+        // as the full-grid loop: before the first level (the kernels of the
+        // process's first factorization, the exchanges of the operator's
+        // first, the application's evaluator before its first use), and not
+        // in the factor time
         const double kernels = gpu_driver.warm_up();
         const double buffers = gpu_driver.warm_up_buffers();
         const double exchanges = gpu_driver.warm_up_exchange();
