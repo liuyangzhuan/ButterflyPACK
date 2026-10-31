@@ -2745,10 +2745,14 @@ static void h2_extract_elements(
 
 // The sketched blocks of a list of requests from a compression-only
 // unstructured Color H2 (as h2_extract_elements; Omega's entries 1-based).
+// `partial`: a partial factorization's Schur complement, sketched as it is
+// computed (extract_partial_blocks with a PartialSketch: Omega A(rows,
+// columns) sketches CB's rows, the transposed form CB(columns, rows)'s
+// columns).
 static void h2_extract_sketches(
-    F2Cptr* bmat, MPI_Comm caller_comm, int* Nsketch, int* allrows, int* allcols, int* rowidx, int* colidx,
-    int* sketchdim, int* omegaidx, int* omega_row, int* omega_dest, double* omega_val, C_DT* alldat_loc,
-    int* pgidx, int* Npmap, int* pmaps, const char* caller, bool transposed) {
+    F2Cptr* bmat, MPI_Comm caller_comm, bool partial, int partial_extract, int* Nsketch, int* allrows, int* allcols,
+    int* rowidx, int* colidx, int* sketchdim, int* omegaidx, int* omega_row, int* omega_dest, double* omega_val,
+    C_DT* alldat_loc, int* pgidx, int* Npmap, int* pmaps, const char* caller, bool transposed) {
   using H2Data = typename butterfly::fmm_data<C_DT>::type;
   const std::vector<int> owner =
     single_rank_owners(*Nsketch, pgidx, *Npmap, pmaps, (std::string(caller) + " (format 7)").c_str());
@@ -2762,6 +2766,27 @@ static void h2_extract_sketches(
   for (int64_t e = 0; e < nomega; ++e) {
     orow[static_cast<size_t>(e)] = omega_row[e] - 1;
     odest[static_cast<size_t>(e)] = omega_dest[e] - 1;
+  }
+  if (partial) {
+    std::vector<int64_t> dims(sketchdim, sketchdim + std::max(*Nsketch, 0));
+    butterfly::color_unstructured::PartialSketch sk;
+    sk.side = transposed ? 1 : 0;
+    sk.dims = dims.data();
+    sk.omega_off = omega_off.data();
+    sk.omega_pos = orow.data();
+    sk.omega_dest = odest.data();
+    sk.omega_val = omega_val;
+    butterfly::H2<double, H2Data>* h2 = h2_of<H2Data>(bmat);
+    auto* tree = h2 != nullptr ? h2->tree.get() : nullptr;
+    auto* out = reinterpret_cast<H2Data*>(alldat_loc);
+    if (transposed) {
+      butterfly::color_unstructured::extract_partial_blocks(tree, caller_comm, *Nsketch, allcols, allrows, colidx, rowidx,
+                                                            owner, out, partial_extract, &sk);
+    } else {
+      butterfly::color_unstructured::extract_partial_blocks(tree, caller_comm, *Nsketch, allrows, allcols, rowidx, colidx,
+                                                            owner, out, partial_extract, &sk);
+    }
+    return;
   }
   butterfly::color_unstructured::extract_compressed_sketches(
     h2_of<H2Data>(bmat), caller_comm, *Nsketch, allrows, allcols, rowidx, colidx, sketchdim, omega_off.data(),
@@ -3022,18 +3047,28 @@ static void extractsketch_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr*
   MPI_Comm caller_comm = MPI_Comm_f2c(static_cast<MPI_Fint>(fcomm));
   int crank = 0;
   MPI_Comm_rank(caller_comm, &crank);
-  // the source's format, from its ranks (the others hold no option)
-  int format = -1;
+  // the source's format and whether it is a partial factorization, from its
+  // ranks (the others hold no option)
+  int kind[2] = {-1, 0};
+  int partial_extract = 0;  // (read where the matrix is: only its ranks compute)
   if (option != nullptr && *option != nullptr) {
     double tmp = 0.0;
     c_bpack_getoption(option, "format", &tmp);
-    format = static_cast<int>(tmp);
+    kind[0] = static_cast<int>(tmp);
+    if (kind[0] == 7) {
+      using H2Data = typename butterfly::fmm_data<C_DT>::type;
+      butterfly::H2<double, H2Data>* h2 = h2_of<H2Data>(bmat);
+      kind[1] = h2 != nullptr && h2->build_state == butterfly::H2BuildState::RS_PARTIAL ? 1 : 0;
+      if (kind[1] != 0) partial_extract = partial_extract_of(option);
+    }
   }
-  MPI_Allreduce(MPI_IN_PLACE, &format, 1, MPI_INT, MPI_MAX, caller_comm);
+  MPI_Allreduce(MPI_IN_PLACE, kind, 2, MPI_INT, MPI_MAX, caller_comm);
+  const int format = kind[0];
   try {
     if (format == 7) {
-      h2_extract_sketches(bmat, caller_comm, Nsketch, allrows, allcols, rowidx, colidx, sketchdim, omegaidx,
-                          omega_row, omega_dest, omega_val, alldat_loc, pgidx, Npmap, pmaps, caller, transposed);
+      h2_extract_sketches(bmat, caller_comm, kind[1] != 0, partial_extract, Nsketch, allrows, allcols, rowidx, colidx,
+                          sketchdim, omegaidx, omega_row, omega_dest, omega_val, alldat_loc, pgidx, Npmap, pmaps, caller,
+                          transposed);
       return;
     }
     // other formats: the requests' entries (transposed: A(columns, rows)),

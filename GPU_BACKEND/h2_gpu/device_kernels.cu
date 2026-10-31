@@ -56,6 +56,12 @@ __global__ void index_copy_kernel(const IndexCopyItemT<T>* items, const char* me
     }
 }
 
+__device__ __forceinline__ void atomic_add_to(double* at, double v) { atomicAdd(at, v); }
+__device__ __forceinline__ void atomic_add_to(dcomplex* at, dcomplex v) {
+    atomicAdd(&at->re, v.re);
+    atomicAdd(&at->im, v.im);
+}
+
 template<typename T>
 __global__ void block_copy_kernel(const BlockCopyItemT<T>* items, const char* meta) {
     const BlockCopyItemT<T> item = items[blockIdx.x];
@@ -64,12 +70,16 @@ __global__ void block_copy_kernel(const BlockCopyItemT<T>* items, const char* me
     if (i >= item.m || j0 >= item.n) return;
     const int64_t so = static_cast<int64_t>(index_at(meta, item.src_rows, i)) * item.rs;
     const int64_t oo = static_cast<int64_t>(index_at(meta, item.out_rows, i)) * item.ors;
+    const double wi = item.row_w < 0 ? 1.0 : reinterpret_cast<const double*>(meta + item.row_w)[i];
+    const double* wj = item.col_w < 0 ? nullptr : reinterpret_cast<const double*>(meta + item.col_w);
     for (int jj = threadIdx.y; jj < kTile; jj += kTileRows) {
         const int j = j0 + jj;
         if (j >= item.n) break;
-        const T v = item.src[so + static_cast<int64_t>(index_at(meta, item.src_cols, j)) * item.cs];
+        T v = item.src[so + static_cast<int64_t>(index_at(meta, item.src_cols, j)) * item.cs];
+        if (item.row_w >= 0 || wj != nullptr) v = (wj != nullptr ? wi * wj[j] : wi) * v;
         T* at = item.out + oo + static_cast<int64_t>(index_at(meta, item.out_cols, j)) * item.ocs;
-        if (item.add) *at += v;
+        if (item.add == 2) atomic_add_to(at, v);
+        else if (item.add) *at += v;
         else *at = v;
     }
 }

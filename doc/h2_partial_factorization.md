@@ -92,6 +92,7 @@ an F22 point is its input id minus n11.
 | `c_bpack_partial_schur_mult(y2, x2, N22, Ncol, ...)` | y2 = CB x2 | `x2`, `y2`: N22 x Ncol, column-major, the same on every rank. |
 | `c_bpack_partial_schur_extract(out, rows, nrows, cols, ncols, ...)` | out = CB(rows, cols) | 0-based F22 indices; `out` nrows x ncols, column-major, the same on every rank. |
 | `c_bpack_extractelement`, `c_bpack_extractelement_bridge` | blocks of CB | The usual arguments, with CB as an N22 x N22 matrix: 1-based F22 indices in `allrows` and `allcols`, and a 1 x 1 process grid for each intersection (its `pmaps` row: 1, 1, the rank that receives it). Every intersection of a call is computed in one pass, so a parent should ask for all the blocks it reads in one call. |
+| `c_bpack_extractsketch_bridge`, `c_bpack_extractsketch_transpose_bridge` | sketches of blocks of CB: Omega CB(rows, cols), or Omega CB(cols, rows)^T | As for the blocks (1-based F22 indices, 1 x 1 grids), Omega given by its entries (BPACK_wrapper.h). The sketches are computed as the entries are, the sketched side's point vectors combined by Omega into d vectors as they go up the tree (once that is cheaper than carrying the points), so neither the blocks nor their products are formed, and only the sketches are summed over the ranks and sent. A parent front's H2 asks its children for the ID's sketches so (STRUMPACK's sketch callback). |
 | `c_bpack_partial_schur_release(...)` | frees CB | The records and the root block, nearly all of the object's memory (host and device). The partial solves keep working; Schur complement calls after it throw. |
 | `c_bpack_logdet` | log det F11 | |
 
@@ -196,15 +197,20 @@ partial solves on the device use the device exchanges of the full solve.
 ### Checks
 
 `BPACK_CHECK=solve` runs every partial solve, Schur complement product and
-Schur complement entry call that ran on the device again on the host, and
-prints on rank 0:
+Schur complement entry or sketch call that ran on the device again on the
+host, and prints on rank 0:
 
 ```
 GPU partial forward check: |gpu - host| / |host| = 5.476e-16
 GPU partial backward check: |gpu - host| / |host| = 3.334e-16
 GPU partial CB product check: |y_gpu - y_host| / |y_host| = 2.653e-15
 GPU partial CB entries check: |gpu - host| / |host| = 1.209e-16 (2438 entries in 4 blocks; device 0.0029 s, host 0.0052 s)
+GPU partial CB sketches check: |gpu - host| / |host| = 1.726e-16 (3790 entries in 5 blocks; device 0.0053 s, host 0.0074 s)
 ```
+
+(a sketch call's entries are its sketches' values).  The device adds the
+sketches' terms with atomic adds, so they vary from run to run in the last
+bits.
 
 Round-off is expected (about 1e-17 to 1e-14), also with compressed records:
 both sides decompress the same bytes.
@@ -214,7 +220,8 @@ both sides decompress the same bytes.
 `EXAMPLE/Laplace3D_H2Test_Driver.cpp` (`claplace3d_h2`) factors a 3D Laplace
 kernel on an n^3 grid; with `--H2_partial n11` the first n11 points (the
 grid's first planes) form F11. It then calls the partial solves, the product,
-the entries both ways (comparing them) and the release, and prints their
+the entries both ways (comparing them), the sketches both ways (against a
+sparse-sign Omega times the entries) and the release, and prints their
 times.
 
 | Option | |

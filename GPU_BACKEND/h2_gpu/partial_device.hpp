@@ -1069,16 +1069,26 @@ size_t partial_pair_bytes(const PartialPair<DataType>& p) {
     return e * sizeof(DataType) + 256 * (4 + 3 * p.terms.size());
 }
 
+// One side of a pair's targets: entry a of the list takes row (or column)
+// src[a] of G (src empty: a itself) to row dst[a] of the output, weighted by
+// w[a] (w empty: 1).
+struct PartialTargetList {
+    std::vector<int> src, dst;
+    std::vector<double> w;
+};
+
 // Where the G of a group go when they stay on the device: pair q's G is
-// added into out at rows[q] x cols[q], positions in its block of out (which
-// starts at base[q], leading dimension ld[q]).  The pairs of a group write
-// distinct entries: at a level, the row blocks partition the requested rows'
-// points and the column blocks the columns'.
+// added into out at rows[q] x cols[q] (PartialTargetList), entry (a, b) of
+// its block of out at base[q] + a ors[q] + b ocs[q].  With add 1 the pairs
+// of a group write distinct entries: at a level, the row blocks partition
+// the requested rows' points and the column blocks the columns'.  A
+// sketched request's blocks share its sketch rows: add 2, atomic adds.
 template<typename DataType>
 struct PartialPairTargets {
     DataType* out = nullptr;
-    std::vector<int64_t> base, ld;
-    std::vector<const std::vector<int>*> rows, cols;
+    std::vector<int64_t> base, ors, ocs;
+    std::vector<const PartialTargetList*> rows, cols;
+    int add = 1;
 };
 
 // The G (ni x nj, column major, end to end in pair order) of a group of
@@ -1258,30 +1268,47 @@ void partial_device_pairs(PartialDeviceWork& work, const std::vector<const Parti
     constexpr int kScatterTile = 64;
     std::vector<BlockCopyItemT<S>> tiles;
     if (targets != nullptr) {
-        std::unordered_map<const std::vector<int>*, size_t> pos_at;
-        auto positions = [&](const std::vector<int>* v) {
-            auto it = pos_at.find(v);
-            if (it == pos_at.end()) it = pos_at.emplace(v, meta.append(*v)).first;
-            return static_cast<int64_t>(it->second);
+        // (a list's dst, src and w in meta, once a list; -1: absent)
+        struct ListAt { int64_t dst = -1, src = -1, w = -1; int n = 0; };
+        std::unordered_map<const PartialTargetList*, ListAt> list_at;
+        auto lists = [&](const PartialTargetList* v) {
+            auto it = list_at.find(v);
+            if (it == list_at.end()) {
+                ListAt a;
+                a.n = static_cast<int>(v->dst.size());
+                a.dst = static_cast<int64_t>(meta.append(v->dst));
+                if (!v->src.empty()) a.src = static_cast<int64_t>(meta.append(v->src));
+                if (!v->w.empty()) a.w = static_cast<int64_t>(meta.append(v->w));
+                it = list_at.emplace(v, a).first;
+            }
+            return it->second;
         };
+        auto at = [](int64_t list, int i, size_t bytes) { return list < 0 ? list : list + static_cast<int64_t>(i) * static_cast<int64_t>(bytes); };
         for (size_t q = 0; q < pairs.size(); ++q) {
-            const int ni = pairs[q]->ni, nj = pairs[q]->nj;
-            const int64_t ro = positions(targets->rows[q]), co = positions(targets->cols[q]);
+            const int ni = pairs[q]->ni;
+            const ListAt ro = lists(targets->rows[q]), co = lists(targets->cols[q]);
             const S* G = reinterpret_cast<const S*>(d + g_off[q]);
-            for (int j0 = 0; j0 < nj; j0 += kScatterTile) {
-                for (int i0 = 0; i0 < ni; i0 += kScatterTile) {
+            for (int j0 = 0; j0 < co.n; j0 += kScatterTile) {
+                for (int i0 = 0; i0 < ro.n; i0 += kScatterTile) {
                     BlockCopyItemT<S> it{};
                     it.out = reinterpret_cast<S*>(targets->out + targets->base[q]);
-                    it.ors = 1;
-                    it.ocs = targets->ld[q];
-                    it.out_rows.offset = ro + static_cast<int64_t>(i0) * static_cast<int64_t>(sizeof(int));
-                    it.out_cols.offset = co + static_cast<int64_t>(j0) * static_cast<int64_t>(sizeof(int));
-                    it.src = G + i0 + static_cast<int64_t>(j0) * ni;
+                    it.ors = targets->ors[q];
+                    it.ocs = targets->ocs[q];
+                    it.out_rows.offset = at(ro.dst, i0, sizeof(int));
+                    it.out_cols.offset = at(co.dst, j0, sizeof(int));
+                    it.src = G;
                     it.rs = 1;
                     it.cs = ni;
-                    it.m = std::min(kScatterTile, ni - i0);
-                    it.n = std::min(kScatterTile, nj - j0);
-                    it.add = 1;
+                    // (an identity source list: the tile's own rows)
+                    if (ro.src >= 0) it.src_rows.offset = at(ro.src, i0, sizeof(int));
+                    else it.src_rows.base = i0;
+                    if (co.src >= 0) it.src_cols.offset = at(co.src, j0, sizeof(int));
+                    else it.src_cols.base = j0;
+                    it.row_w = at(ro.w, i0, sizeof(double));
+                    it.col_w = at(co.w, j0, sizeof(double));
+                    it.m = std::min(kScatterTile, ro.n - i0);
+                    it.n = std::min(kScatterTile, co.n - j0);
+                    it.add = targets->add;
                     tiles.push_back(it);
                 }
             }

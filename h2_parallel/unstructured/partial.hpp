@@ -59,6 +59,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -1615,18 +1616,48 @@ void partial_leaf_index(fmm::ParallelTree<CoordType, DataType>& tree) {
     }
 }
 
+// The sketched form of a CB request (extract_partial_sketches): request k
+// asks for Y_k = Omega_k CB(I_k, J_k) (side 0: Omega_k d_k x |I_k|, Y_k
+// d_k x |J_k|) or Y_k = Omega_k CB(I_k, J_k)^T (side 1: Omega_k d_k x |J_k|,
+// Y_k d_k x |I_k|), column major, Omega_k given by its entries omega_off[k]
+// .. omega_off[k + 1]: the position on the sketched side, the row of Y_k
+// (both 0-based) and the value.
+struct PartialSketch {
+    int side = 0;
+    const int64_t* dims = nullptr;
+    const int64_t* omega_off = nullptr;
+    const int* omega_pos = nullptr;
+    const int* omega_dest = nullptr;
+    const double* omega_val = nullptr;
+};
+
 // One side of a CB request: each block of the request's distinct points (the
 // same on every rank), their positions in it (pos[pos_start[m] ..
 // pos_start[m + 1])), and the leaf chain blocks of this rank's boxes (with
-// their identity values when `values`)
+// their identity values when `values`).  A sketched side (sk): a point's
+// positions are the rows of Y_k that Omega_k sends it to, with the weights
+// posw (Omega_k's entries at its positions, summed), and request k's d_k
+// sketch rows follow its points (sk_first[k] on), each at its row with
+// weight 1: a chain block over them carries Omega_k's combination of its
+// points' chains.  The points Omega_k does not reach get no chain block.
 template<typename DataType>
 struct PartialCbSide {
     std::vector<int64_t> points, pos_start, pos;
+    std::vector<double> posw;               ///< a sketched side's weights (else empty: 1)
+    std::vector<int64_t> sk_first, sk_dim;  ///< a sketched side: request k's sketch rows
     std::vector<PartialChainBlock<DataType>> blocks;
+    bool sketched() const { return !sk_first.empty(); }
+    /// a block over exactly its request's sketch rows, in order
+    template<typename Block>
+    bool sketch_rows(const Block& b) const {
+        if (!sketched()) return false;
+        const int64_t d = sk_dim[static_cast<size_t>(b.inter)], f = sk_first[static_cast<size_t>(b.inter)];
+        return d > 0 && static_cast<int64_t>(b.members.size()) == d && b.members.front() == f && b.members.back() == f + d - 1;
+    }
 };
 template<typename CoordType, typename DataType>
 PartialCbSide<DataType> partial_cb_side(const fmm::ParallelTree<CoordType, DataType>& tree, int64_t ninter, const int64_t* idx,
-                                        const std::vector<int64_t>& off, bool values) {
+                                        const std::vector<int64_t>& off, bool values, const PartialSketch* sk = nullptr) {
     const auto& pr = tree.partial_root;
     const int64_t n22 = tree.num_points - tree.partial_count;
     int nranks = 1;
@@ -1639,8 +1670,7 @@ PartialCbSide<DataType> partial_cb_side(const fmm::ParallelTree<CoordType, DataT
     for (int64_t k = 0; k < ninter; ++k) {
         try {
             Side& part = parts[static_cast<size_t>(k)];
-            std::unordered_map<int64_t, int64_t> of;       // F22 index -> distinct point
-            std::unordered_map<int64_t, size_t> block_of;  // leaf box -> chain block
+            std::unordered_map<int64_t, int64_t> of;  // F22 index -> distinct point
             const int64_t q0 = off[static_cast<size_t>(k)], n = off[static_cast<size_t>(k) + 1] - q0;
             std::vector<int64_t> point_of(static_cast<size_t>(n));
             for (int64_t q = 0; q < n; ++q) {
@@ -1648,34 +1678,70 @@ PartialCbSide<DataType> partial_cb_side(const fmm::ParallelTree<CoordType, DataT
                 if (f < 0 || f >= n22) throw std::runtime_error("partial Schur: an index out of range");
                 auto it = of.find(f);
                 if (it == of.end()) {
-                    const int64_t m = static_cast<int64_t>(part.points.size());
-                    it = of.emplace(f, m).first;
+                    it = of.emplace(f, static_cast<int64_t>(part.points.size())).first;
                     part.points.push_back(f);
-                    const int64_t b = pr.leaf_box[static_cast<size_t>(f)];
-                    if (b >= 0) {
-                        auto bt = block_of.find(b);
-                        if (bt == block_of.end()) {
-                            bt = block_of.emplace(b, part.blocks.size()).first;
-                            part.blocks.emplace_back();
-                            part.blocks.back().box = b;
-                            part.blocks.back().inter = k;
-                        }
-                        auto& blk = part.blocks[bt->second];
-                        blk.members.push_back(m);
-                        blk.rows.push_back(pr.leaf_slot[static_cast<size_t>(f)]);
-                    } else if (nranks == 1) {
-                        throw std::runtime_error("partial Schur: a point is not in a local leaf");
-                    }  // (else another rank's)
                 }
                 point_of[static_cast<size_t>(q)] = it->second;
             }
             const size_t np = part.points.size();
             part.pos_start.assign(np + 1, 0);
-            for (int64_t m : point_of) ++part.pos_start[static_cast<size_t>(m) + 1];
-            for (size_t m = 0; m < np; ++m) part.pos_start[m + 1] += part.pos_start[m];
-            part.pos.resize(static_cast<size_t>(n));
-            std::vector<int64_t> fill(part.pos_start.begin(), part.pos_start.end() - 1);
-            for (int64_t q = 0; q < n; ++q) part.pos[static_cast<size_t>(fill[static_cast<size_t>(point_of[static_cast<size_t>(q)])]++)] = q;
+            if (sk == nullptr) {
+                for (int64_t m : point_of) ++part.pos_start[static_cast<size_t>(m) + 1];
+                for (size_t m = 0; m < np; ++m) part.pos_start[m + 1] += part.pos_start[m];
+                part.pos.resize(static_cast<size_t>(n));
+                std::vector<int64_t> fill(part.pos_start.begin(), part.pos_start.end() - 1);
+                for (int64_t q = 0; q < n; ++q) part.pos[static_cast<size_t>(fill[static_cast<size_t>(point_of[static_cast<size_t>(q)])]++)] = q;
+            } else {
+                // a point's sketch rows: Omega_k's entries at its positions, summed by row
+                const int64_t d = sk->dims[k];
+                std::vector<std::vector<std::pair<int64_t, double>>> tg(np);
+                for (int64_t e = sk->omega_off[k]; e < sk->omega_off[k + 1]; ++e) {
+                    const int64_t q = sk->omega_pos[e], s = sk->omega_dest[e];
+                    if (q < 0 || q >= n || s < 0 || s >= d) throw std::runtime_error("partial Schur: a sketch entry out of range");
+                    tg[static_cast<size_t>(point_of[static_cast<size_t>(q)])].emplace_back(s, sk->omega_val[e]);
+                }
+                for (size_t m = 0; m < np; ++m) {
+                    auto& t = tg[m];
+                    std::sort(t.begin(), t.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+                    for (size_t a = 0; a < t.size(); ++a) {
+                        if (!part.pos.empty() && static_cast<int64_t>(part.pos.size()) > part.pos_start[m] && part.pos.back() == t[a].first) {
+                            part.posw.back() += t[a].second;
+                        } else {
+                            part.pos.push_back(t[a].first);
+                            part.posw.push_back(t[a].second);
+                        }
+                    }
+                    part.pos_start[m + 1] = static_cast<int64_t>(part.pos.size());
+                }
+                part.sk_first.push_back(static_cast<int64_t>(np));
+                part.sk_dim.push_back(d);
+                for (int64_t s = 0; s < d; ++s) {
+                    part.points.push_back(-1);
+                    part.pos.push_back(s);
+                    part.posw.push_back(1.0);
+                    part.pos_start.push_back(static_cast<int64_t>(part.pos.size()));
+                }
+            }
+            // the leaf chain blocks of the points with positions
+            std::unordered_map<int64_t, size_t> block_of;  // leaf box -> chain block
+            for (size_t m = 0; m < np; ++m) {
+                if (part.pos_start[m] == part.pos_start[m + 1]) continue;
+                const int64_t f = part.points[m], b = pr.leaf_box[static_cast<size_t>(f)];
+                if (b < 0) {
+                    if (nranks == 1) throw std::runtime_error("partial Schur: a point is not in a local leaf");
+                    continue;  // (another rank's)
+                }
+                auto bt = block_of.find(b);
+                if (bt == block_of.end()) {
+                    bt = block_of.emplace(b, part.blocks.size()).first;
+                    part.blocks.emplace_back();
+                    part.blocks.back().box = b;
+                    part.blocks.back().inter = k;
+                }
+                auto& blk = part.blocks[bt->second];
+                blk.members.push_back(static_cast<int64_t>(m));
+                blk.rows.push_back(pr.leaf_slot[static_cast<size_t>(f)]);
+            }
             if (values) {
                 for (auto& blk : part.blocks) {
                     const int64_t nb = static_cast<int64_t>(blk.members.size());
@@ -1696,12 +1762,122 @@ PartialCbSide<DataType> partial_cb_side(const fmm::ParallelTree<CoordType, DataT
         side.points.insert(side.points.end(), part.points.begin(), part.points.end());
         for (size_t m = 1; m < part.pos_start.size(); ++m) side.pos_start.push_back(p0 + part.pos_start[m]);
         side.pos.insert(side.pos.end(), part.pos.begin(), part.pos.end());
+        side.posw.insert(side.posw.end(), part.posw.begin(), part.posw.end());
+        for (int64_t f : part.sk_first) side.sk_first.push_back(m0 + f);
+        side.sk_dim.insert(side.sk_dim.end(), part.sk_dim.begin(), part.sk_dim.end());
         for (auto& blk : part.blocks) {
             for (auto& m : blk.members) m += m0;
             side.blocks.push_back(std::move(blk));
         }
     }
     return side;
+}
+
+// A CB request's output: block k at ooff[k], entry (a, b) (a position or
+// sketch row on the row side, likewise b) at a * ors[k] + b * ocs[k] - CB(I_k,
+// J_k) column major, or a sketch (PartialSketch), d_k x |J_k| or d_k x |I_k|.
+struct PartialOutLayout {
+    std::vector<int64_t> ooff, ors, ocs;
+};
+inline PartialOutLayout partial_out_layout(int64_t ninter, const int64_t* nrows, const int64_t* ncols, const PartialSketch* sk) {
+    PartialOutLayout o;
+    o.ooff.assign(static_cast<size_t>(ninter) + 1, 0);
+    o.ors.resize(static_cast<size_t>(ninter));
+    o.ocs.resize(static_cast<size_t>(ninter));
+    for (int64_t k = 0; k < ninter; ++k) {
+        int64_t len = nrows[k] * ncols[k];
+        o.ors[static_cast<size_t>(k)] = 1;
+        o.ocs[static_cast<size_t>(k)] = nrows[k];
+        if (sk != nullptr) {
+            const int64_t d = sk->dims[k];
+            len = d * (sk->side == 0 ? ncols[k] : nrows[k]);
+            o.ors[static_cast<size_t>(k)] = sk->side == 0 ? 1 : d;
+            o.ocs[static_cast<size_t>(k)] = sk->side == 0 ? d : 1;
+        }
+        o.ooff[static_cast<size_t>(k) + 1] = o.ooff[static_cast<size_t>(k)] + len;
+    }
+    return o;
+}
+
+// o += x from several threads
+template<typename DataType>
+inline void partial_atomic_add(DataType& o, DataType x) {
+    if constexpr (std::is_floating_point_v<DataType>) {
+#pragma omp atomic
+        o += x;
+    } else {
+        using Real = typename DataType::value_type;
+        Real* p = reinterpret_cast<Real*>(&o);
+        const Real re = x.real(), im = x.imag();
+#pragma omp atomic
+        p[0] += re;
+#pragma omp atomic
+        p[1] += im;
+    }
+}
+
+// A sketched side's merge, at the start of a level above the leaf: its
+// blocks of one box and request become one block over the request's sketch
+// rows when that is no dearer than carrying their points (|rows| d against
+// sum |rows_b| |members_b|), or when one of them already is one.  The merged
+// block's rows are the union of theirs and its values sum_b V_b W_b, W_b
+// (|members_b| x d) the members' weights (posw).  The plan (host): the groups
+// merged, each one's rows and each source's rows in them; `apply` adds a
+// source in (values on the host or the device).
+struct PartialSketchMerge {
+    int64_t box = -1, inter = 0;
+    std::vector<int64_t> rows;                 // the union
+    std::vector<size_t> src;                   // the blocks merged
+    std::vector<std::vector<int32_t>> at;      // each source's rows in `rows`
+};
+template<typename DataType, typename Block>
+std::vector<PartialSketchMerge> partial_sketch_merge_plan(const PartialCbSide<DataType>& side, const std::vector<Block>& blocks,
+                                                          std::vector<char>& merged) {
+    std::vector<PartialSketchMerge> plan;
+    merged.assign(blocks.size(), 0);
+    if (!side.sketched()) return plan;
+    std::unordered_map<int64_t, size_t> group_of;  // (box, request) -> group
+    std::vector<std::vector<size_t>> groups;
+    for (size_t i = 0; i < blocks.size(); ++i) {
+        const int64_t key = blocks[i].box * static_cast<int64_t>(side.sk_dim.size()) + blocks[i].inter;
+        auto it = group_of.find(key);
+        if (it == group_of.end()) {
+            it = group_of.emplace(key, groups.size()).first;
+            groups.emplace_back();
+        }
+        groups[it->second].push_back(i);
+    }
+    for (auto& g : groups) {
+        const auto& b0 = blocks[g[0]];
+        const int64_t d = side.sk_dim[static_cast<size_t>(b0.inter)];
+        if (d == 0) continue;
+        bool any_sketch = false;
+        double now = 0.0;
+        std::vector<int64_t> rows;
+        for (size_t i : g) {
+            any_sketch |= side.sketch_rows(blocks[i]);
+            now += static_cast<double>(blocks[i].rows.size()) * static_cast<double>(blocks[i].members.size());
+            rows.insert(rows.end(), blocks[i].rows.begin(), blocks[i].rows.end());
+        }
+        std::sort(rows.begin(), rows.end());
+        rows.erase(std::unique(rows.begin(), rows.end()), rows.end());
+        const bool merge = any_sketch ? !(g.size() == 1) : static_cast<double>(rows.size()) * static_cast<double>(d) <= now;
+        if (!merge) continue;
+        PartialSketchMerge m;
+        m.box = b0.box;
+        m.inter = b0.inter;
+        m.src = g;
+        for (size_t i : g) {
+            merged[i] = 1;
+            std::vector<int32_t> a(blocks[i].rows.size());
+            for (size_t t = 0; t < a.size(); ++t)
+                a[t] = static_cast<int32_t>(std::lower_bound(rows.begin(), rows.end(), blocks[i].rows[t]) - rows.begin());
+            m.at.push_back(std::move(a));
+        }
+        m.rows = std::move(rows);
+        plan.push_back(std::move(m));
+    }
+    return plan;
 }
 
 // H2_partial_extract auto (0): the device for a call of at least this many
@@ -1731,7 +1907,7 @@ template<typename CoordType, typename DataType>
 void partial_schur_blocks_device(fmm::ParallelTree<CoordType, DataType>& tree, int64_t ninter, const int64_t* rows,
                                  const int64_t* nrows, const int64_t* cols, const int64_t* ncols, DataType* out,
                                  const std::vector<int64_t>& roff, const std::vector<int64_t>& coff,
-                                 const std::vector<int64_t>& ooff) {
+                                 const PartialOutLayout& layout, const PartialSketch* sketch) {
     namespace gpu = fmm::gpu;
     using S = typename fmm::gpu::DeviceScalar<DataType>::type;
     using Chain = PartialDeviceChain<DataType>;
@@ -1765,13 +1941,17 @@ void partial_schur_blocks_device(fmm::ParallelTree<CoordType, DataType>& tree, i
         tp[phase] += t - tmark;
         tmark = t;
     };
+    const std::vector<int64_t>& ooff = layout.ooff;
     partial_leaf_index(tree);
-    const PartialCbSide<DataType> Rh = partial_cb_side(tree, ninter, rows, roff, false);
-    const PartialCbSide<DataType> Ch = partial_cb_side(tree, ninter, cols, coff, false);
+    const PartialCbSide<DataType> Rh = partial_cb_side(tree, ninter, rows, roff, false,
+                                                       sketch != nullptr && sketch->side == 0 ? sketch : nullptr);
+    const PartialCbSide<DataType> Ch = partial_cb_side(tree, ninter, cols, coff, false,
+                                                       sketch != nullptr && sketch->side == 1 ? sketch : nullptr);
     // The pairs' blocks are added into a device copy of out, downloaded once at
     // the end, when it fits; else they come to the host a group at a time and
     // the host scatters them.  On the device a point's sums go to its first
-    // position in its block, and are copied to its others at the end.
+    // position in its block, and are copied to its others at the end; on a
+    // sketched side to every row its weights send it to.
     const size_t out_bytes = static_cast<size_t>(ooff.back()) * D;
     DataType* out_dev = nullptr;
     if (out_bytes <= work.budget()) {
@@ -1780,25 +1960,42 @@ void partial_schur_blocks_device(fmm::ParallelTree<CoordType, DataType>& tree, i
     } else {
         std::fill(out, out + ooff.back(), DataType(0));
     }
-    auto first_positions = [](const PartialCbSide<DataType>& side) {
-        std::vector<int> first(side.points.size());
-        for (size_t m = 0; m < first.size(); ++m) first[m] = static_cast<int>(side.pos[static_cast<size_t>(side.pos_start[m])]);
-        return first;
+    // a block's members' targets in its block of out (as above)
+    auto target_list = [](const PartialCbSide<DataType>& side, const std::vector<int64_t>& members) {
+        gpu::PartialTargetList t;
+        t.dst.reserve(members.size());
+        bool plain = true;
+        for (size_t r = 0; r < members.size(); ++r) {
+            const size_t m = static_cast<size_t>(members[r]);
+            const int64_t p0 = side.pos_start[m], p1 = side.sketched() ? side.pos_start[m + 1] : p0 + 1;
+            for (int64_t p = p0; p < p1; ++p) {
+                t.src.push_back(static_cast<int>(r));
+                t.dst.push_back(static_cast<int>(side.pos[static_cast<size_t>(p)]));
+                const double w = side.posw.empty() ? 1.0 : side.posw[static_cast<size_t>(p)];
+                t.w.push_back(w);
+                plain = plain && p1 == p0 + 1 && w == 1.0;
+            }
+        }
+        if (plain) {  // (one target a member, weight 1)
+            t.src.clear();
+            t.w.clear();
+        }
+        return t;
     };
-    const std::vector<int> rfirst = out_dev != nullptr ? first_positions(Rh) : std::vector<int>{};
-    const std::vector<int> cfirst = out_dev != nullptr ? first_positions(Ch) : std::vector<int>{};
-    // G (|members_i| x |members_j|) into block k of out at the requested positions (as the host's)
+    // G (|members_i| x |members_j|) into block k of out at the members' positions (as the host's)
     auto scatter = [&](int64_t k, const std::vector<int64_t>& mi, const std::vector<int64_t>& mj, const DataType* G) {
-        const int64_t ni = static_cast<int64_t>(mi.size()), ld = nrows[k];
+        const int64_t ni = static_cast<int64_t>(mi.size()), rs = layout.ors[static_cast<size_t>(k)], cs = layout.ocs[static_cast<size_t>(k)];
         DataType* ok = out + ooff[static_cast<size_t>(k)];
         for (size_t c = 0; c < mj.size(); ++c) {
             const size_t m = static_cast<size_t>(mj[c]);
             for (int64_t pj = Ch.pos_start[m]; pj < Ch.pos_start[m + 1]; ++pj) {
-                DataType* col = ok + Ch.pos[static_cast<size_t>(pj)] * ld;
+                DataType* col = ok + Ch.pos[static_cast<size_t>(pj)] * cs;
+                const DataType wc = Ch.posw.empty() ? DataType(1) : DataType(Ch.posw[static_cast<size_t>(pj)]);
                 for (int64_t r = 0; r < ni; ++r) {
-                    const DataType g = G[static_cast<size_t>(r + static_cast<int64_t>(c) * ni)];
+                    const DataType g = wc * G[static_cast<size_t>(r + static_cast<int64_t>(c) * ni)];
                     const size_t mr = static_cast<size_t>(mi[static_cast<size_t>(r)]);
-                    for (int64_t pi = Rh.pos_start[mr]; pi < Rh.pos_start[mr + 1]; ++pi) col[Rh.pos[static_cast<size_t>(pi)]] += g;
+                    for (int64_t pi = Rh.pos_start[mr]; pi < Rh.pos_start[mr + 1]; ++pi)
+                        col[Rh.pos[static_cast<size_t>(pi)] * rs] += Rh.posw.empty() ? g : DataType(Rh.posw[static_cast<size_t>(pi)]) * g;
                 }
             }
         }
@@ -1853,15 +2050,11 @@ void partial_schur_blocks_device(fmm::ParallelTree<CoordType, DataType>& tree, i
             tq0 = t;
         };
         npairs += static_cast<double>(pairs.size());
-        // (a row or column block's positions in its block of out: one list a block)
-        std::unordered_map<const std::vector<int64_t>*, std::vector<int>> pos_of;
-        auto positions = [&](const std::vector<int64_t>* members, const std::vector<int>& first) {
-            auto it = pos_of.find(members);
-            if (it == pos_of.end()) {
-                std::vector<int> p(members->size());
-                for (size_t r = 0; r < p.size(); ++r) p[r] = first[static_cast<size_t>((*members)[r])];
-                it = pos_of.emplace(members, std::move(p)).first;
-            }
+        // (a row or column block's targets in its block of out: one list a block)
+        std::unordered_map<const std::vector<int64_t>*, gpu::PartialTargetList> targets_of;
+        auto targets_at = [&](const std::vector<int64_t>* members, const PartialCbSide<DataType>& side) {
+            auto it = targets_of.find(members);
+            if (it == targets_of.end()) it = targets_of.emplace(members, target_list(side, *members)).first;
             return &it->second;
         };
         while (i0 < pairs.size()) {
@@ -1893,12 +2086,14 @@ void partial_schur_blocks_device(fmm::ParallelTree<CoordType, DataType>& tree, i
             if (out_dev != nullptr) {
                 fmm::gpu::PartialPairTargets<DataType> targets;
                 targets.out = out_dev;
+                targets.add = sketch != nullptr ? 2 : 1;
                 for (size_t q = i0; q < i1; ++q) {
                     const size_t k = static_cast<size_t>(info[q].inter);
                     targets.base.push_back(ooff[k]);
-                    targets.ld.push_back(nrows[k]);
-                    targets.rows.push_back(positions(info[q].mi, rfirst));
-                    targets.cols.push_back(positions(info[q].mj, cfirst));
+                    targets.ors.push_back(layout.ors[k]);
+                    targets.ocs.push_back(layout.ocs[k]);
+                    targets.rows.push_back(targets_at(info[q].mi, Rh));
+                    targets.cols.push_back(targets_at(info[q].mj, Ch));
                 }
                 lap(1);
                 fmm::gpu::partial_device_pairs(work, group, static_cast<DataType*>(nullptr), &targets);
@@ -1928,9 +2123,93 @@ void partial_schur_blocks_device(fmm::ParallelTree<CoordType, DataType>& tree, i
         DataType* wv = nullptr;
         size_t voff = 0;  // (its values in the received ones)
     };
+    // a sketched side's blocks merged over sketch rows (partial_sketch_merge_plan):
+    // each source's columns added, weighted, into the merged block's
+    // (block-copy tiles, atomic: a group's sources share rows and sketch rows)
+    auto sketch_merge = [&](const PartialCbSide<DataType>& side, std::vector<Chain>& chains) {
+        std::vector<char> merged;
+        const auto plan = partial_sketch_merge_plan(side, chains, merged);
+        if (plan.empty()) return;
+        size_t bytes = 0;
+        for (const auto& m : plan)
+            bytes += fmm::gpu::align_up(m.rows.size() * static_cast<size_t>(side.sk_dim[static_cast<size_t>(m.inter)]) * D);
+        char* arena = work.alloc(bytes);
+        arenas.push_back(arena);
+        work.zero(arena, bytes);
+        fmm::gpu::MetaBuilder& meta = work.meta();
+        std::vector<fmm::gpu::BlockCopyItemT<S>> tiles;
+        constexpr int kTile = 64;
+        std::vector<Chain> made(plan.size());
+        size_t at = 0;
+        for (size_t g = 0; g < plan.size(); ++g) {
+            const auto& m = plan[g];
+            const int64_t d = side.sk_dim[static_cast<size_t>(m.inter)], f = side.sk_first[static_cast<size_t>(m.inter)];
+            const int64_t nu = static_cast<int64_t>(m.rows.size());
+            Chain& u = made[g];
+            u.box = m.box;
+            u.inter = m.inter;
+            u.rows = m.rows;
+            u.members.resize(static_cast<size_t>(d));
+            std::iota(u.members.begin(), u.members.end(), f);
+            u.v = reinterpret_cast<DataType*>(arena + at);
+            at += fmm::gpu::align_up(static_cast<size_t>(nu * d) * D);
+            for (size_t q = 0; q < m.src.size(); ++q) {
+                const Chain& b = chains[m.src[q]];
+                const int nr = static_cast<int>(b.rows.size());
+                std::vector<int> scol, dcol;
+                std::vector<double> w;
+                for (size_t c = 0; c < b.members.size(); ++c) {
+                    const size_t mm = static_cast<size_t>(b.members[c]);
+                    for (int64_t p = side.pos_start[mm]; p < side.pos_start[mm + 1]; ++p) {
+                        scol.push_back(static_cast<int>(c));
+                        dcol.push_back(static_cast<int>(side.pos[static_cast<size_t>(p)]));
+                        w.push_back(side.posw[static_cast<size_t>(p)]);
+                    }
+                }
+                const int nt = static_cast<int>(dcol.size());
+                if (nr == 0 || nt == 0) continue;
+                const int64_t ro = static_cast<int64_t>(meta.append(m.at[q]));
+                const int64_t so = static_cast<int64_t>(meta.append(scol)), dof = static_cast<int64_t>(meta.append(dcol));
+                const int64_t wo = static_cast<int64_t>(meta.append(w));
+                for (int j0 = 0; j0 < nt; j0 += kTile) {
+                    for (int i0 = 0; i0 < nr; i0 += kTile) {
+                        fmm::gpu::BlockCopyItemT<S> it{};
+                        it.out = reinterpret_cast<S*>(u.v);
+                        it.ors = 1;
+                        it.ocs = nu;
+                        it.out_rows.offset = ro + static_cast<int64_t>(i0) * static_cast<int64_t>(sizeof(int32_t));
+                        it.out_cols.offset = dof + static_cast<int64_t>(j0) * static_cast<int64_t>(sizeof(int));
+                        it.src = reinterpret_cast<const S*>(b.v);
+                        it.rs = 1;
+                        it.cs = nr;
+                        it.src_rows.base = i0;
+                        it.src_cols.offset = so + static_cast<int64_t>(j0) * static_cast<int64_t>(sizeof(int));
+                        it.col_w = wo + static_cast<int64_t>(j0) * static_cast<int64_t>(sizeof(double));
+                        it.m = std::min(kTile, nr - i0);
+                        it.n = std::min(kTile, nt - j0);
+                        it.add = 2;
+                        tiles.push_back(it);
+                    }
+                }
+            }
+        }
+        const size_t toff = meta.append(tiles);
+        char* md = work.upload_meta();
+        fmm::gpu::launch_block_copy(reinterpret_cast<const fmm::gpu::BlockCopyItemT<S>*>(md + toff), static_cast<int>(tiles.size()), kTile,
+                                    kTile, md, stream);
+        std::vector<Chain> kept;
+        for (size_t i = 0; i < chains.size(); ++i)
+            if (!merged[i]) kept.push_back(std::move(chains[i]));
+        for (auto& u : made) kept.push_back(std::move(u));
+        chains = std::move(kept);
+    };
     for (int l = leaf; l >= 0; --l) {
         auto& level = tree.levels[static_cast<size_t>(l)];
         const bool active = level.is_process_active;
+        if (l < leaf) {
+            sketch_merge(Rh, R);
+            sketch_merge(Ch, C);
+        }
         if (l == 0) {
             // the root: v_i^T CB_root v_j over the root's F22 slots
             if (pr.active && store.root_cb != nullptr) {
@@ -2652,11 +2931,24 @@ void partial_schur_blocks_device(fmm::ParallelTree<CoordType, DataType>& tree, i
     if (out_dev != nullptr) {
         const double t = trace ? MPI_Wtime() : 0.0;
         work.download(out, out_dev, out_bytes);
-        if (Rh.pos.size() > Rh.points.size() || Ch.pos.size() > Ch.points.size()) {
+        if ((!Rh.sketched() && Rh.pos.size() > Rh.points.size()) || (!Ch.sketched() && Ch.pos.size() > Ch.points.size())) {
             // a point asked for at several positions of a block: its sums are at the first
 #pragma omp parallel for schedule(dynamic, 1)
             for (int64_t k = 0; k < ninter; ++k) {
                 DataType* ok = out + ooff[static_cast<size_t>(k)];
+                if (sketch != nullptr) {
+                    // (a sketch's columns: the unsketched side's positions)
+                    const int64_t d = sketch->dims[k];
+                    const bool by_rows = sketch->side == 1;
+                    const int64_t n = by_rows ? nrows[k] : ncols[k];
+                    const int64_t* idx = by_rows ? rows + roff[static_cast<size_t>(k)] : cols + coff[static_cast<size_t>(k)];
+                    std::unordered_map<int64_t, int64_t> first;
+                    for (int64_t q = 0; q < n; ++q) {
+                        const auto [it, fresh] = first.emplace(idx[q], q);
+                        if (!fresh) std::copy_n(ok + it->second * d, d, ok + q * d);
+                    }
+                    continue;
+                }
                 const int64_t ld = nrows[k];
                 std::unordered_map<int64_t, int64_t> first;
                 std::vector<std::pair<int64_t, int64_t>> rd, cd;  // (position, the point's first)
@@ -2691,11 +2983,12 @@ void partial_schur_blocks_device(fmm::ParallelTree<CoordType, DataType>& tree, i
         if (me == 0) {
             for (int r = 0; r < nranks; ++r) {
                 const double* x = all.data() + static_cast<size_t>(r) * kRow;
-                std::printf("[partial CB entries] rank %d: %.4f s - plans %.4f, chain steps %.4f, terms' exchange (out %.4f, "
+                std::printf("[partial CB %s] rank %d: %.4f s - plans %.4f, chain steps %.4f, terms' exchange (out %.4f, "
                             "MPI %.4f, in %.4f; %.1f MB sent), pairs %.4f, parents' exchange (out %.4f, MPI %.4f, in %.4f; "
                             "%.1f MB sent), root %.4f; of pairs and root: lists %.4f, groups %.4f, device %.4f, scatter %.4f "
                             "(%.0f pairs, %.0f entries)\n",
-                            r, x[kPhases + 2], x[kPlan], x[kSteps], x[kTermsOut], x[kTermsMpi], x[kTermsIn], x[kPhases],
+                            sketch != nullptr ? "sketches" : "entries", r, x[kPhases + 2], x[kPlan], x[kSteps], x[kTermsOut],
+                            x[kTermsMpi], x[kTermsIn], x[kPhases],
                             x[kPairs], x[kUpOut], x[kUpMpi], x[kUpIn], x[kPhases + 1], x[kRoot], x[kPhases + 3],
                             x[kPhases + 4], x[kPhases + 5], x[kPhases + 6], x[kPhases + 7], x[kPhases + 8]);
             }
@@ -2707,14 +3000,18 @@ void partial_schur_blocks_device(fmm::ParallelTree<CoordType, DataType>& tree, i
 
 // The blocks CB(I_n, J_n), n < ninter, of a request: I_n is nrows[n] F22
 // indices (0-based) after the earlier blocks' in rows, J_n likewise in cols,
-// and block n goes column major into out after the earlier blocks.
-// Collective over the tree's communicator, every rank passing the same
-// request; `replicate`: the result on every rank, else each rank's out holds
-// its contributions, which sum to it over the ranks.
+// and block n goes column major into out after the earlier blocks.  With
+// `sketch` (PartialSketch) block n is its sketch Y_n instead, computed so:
+// the sketched side's chains are combined by Omega_n into d_n chains (as
+// soon as that is cheaper, partial_sketch_merge_plan), so neither CB(I_n,
+// J_n) nor its pairs' products are formed at their size.  Collective over
+// the tree's communicator, every rank passing the same request; `replicate`:
+// the result on every rank, else each rank's out holds its contributions,
+// which sum to it over the ranks.
 template<typename CoordType, typename DataType>
 void partial_schur_blocks(fmm::ParallelTree<CoordType, DataType>& tree, int64_t ninter, const int64_t* rows,
                           const int64_t* nrows, const int64_t* cols, const int64_t* ncols, DataType* out,
-                          bool replicate, int extract_mode = 0) {
+                          bool replicate, int extract_mode = 0, const PartialSketch* sketch = nullptr) {
 #ifdef H2_HAVE_GPU
     fmm::gpu::OperatorCall operator_call(&tree);  // (it may run inside another operator's build)
 #endif
@@ -2734,12 +3031,13 @@ void partial_schur_blocks(fmm::ParallelTree<CoordType, DataType>& tree, int64_t 
     int me = 0, nranks = 1;
     MPI_Comm_rank(tree.comm, &me);
     MPI_Comm_size(tree.comm, &nranks);
-    std::vector<int64_t> roff(static_cast<size_t>(ninter) + 1, 0), coff(roff), ooff(roff);
+    std::vector<int64_t> roff(static_cast<size_t>(ninter) + 1, 0), coff(roff);
     for (int64_t k = 0; k < ninter; ++k) {
         roff[static_cast<size_t>(k) + 1] = roff[static_cast<size_t>(k)] + nrows[k];
         coff[static_cast<size_t>(k) + 1] = coff[static_cast<size_t>(k)] + ncols[k];
-        ooff[static_cast<size_t>(k) + 1] = ooff[static_cast<size_t>(k)] + nrows[k] * ncols[k];
     }
+    const PartialOutLayout layout = partial_out_layout(ninter, nrows, ncols, sketch);
+    const std::vector<int64_t>& ooff = layout.ooff;
     if (ooff.back() == 0) return;
     auto reduce = [&] {
         if (!replicate || nranks <= 1) return;
@@ -2765,11 +3063,11 @@ void partial_schur_blocks(fmm::ParallelTree<CoordType, DataType>& tree, int64_t 
         }
         if (device != 0 && fmm::gpu::partial_device_ready(&tree, 0)) {
             const double t0 = MPI_Wtime();
-            partial_schur_blocks_device(tree, ninter, rows, nrows, cols, ncols, out, roff, coff, ooff);
+            partial_schur_blocks_device(tree, ninter, rows, nrows, cols, ncols, out, roff, coff, layout, sketch);
             if (fmm::gpu::device_solve_check()) {
                 const double t1 = MPI_Wtime();
                 std::vector<DataType> host(static_cast<size_t>(ooff.back()));
-                partial_schur_blocks(tree, ninter, rows, nrows, cols, ncols, host.data(), false, 2);
+                partial_schur_blocks(tree, ninter, rows, nrows, cols, ncols, host.data(), false, 2, sketch);
                 double times[2] = {t1 - t0, MPI_Wtime() - t1};
                 MPI_Allreduce(MPI_IN_PLACE, times, 2, MPI_DOUBLE, MPI_MAX, tree.comm);
                 double sums[2] = {0.0, 0.0};
@@ -2779,10 +3077,10 @@ void partial_schur_blocks(fmm::ParallelTree<CoordType, DataType>& tree, int64_t 
                 }
                 MPI_Allreduce(MPI_IN_PLACE, sums, 2, MPI_DOUBLE, MPI_SUM, tree.comm);
                 if (me == 0) {
-                    std::printf("GPU partial CB entries check: |gpu - host| / |host| = %.3e (%lld entries in %lld blocks; "
+                    std::printf("GPU partial CB %s check: |gpu - host| / |host| = %.3e (%lld entries in %lld blocks; "
                                 "device %.4f s, host %.4f s)\n",
-                                sums[1] > 0.0 ? std::sqrt(sums[0] / sums[1]) : 0.0, static_cast<long long>(ooff.back()),
-                                static_cast<long long>(ninter), times[0], times[1]);
+                                sketch != nullptr ? "sketches" : "entries", sums[1] > 0.0 ? std::sqrt(sums[0] / sums[1]) : 0.0,
+                                static_cast<long long>(ooff.back()), static_cast<long long>(ninter), times[0], times[1]);
                     std::fflush(stdout);
                 }
             }
@@ -2831,22 +3129,74 @@ void partial_schur_blocks(fmm::ParallelTree<CoordType, DataType>& tree, int64_t 
     partial_leaf_index(tree);
     // the two sides (partial_cb_side): the chain blocks of this rank's boxes at the current level
     using Side = PartialCbSide<DataType>;
-    Side R = partial_cb_side(tree, ninter, rows, roff, true), C = partial_cb_side(tree, ninter, cols, coff, true);
-    // G (|members_i| x |members_j|) into block k of out at the requested positions
-    auto scatter = [&](int64_t k, const std::vector<int64_t>& mi, const std::vector<int64_t>& mj, const std::vector<DataType>& G) {
-        const int64_t ni = static_cast<int64_t>(mi.size()), ld = nrows[k];
+    const PartialSketch* rsk = sketch != nullptr && sketch->side == 0 ? sketch : nullptr;
+    const PartialSketch* csk = sketch != nullptr && sketch->side == 1 ? sketch : nullptr;
+    Side R = partial_cb_side(tree, ninter, rows, roff, true, rsk), C = partial_cb_side(tree, ninter, cols, coff, true, csk);
+    // G (|members_i| x |members_j|) into block k of out at the members' positions (weighted on a sketched
+    // side); `atomic`: other threads may write the same entries (row blocks of one request share their
+    // sketch rows)
+    auto scatter = [&](int64_t k, const std::vector<int64_t>& mi, const std::vector<int64_t>& mj, const std::vector<DataType>& G,
+                       bool atomic) {
+        const int64_t ni = static_cast<int64_t>(mi.size()), rs = layout.ors[static_cast<size_t>(k)], cs = layout.ocs[static_cast<size_t>(k)];
         DataType* ok = out + ooff[static_cast<size_t>(k)];
         for (size_t c = 0; c < mj.size(); ++c) {
             const size_t m = static_cast<size_t>(mj[c]);
             for (int64_t pj = C.pos_start[m]; pj < C.pos_start[m + 1]; ++pj) {
-                DataType* col = ok + C.pos[static_cast<size_t>(pj)] * ld;
+                DataType* col = ok + C.pos[static_cast<size_t>(pj)] * cs;
+                const DataType wc = C.posw.empty() ? DataType(1) : DataType(C.posw[static_cast<size_t>(pj)]);
                 for (int64_t r = 0; r < ni; ++r) {
-                    const DataType g = G[static_cast<size_t>(r + static_cast<int64_t>(c) * ni)];
+                    const DataType g = wc * G[static_cast<size_t>(r + static_cast<int64_t>(c) * ni)];
                     const size_t mr = static_cast<size_t>(mi[static_cast<size_t>(r)]);
-                    for (int64_t pi = R.pos_start[mr]; pi < R.pos_start[mr + 1]; ++pi) col[R.pos[static_cast<size_t>(pi)]] += g;
+                    for (int64_t pi = R.pos_start[mr]; pi < R.pos_start[mr + 1]; ++pi) {
+                        const DataType x = R.posw.empty() ? g : DataType(R.posw[static_cast<size_t>(pi)]) * g;
+                        DataType& o = col[R.pos[static_cast<size_t>(pi)] * rs];
+                        if (atomic) partial_atomic_add(o, x);
+                        else o += x;
+                    }
                 }
             }
         }
+    };
+    // (the level's row blocks run in parallel: those of one request share its sketch rows)
+    const bool atomic_rows = R.sketched();
+    // a sketched side's blocks merged over sketch rows (partial_sketch_merge_plan)
+    auto sketch_merge = [&](Side& side) {
+        std::vector<char> merged;
+        const auto plan = partial_sketch_merge_plan(side, side.blocks, merged);
+        if (plan.empty()) return;
+        std::vector<Block> made(plan.size());
+#pragma omp parallel for schedule(dynamic, 1)
+        for (size_t g = 0; g < plan.size(); ++g) {
+            const auto& m = plan[g];
+            Block& u = made[g];
+            const int64_t d = side.sk_dim[static_cast<size_t>(m.inter)], f = side.sk_first[static_cast<size_t>(m.inter)];
+            const int64_t nu = static_cast<int64_t>(m.rows.size());
+            u.box = m.box;
+            u.inter = m.inter;
+            u.rows = m.rows;
+            u.members.resize(static_cast<size_t>(d));
+            std::iota(u.members.begin(), u.members.end(), f);
+            u.v.assign(static_cast<size_t>(nu * d), DataType(0));
+            for (size_t q = 0; q < m.src.size(); ++q) {
+                const Block& b = side.blocks[m.src[q]];
+                const auto& at = m.at[q];
+                const int64_t nr = static_cast<int64_t>(b.rows.size());
+                for (size_t c = 0; c < b.members.size(); ++c) {
+                    const size_t mm = static_cast<size_t>(b.members[c]);
+                    for (int64_t p = side.pos_start[mm]; p < side.pos_start[mm + 1]; ++p) {
+                        const DataType w(side.posw[static_cast<size_t>(p)]);
+                        DataType* dst = u.v.data() + side.pos[static_cast<size_t>(p)] * nu;
+                        const DataType* src = b.v.data() + static_cast<int64_t>(c) * nr;
+                        for (int64_t t = 0; t < nr; ++t) dst[at[static_cast<size_t>(t)]] += w * src[t];
+                    }
+                }
+            }
+        }
+        std::vector<Block> kept;
+        for (size_t i = 0; i < side.blocks.size(); ++i)
+            if (!merged[i]) kept.push_back(std::move(side.blocks[i]));
+        for (auto& u : made) kept.push_back(std::move(u));
+        side.blocks = std::move(kept);
     };
     // a block of another rank's box: its members, raw rows and values, w part, and the box's live set
     struct Remote {
@@ -2858,6 +3208,10 @@ void partial_schur_blocks(fmm::ParallelTree<CoordType, DataType>& tree, int64_t 
     for (int l = leaf; l >= 0; --l) {
         auto& level = tree.levels[static_cast<size_t>(l)];
         const bool active = level.is_process_active;
+        if (l < leaf) {
+            sketch_merge(R);
+            sketch_merge(C);
+        }
         if (l == 0) {
             // the root: v_i^T CB_root v_j over the root's F22 slots
             if (pr.active) {
@@ -2911,7 +3265,7 @@ void partial_schur_blocks(fmm::ParallelTree<CoordType, DataType>& tree, int64_t 
                         for (int64_t r = 0; r < na; ++r) M[static_cast<size_t>(r + c * na)] = col[ra[i][static_cast<size_t>(r)]];
                     }
                     triple(ni, nj, na, nb, rv[i].data(), M.data(), cv[j].data(), G.data(), tmp);
-                    scatter(R.blocks[i].inter, R.blocks[i].members, C.blocks[j].members, G);
+                    scatter(R.blocks[i].inter, R.blocks[i].members, C.blocks[j].members, G, sketch != nullptr);
                 }
             }
             break;
@@ -3134,7 +3488,7 @@ void partial_schur_blocks(fmm::ParallelTree<CoordType, DataType>& tree, int64_t 
                                     triple(ni, nj, wi, rj, bi.wv.data(), X.data(), bj.vp.data(), G.data(), tmp);
                                     any = true;
                                 }
-                                if (any) scatter(bi.inter, bi.members, bj.members, G);
+                                if (any) scatter(bi.inter, bi.members, bj.members, G, atomic_rows);
                             }
                         }
                         // the one-hop neighbours
@@ -3157,7 +3511,7 @@ void partial_schur_blocks(fmm::ParallelTree<CoordType, DataType>& tree, int64_t 
                                     if (sp_j && !bj.ridx.empty() && !bi.wrows.empty())
                                         any |= nr_term(s_of_i, bi.wpos, bi.wv, static_cast<int64_t>(bi.wrows.size()), ni, boxI.morton_index, boxJ, bj,
                                                        G, X, V, tmp, group, reader);
-                                    if (any) scatter(bi.inter, bi.members, bj.members, G);
+                                    if (any) scatter(bi.inter, bi.members, bj.members, G, atomic_rows);
                                 }
                             } else if (own_i) {
                                 // a remote column box: its X_NR terms are its owner's
@@ -3170,7 +3524,7 @@ void partial_schur_blocks(fmm::ParallelTree<CoordType, DataType>& tree, int64_t 
                                     G.assign(static_cast<size_t>(ni * nj), DataType(0));
                                     if (rn_term(bi, fi, static_cast<int64_t>(q), bj.rowpos, bj.v, static_cast<int64_t>(bj.rows.size()), nj, G, X, V,
                                                 tmp, group, reader))
-                                        scatter(bi.inter, bi.members, bj.members, G);
+                                        scatter(bi.inter, bi.members, bj.members, G, atomic_rows);
                                 }
                             }
                         }
@@ -3191,7 +3545,7 @@ void partial_schur_blocks(fmm::ParallelTree<CoordType, DataType>& tree, int64_t 
                                 G.assign(static_cast<size_t>(ni * static_cast<int64_t>(bj.members.size())), DataType(0));
                                 if (nr_term(s_of_i, bi.wpos, bi.wv, static_cast<int64_t>(bi.wrows.size()), ni, bi.morton, boxJ, bj, G, X, V, tmp, group,
                                             reader))
-                                    scatter(bi.inter, bi.members, bj.members, G);
+                                    scatter(bi.inter, bi.members, bj.members, G, atomic_rows);
                             }
                         }
                     }
@@ -3326,11 +3680,15 @@ void partial_schur_entries(fmm::ParallelTree<CoordType, DataType>& tree, const i
 // outside it, whose ranks must be a subset of caller_comm's.  Collective over
 // caller_comm.  The source ranks compute every block in one pass
 // (partial_schur_blocks), each block's sum lands on one of them (its owner
-// when the owner holds the factorization), and goes on to the owner.
+// when the owner holds the factorization), and goes on to the owner.  With
+// `sketch` (PartialSketch, its arrays in the request's order) block n is the
+// sketch Y_n, d_n x colidx[n] (side 0) or d_n x rowidx[n] (side 1): only the
+// sketches are computed, summed and sent.
 template<typename CoordType, typename DataType>
 void extract_partial_blocks(fmm::ParallelTree<CoordType, DataType>* tree, MPI_Comm caller_comm, int64_t ninter,
                             const int* allrows, const int* allcols, const int* rowidx, const int* colidx,
-                            const std::vector<int>& owner, DataType* alldat_loc, int extract_mode = 0) {
+                            const std::vector<int>& owner, DataType* alldat_loc, int extract_mode = 0,
+                            const PartialSketch* sketch = nullptr) {
     int crank = 0, csize = 1, srank = -1, ssize = 0;
     MPI_Comm_rank(caller_comm, &crank);
     MPI_Comm_size(caller_comm, &csize);
@@ -3360,6 +3718,11 @@ void extract_partial_blocks(fmm::ParallelTree<CoordType, DataType>* tree, MPI_Co
         caller_of[static_cast<size_t>(s)] = c;
     }
     if (tree != nullptr && ssize != nsource) throw std::invalid_argument("extract_partial_blocks: a source rank outside the caller");
+    // block n's size in alldat_loc
+    auto out_len = [&](int64_t n) {
+        if (sketch == nullptr) return static_cast<int64_t>(rowidx[n]) * colidx[n];
+        return sketch->dims[n] * static_cast<int64_t>(sketch->side == 0 ? colidx[n] : rowidx[n]);
+    };
     // the source rank each block's sum lands on, and the blocks in that order
     std::vector<int> lands(static_cast<size_t>(ninter));
     std::vector<int64_t> r0(static_cast<size_t>(ninter) + 1, 0), c0(r0);
@@ -3381,20 +3744,43 @@ void extract_partial_blocks(fmm::ParallelTree<CoordType, DataType>* tree, MPI_Co
     for (int64_t n = 0; n < ninter; ++n) {
         if (owner[static_cast<size_t>(n)] != crank) continue;
         base[static_cast<size_t>(n)] = mine_total;
-        mine_total += static_cast<int64_t>(rowidx[n]) * colidx[n];
+        mine_total += out_len(n);
     }
     std::vector<std::vector<char>> send(static_cast<size_t>(csize));
     if (tree != nullptr) {
         // ---- the blocks in landing order, 0-based F22 indices
-        std::vector<int64_t> rows, cols, nr(static_cast<size_t>(ninter)), nc(static_cast<size_t>(ninter));
+        std::vector<int64_t> rows, cols, nr(static_cast<size_t>(ninter)), nc(static_cast<size_t>(ninter)), len(nc);
         std::vector<int64_t> boff(static_cast<size_t>(ninter) + 1, 0);
+        // (and the sketches' Omega in that order)
+        std::vector<int64_t> sk_dims, sk_off(1, 0);
+        std::vector<int> sk_pos, sk_dest;
+        std::vector<double> sk_val;
         for (size_t q = 0; q < order.size(); ++q) {
             const int64_t n = order[q];
             for (int64_t i = r0[static_cast<size_t>(n)]; i < r0[static_cast<size_t>(n) + 1]; ++i) rows.push_back(int64_t{allrows[i]} - 1);
             for (int64_t j = c0[static_cast<size_t>(n)]; j < c0[static_cast<size_t>(n) + 1]; ++j) cols.push_back(int64_t{allcols[j]} - 1);
             nr[q] = rowidx[n];
             nc[q] = colidx[n];
-            boff[q + 1] = boff[q] + nr[q] * nc[q];
+            len[q] = out_len(n);
+            boff[q + 1] = boff[q] + len[q];
+            if (sketch != nullptr) {
+                sk_dims.push_back(sketch->dims[n]);
+                for (int64_t e = sketch->omega_off[n]; e < sketch->omega_off[n + 1]; ++e) {
+                    sk_pos.push_back(sketch->omega_pos[e]);
+                    sk_dest.push_back(sketch->omega_dest[e]);
+                    sk_val.push_back(sketch->omega_val[e]);
+                }
+                sk_off.push_back(static_cast<int64_t>(sk_pos.size()));
+            }
+        }
+        PartialSketch sk_ordered;
+        if (sketch != nullptr) {
+            sk_ordered.side = sketch->side;
+            sk_ordered.dims = sk_dims.data();
+            sk_ordered.omega_off = sk_off.data();
+            sk_ordered.omega_pos = sk_pos.data();
+            sk_ordered.omega_dest = sk_dest.data();
+            sk_ordered.omega_val = sk_val.data();
         }
         // A lone caller (a sequential front's request) is the only source and
         // owns every block, in this order: its contributions are the blocks,
@@ -3403,7 +3789,8 @@ void extract_partial_blocks(fmm::ParallelTree<CoordType, DataType>* tree, MPI_Co
         std::vector<DataType> part(alone ? 0 : static_cast<size_t>(std::max<int64_t>(boff.back(), 1)));
         DataType* sums = alone ? alldat_loc : part.data();
         double xm = xtrace ? MPI_Wtime() : 0.0;
-        partial_schur_blocks(*tree, ninter, rows.data(), nr.data(), cols.data(), nc.data(), sums, false, extract_mode);
+        partial_schur_blocks(*tree, ninter, rows.data(), nr.data(), cols.data(), nc.data(), sums, false, extract_mode,
+                             sketch != nullptr ? &sk_ordered : nullptr);
         if (xtrace) {
             xt[1] = MPI_Wtime() - xm;
             xent = static_cast<double>(boff.back());
@@ -3414,7 +3801,7 @@ void extract_partial_blocks(fmm::ParallelTree<CoordType, DataType>* tree, MPI_Co
             // ---- each block's sum on its landing rank
             std::vector<int> counts(static_cast<size_t>(ssize), 0);
             for (size_t q = 0; q < order.size(); ++q) {
-                const int64_t c = counts[static_cast<size_t>(lands[order[q]])] + nr[q] * nc[q];
+                const int64_t c = counts[static_cast<size_t>(lands[order[q]])] + len[q];
                 if (c > INT_MAX) throw std::runtime_error("extract_partial_blocks: a source rank's blocks over 2^31 entries");
                 counts[static_cast<size_t>(lands[order[q]])] = static_cast<int>(c);
             }
@@ -3434,15 +3821,14 @@ void extract_partial_blocks(fmm::ParallelTree<CoordType, DataType>* tree, MPI_Co
             for (size_t q = 0; q < order.size(); ++q) {
                 const int64_t n = order[q];
                 if (lands[static_cast<size_t>(n)] != srank) continue;
-                const int64_t len = nr[q] * nc[q];
                 const int to = owner[static_cast<size_t>(n)];
                 if (to == crank) {
-                    std::copy_n(landed.data() + at, len, alldat_loc + base[static_cast<size_t>(n)]);
+                    std::copy_n(landed.data() + at, len[q], alldat_loc + base[static_cast<size_t>(n)]);
                 } else {
                     partial_put(send[static_cast<size_t>(to)], &n, 1);
-                    partial_put(send[static_cast<size_t>(to)], landed.data() + at, static_cast<size_t>(len));
+                    partial_put(send[static_cast<size_t>(to)], landed.data() + at, static_cast<size_t>(len[q]));
                 }
-                at += len;
+                at += len[q];
             }
             if (xtrace) xt[3] = MPI_Wtime() - xm;
         }
@@ -3456,7 +3842,7 @@ void extract_partial_blocks(fmm::ParallelTree<CoordType, DataType>* tree, MPI_Co
             if (n < 0 || n >= ninter || base[static_cast<size_t>(n)] < 0) {
                 throw std::logic_error("extract_partial_blocks: a block for another rank");
             }
-            p = partial_get(p, alldat_loc + base[static_cast<size_t>(n)], static_cast<size_t>(int64_t{rowidx[n]} * colidx[n]));
+            p = partial_get(p, alldat_loc + base[static_cast<size_t>(n)], static_cast<size_t>(out_len(n)));
         }
     }
     if (xtrace) {
@@ -3465,10 +3851,10 @@ void extract_partial_blocks(fmm::ParallelTree<CoordType, DataType>* tree, MPI_Co
         MPI_Allreduce(MPI_IN_PLACE, mx, 6, MPI_DOUBLE, MPI_MAX, caller_comm);
         MPI_Allreduce(MPI_IN_PLACE, sm, 2, MPI_DOUBLE, MPI_SUM, caller_comm);
         if (crank == 0) {
-            std::printf("[partial extract] callers %d sources %d blocks %lld entries %.0f nonzero contributions %.0f: "
+            std::printf("[partial extract] callers %d sources %d %s %lld entries %.0f nonzero contributions %.0f: "
                         "%.4f s - blocks %.4f, reduce_scatter %.4f, owners %.4f, exchange %.4f\n",
-                        csize, ssize, static_cast<long long>(ninter), sm[1] / std::max(ssize, 1), sm[0], mx[0], mx[1], mx[2],
-                        mx[3], mx[4]);
+                        csize, ssize, sketch != nullptr ? "sketches" : "blocks", static_cast<long long>(ninter),
+                        sm[1] / std::max(ssize, 1), sm[0], mx[0], mx[1], mx[2], mx[3], mx[4]);
             std::fflush(stdout);
         }
     }

@@ -65,7 +65,10 @@ struct IndexCopyItemT {
 // scatter of a block into indexed rows and columns of an output, and the two
 // in one.  An index list left default is the identity (index_at), and a
 // transposed source is the same item with rs and cs swapped.  The items of a
-// launch write distinct entries.
+// launch write distinct entries, except with add 2 (atomic adds).  row_w and
+// col_w (byte offsets in meta, -1: none) weight entry (i, j) by row_w[i] and
+// col_w[j] (doubles): a source row or column listed several times, each
+// with its weight, sketches the block.
 template<typename T>
 struct BlockCopyItemT {
     T* out;
@@ -81,6 +84,8 @@ struct BlockCopyItemT {
     int m;
     int n;
     int add;
+    int64_t row_w = -1;
+    int64_t col_w = -1;
 };
 using BlockCopyItem = BlockCopyItemT<double>;
 
