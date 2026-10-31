@@ -1539,6 +1539,7 @@ if(myrank==master_rank){
     int64_t input_count_s2s = 0;
     vector<int64_t> input_ids_s2s;
     vector<double> input_coordinates_s2s;
+    vector<int> v_sub2glo_local;  // v_sub2glo of the inputs, once the whole-grid arrays are gone
     if (distributed64 == 1) {
       const int64_t base = Npo_s2s_64 / size;
       const int64_t remainder = Npo_s2s_64 % size;
@@ -1680,6 +1681,25 @@ if(myrank==master_rank){
           &bmat_bf_s2s, &option_bf, &stats_bf_s2s, &msh_bf_s2s,
           &kerquant_bf_s2s, &ptree_bf, &C_FuncZmn_BF_S2S64,
           &C_FuncZmnBlock_BF_S2S64, quant_ptr_bf_s2s);
+      // Nothing after this reads the whole-grid arrays except the solution
+      // mapping, for the inputs only: the library hands the callbacks their
+      // points, and slowness() reads the table (ivelo 11) through Q's copy.
+      // Release them before the factorization (~56 bytes a grid point on
+      // every rank, 117 GB at 1280^3).
+      v_sub2glo_local.assign(
+          v_sub2glo.begin() + input_first_s2s,
+          v_sub2glo.begin() + input_first_s2s + input_count_s2s);
+      vector<double>().swap(data_geo);
+      vector<int>().swap(v_sub2glo);
+      vector<int>().swap(v_glo2sub);
+      vector<int>().swap(v_sub2glo_o);
+      vector<double>().swap(slowness_array);
+      delete[] nns_ptr;
+      nns_ptr = nullptr;
+      delete[] nns_ptr_s2s;
+      nns_ptr_s2s = nullptr;
+      delete[] perms_bf;
+      perms_bf = nullptr;
     } else {
       z_c_bpack_construct_element_compute(
           &bmat_bf_s2s, &option_bf, &stats_bf_s2s, &msh_bf_s2s,
@@ -1731,26 +1751,27 @@ if(myrank==master_rank){
 
     vector<_Complex double> x_v_glo(N*nvec,{0.0,0.0});
     for (int i=0; i<myseg_s2s; i++){
-      int64_t i_old_64 = 0;
+      const double* xyz = nullptr;
+      int64_t i_glo = 0;
       if (distributed64 == 1) {
-        i_old_64 = input_ids_s2s[static_cast<size_t>(i)];
+        xyz = input_coordinates_s2s.data() + static_cast<size_t>(i) * Ndim;
+        i_glo = v_sub2glo_local[static_cast<size_t>(i)];
       } else {
         int i_new_loc = i+1;
         int i_old = 0;
         z_c_bpack_new2old(&msh_bf_s2s,&i_new_loc,&i_old);
-        i_old_64 = i_old;
+        xyz = data_geo.data() + static_cast<size_t>(i_old - 1) * Ndim;
+        i_glo = v_sub2glo[static_cast<size_t>(i_old - 1)];
       }
       for (int nth=0; nth<nvec; nth++){
-        const size_t old_offset =
-            static_cast<size_t>(i_old_64 - 1) * Ndim;
-        double xs = data_geo[old_offset];
-        double ys = data_geo[old_offset+1];
-        double zs = data_geo[old_offset+2];
-        double ss = slowness(xs,ys,zs, slow_x0, slow_y0,slow_z0, ivelo,slowness_array.data(),h, Iint, Jint, Kint);
+        double xs = xyz[0];
+        double ys = xyz[1];
+        double zs = xyz[2];
+        double ss = slowness(xs,ys,zs, slow_x0, slow_y0,slow_z0, ivelo,quant_ptr_bf_s2s->_slowness_array.data(),h, Iint, Jint, Kint);
         double s0=2;
         double k0 = s0*w;
         double coef = pow(k0,2.0)*(pow(ss/s0,2.0)-1);
-        x_v_glo[v_sub2glo[static_cast<size_t>(i_old_64 - 1)]+nth*N]=
+        x_v_glo[i_glo+nth*N]=
             x_s[i+nth*myseg_s2s]*coef;
       }
     }
