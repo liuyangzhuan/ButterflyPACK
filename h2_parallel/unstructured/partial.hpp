@@ -3238,6 +3238,12 @@ void extract_partial_blocks(fmm::ParallelTree<CoordType, DataType>* tree, MPI_Co
         MPI_Comm_rank(tree->comm, &srank);
         MPI_Comm_size(tree->comm, &ssize);
     }
+    // BPACK_TRACE=extract: one line a call (the caller's rank 0): the phases'
+    // time (max over the ranks), the request's entries and, summed over the
+    // source ranks, the nonzero entries of their contributions
+    const bool xtrace = fmm::env::trace("extract");
+    double xt[5] = {MPI_Wtime(), 0.0, 0.0, 0.0, 0.0};  // start, blocks, reduce, owners, exchange
+    double xnz = 0.0, xent = 0.0;
     // the source's ranks among the caller's
     std::vector<int> source_of(static_cast<size_t>(csize));  // caller rank -> source rank (-1)
     MPI_Allgather(&srank, 1, MPI_INT, source_of.data(), 1, MPI_INT, caller_comm);
@@ -3291,7 +3297,15 @@ void extract_partial_blocks(fmm::ParallelTree<CoordType, DataType>* tree, MPI_Co
             boff[q + 1] = boff[q] + nr[q] * nc[q];
         }
         std::vector<DataType> part(static_cast<size_t>(std::max<int64_t>(boff.back(), 1)));
+        double xm = xtrace ? MPI_Wtime() : 0.0;
         partial_schur_blocks(*tree, ninter, rows.data(), nr.data(), cols.data(), nc.data(), part.data(), false, extract_mode);
+        if (xtrace) {
+            const double now = MPI_Wtime();
+            xt[1] = now - xm;
+            xm = now;
+            xent = static_cast<double>(boff.back());
+            for (int64_t i = 0; i < boff.back(); ++i) xnz += part[static_cast<size_t>(i)] != DataType(0) ? 1.0 : 0.0;
+        }
         // ---- each block's sum on its landing rank
         std::vector<int> counts(static_cast<size_t>(ssize), 0);
         for (size_t q = 0; q < order.size(); ++q) {
@@ -3304,6 +3318,11 @@ void extract_partial_blocks(fmm::ParallelTree<CoordType, DataType>* tree, MPI_Co
             MPI_Reduce_scatter(part.data(), landed.data(), counts.data(), partial_mpi_type<DataType>(), MPI_SUM, tree->comm);
         } else {
             std::copy(part.begin(), part.begin() + counts[0], landed.begin());
+        }
+        if (xtrace) {
+            const double now = MPI_Wtime();
+            xt[2] = now - xm;
+            xm = now;
         }
         // ---- on to the owners (their own: copied)
         int64_t at = 0;
@@ -3320,7 +3339,9 @@ void extract_partial_blocks(fmm::ParallelTree<CoordType, DataType>* tree, MPI_Co
             }
             at += len;
         }
+        if (xtrace) xt[3] = MPI_Wtime() - xm;
     }
+    const double xx = xtrace ? MPI_Wtime() : 0.0;
     const auto recv = partial_exchange(caller_comm, send, 630);
     for (const auto& buf : recv) {
         for (const char* p = buf.data(); p < buf.data() + buf.size();) {
@@ -3330,6 +3351,19 @@ void extract_partial_blocks(fmm::ParallelTree<CoordType, DataType>* tree, MPI_Co
                 throw std::logic_error("extract_partial_blocks: a block for another rank");
             }
             p = partial_get(p, alldat_loc + base[static_cast<size_t>(n)], static_cast<size_t>(int64_t{rowidx[n]} * colidx[n]));
+        }
+    }
+    if (xtrace) {
+        const double now = MPI_Wtime();
+        double mx[6] = {now - xt[0], xt[1], xt[2], xt[3], now - xx, 0.0}, sm[2] = {xnz, xent};
+        MPI_Allreduce(MPI_IN_PLACE, mx, 6, MPI_DOUBLE, MPI_MAX, caller_comm);
+        MPI_Allreduce(MPI_IN_PLACE, sm, 2, MPI_DOUBLE, MPI_SUM, caller_comm);
+        if (crank == 0) {
+            std::printf("[partial extract] callers %d sources %d blocks %lld entries %.0f nonzero contributions %.0f: "
+                        "%.4f s - blocks %.4f, reduce_scatter %.4f, owners %.4f, exchange %.4f\n",
+                        csize, ssize, static_cast<long long>(ninter), sm[1] / std::max(ssize, 1), sm[0], mx[0], mx[1], mx[2],
+                        mx[3], mx[4]);
+            std::fflush(stdout);
         }
     }
 }
