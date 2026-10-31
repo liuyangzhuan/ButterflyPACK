@@ -797,6 +797,47 @@ ProgramOptions with_occupancy_depth(const ProgramOptions& options, const CoordTy
   return out;
 }
 
+// The H2 factorization needs a root box with at least one level under it: the
+// root's Schur complement is assembled by the level-1 transition, so a
+// one-level tree reaches level 0 with nothing to factorize.  Compression-only
+// (precon 2) is unaffected, a single box being just a dense block.  The depth
+// follows Nmin_leaf and N, and H2_unstructured can only make it deeper (in
+// with_occupancy_depth above), so this is checked on the shaped options rather
+// than where they are parsed.
+inline void require_h2_tree_depth(const ProgramOptions& options, MPI_Comm comm) {
+  if (options.precon == 2 || options.num_levels >= 2) return;
+  int64_t leaf_per_dim = options.grid_size / 2;
+  std::string msg =
+      "the H2 factorization needs at least 2 cluster-tree levels, this one has "
+      + std::to_string(options.num_levels) + ": N=" + std::to_string(options.N)
+      + " points in " + std::to_string(options.dimension) + "D with Nmin_leaf="
+      + std::to_string(options.nmin_leaf) + " leaves every point in the root box. ";
+  if (options.nmin_leaf > 0 && leaf_per_dim >= 2) {
+    int64_t leaf_cap = 1;
+    for (int d = 0; d < options.dimension; ++d) leaf_cap *= leaf_per_dim;
+    msg += "Lower Nmin_leaf to " + std::to_string(leaf_cap)
+         + " or less, or compress without factorizing (precon 2).";
+  } else {
+    msg += "Two levels need a per-dimension grid of at least 4 boxes and N gives "
+         + std::to_string(options.grid_size)
+         + ", so no Nmin_leaf helps: use a dense solver, or compress without "
+           "factorizing (precon 2).";
+  }
+  int rank = 0;
+  MPI_Comm_rank(comm, &rank);
+  if (rank == 0) std::cerr << "ButterflyPACK H2 error: " << msg << std::endl;
+  std::cerr.flush();
+  // Fatal here rather than thrown: an exception would unwind through the
+  // Fortran frame that called this (which is how the late "root box Schur
+  // complement" throw turned into a segmentation fault), and MPI_COMM_WORLD
+  // rather than `comm` because aborting a sub-communicator leaves srun to kill
+  // the other ranks and report that as one too.  h2_fortran_bridge_failed
+  // (C_BPACK_wrapper.cpp) ends the same way for the same reasons.
+  MPI_Abort(MPI_COMM_WORLD, 1);
+  std::abort();
+}
+
+
 template<typename CoordType, typename DataType>
 int bpack_initiate_distributed64(
     H2<CoordType, DataType>* solver,
@@ -836,6 +877,7 @@ int bpack_initiate_distributed64(
   // solver->options itself)
   const ProgramOptions shaped =
       with_occupancy_depth(options, input_coordinates, input_local_count, bounds, solver->comm, true);
+  require_h2_tree_depth(shaped, solver->comm);
   solver->options.num_levels = shaped.num_levels;
   solver->options.CA_level = shaped.CA_level;
 
@@ -909,6 +951,7 @@ int h2_initiate(H2<CoordType, DataType>* H2_solver, const ProgramOptions& option
   // (H2_unstructured: the depth from the occupied boxes)
   const ProgramOptions shaped =
       with_occupancy_depth(options, Locations, static_cast<int64_t>(options.N), bounds, H2_solver->comm, false);
+  require_h2_tree_depth(shaped, H2_solver->comm);
   H2_solver->options.num_levels = shaped.num_levels;
   H2_solver->options.CA_level = shaped.CA_level;
 

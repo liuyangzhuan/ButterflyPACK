@@ -193,6 +193,7 @@ void hierarchical_factorization_unstructured(
     H2FactorizationMemoryDiagnostics memory_diagnostics;
 #ifdef H2_HAVE_GPU
     if (color_gpu_enabled()) gpu::begin_operator_build(tree, tree->comm);
+    else gpu::activate_operator(tree);  // (the stores invalidated below are this operator's)
     gpu::invalidate_device_solve();  // the device copies of the previous factors
 #endif
     DynamicThreadingContext dynamic_threading =
@@ -346,9 +347,10 @@ void hierarchical_factorization_unstructured(
     gpu_options.compress_factors = tree->partial() ? 0 : compress_factors;
     gpu::ColorGpuDriver<CoordType, DataType, KernelType> gpu_driver(tree, kernel, gpu_options);
     {
-        // as the full-grid loop: before the first level (the kernels and
-        // exchanges of the process's first factorization, the application's
-        // evaluator before its first use), and not in the factor time
+        // as the full-grid loop: before the first level (the kernels of the
+        // process's first factorization, the exchanges of the operator's
+        // first, the application's evaluator before its first use), and not
+        // in the factor time
         const double kernels = gpu_driver.warm_up();
         const double buffers = gpu_driver.warm_up_buffers();
         const double exchanges = gpu_driver.warm_up_exchange();
@@ -2123,7 +2125,9 @@ void hierarchical_factorization_unstructured(
         // At level 0, the assembled matrix is just the schur complement
         if (!root_box.schur_complement.is_allocated()) {
             throw std::runtime_error(
-                "hierarchical_factorization_parallel: Root box schur complement not allocated");
+                "hierarchical_factorization_parallel: root box Schur complement not "
+                "allocated; the level-1 transition assembles it, so an H2 tree of one "
+                "level never does (see require_h2_tree_depth)");
         }
 
         n = root_box.schur_complement.rows;

@@ -45,6 +45,7 @@ accuracy is that of the factorization (`tol_comp`).
 | `H2_compress_factors` | 0 or 1 | Optional. 1: the F22 records are kept compressed, lossy with an error bound of 0.02 `tol_comp` (CPU and GPU builds). The F11 factors of the partial solves stay uncompressed. |
 | `H2_partial_extract` | `auto` (0), `device` (1), `host` (2) | Optional, GPU builds: where the Schur complement's entries are computed ([below](#entries-h2_partial_extract)). |
 | `H2_use_gpu` | 0 or 1 | Optional: the factorization, the partial solves and the Schur complement's products and entries on the GPU. |
+| `elem_extract` | 0, 1 or 2 | As for a full factorization. With 1 (a block callback all ranks call together, as STRUMPACK's fronts give their entries) the F22 step asks for its blocks in rounds too: on the CPU a box that lacks one runs again after the round, on the GPU the device fetches it on the spot. |
 
 The H2 setup (`c_bpack_construct_init` and its variants) checks these and
 throws with the option's name when one does not hold. They are set like the
@@ -169,6 +170,15 @@ multifrontal solver's calls. The device gains the most with
 in the 64^3 case above, parent-like rounds of 2.4 M entries took 0.099 s on
 the device against 0.43 s on the host.
 
+On the device, the pair terms are added into a device copy of the call's
+result, which comes to the host once at the end (when it fits in the working
+space; else each group's terms come to the host and the host adds them in).
+A point asked for at several positions of a block gets its sums at its first
+position, copied to the others on the host. In STRUMPACK's H2-only fronts
+(Poisson 200^3, 16 ranks, the same calls timed on both under
+`BPACK_CHECK=solve`) this took the device from 287 s to 80 s summed over the
+calls, against 162 s on the host.
+
 ### Messages between ranks
 
 On several ranks, the entries' blocks that other ranks read go from device
@@ -193,7 +203,7 @@ prints on rank 0:
 GPU partial forward check: |gpu - host| / |host| = 5.476e-16
 GPU partial backward check: |gpu - host| / |host| = 3.334e-16
 GPU partial CB product check: |y_gpu - y_host| / |y_host| = 2.653e-15
-GPU partial CB entries check: |gpu - host| / |host| = 1.210e-16 (2438 entries)
+GPU partial CB entries check: |gpu - host| / |host| = 1.209e-16 (2438 entries in 4 blocks; device 0.0029 s, host 0.0052 s)
 ```
 
 Round-off is expected (about 1e-17 to 1e-14), also with compressed records:
@@ -212,6 +222,7 @@ times.
 | `--H2_partial <n11>` | The partial factorization. With `--distributed64 1` a rank's vector rows are its range of the input order, with `--distributed64 0` (which `--H2_ID_proxy 1` and `2` need) its range of the tree order. |
 | `--H2_partial_extract <auto\|device\|host>` | As the option. |
 | `--partial_check 1` | Compares the partial solves, the product and blocks of the Schur complement with a dense LU on rank 0 (N <= 40000). |
+| `--extract_ranks <P>` | The partial H2 takes its entries through the collective block callback (`elem_extract 1`) from a compression-only H2 of the kernel on the first P ranks, as from a STRUMPACK front (`--distributed64 0`). The checks then also carry the source's compression error. |
 | `--partial_extract_bench <R>` | R rounds of Schur complement blocks as a parent front reads them through `c_bpack_extractelement` (64 x 64 near-field blocks and 16 x 4096 panels), timed. |
 
 ```

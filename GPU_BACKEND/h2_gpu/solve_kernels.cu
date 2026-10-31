@@ -162,7 +162,9 @@ __global__ void __launch_bounds__(kThreads) solve_forward_one_kernel(const Solve
     T* xs = sh;
     T* xr = sh + b.k;
     const int tid = threadIdx.x, lane = tid & 31, warp = tid >> 5, nwarps = blockDim.x >> 5;
-    for (int c = 0; c < nrhs; ++c) {
+    {  // this block's column (blockIdx.y); the columns are independent
+        const int c = static_cast<int>(blockIdx.y);
+        if (c >= nrhs) return;
         T* v = vec + b.vec * nrhs + static_cast<int64_t>(c) * b.n;
         for (int i = tid; i < b.k; i += blockDim.x) xs[i] = v[b.skel[i]];
         for (int j = tid; j < b.r; j += blockDim.x) xr[j] = v[b.red[j]];
@@ -230,7 +232,9 @@ __global__ void __launch_bounds__(kThreads) solve_backward_one_kernel(const Solv
     T* xs = sh;
     T* xr = sh + b.k;
     const int tid = threadIdx.x, lane = tid & 31, warp = tid >> 5, nwarps = blockDim.x >> 5;
-    for (int c = 0; c < nrhs; ++c) {
+    {  // this block's column (blockIdx.y); the columns are independent
+        const int c = static_cast<int>(blockIdx.y);
+        if (c >= nrhs) return;
         T* v = vec + b.vec * nrhs + static_cast<int64_t>(c) * b.n;
         T* xn = kSharedXn ? sh + b.k + b.r : work + b.work * nrhs + static_cast<int64_t>(c) * b.ntot;
         for (int i = tid; i < b.k; i += blockDim.x) xs[i] = v[b.skel[i]];
@@ -270,7 +274,9 @@ __global__ void __launch_bounds__(kThreads) solve_diagonal_one_kernel(const Solv
     const T* lu = static_cast<const T*>(b.lu);
     const int r = b.r, tid = threadIdx.x;
     if (r == 0) return;
-    for (int c = 0; c < nrhs; ++c) {
+    {  // this block's column (blockIdx.y); the columns are independent
+        const int c = static_cast<int>(blockIdx.y);
+        if (c >= nrhs) return;
         T* v = vec + b.vec * nrhs + static_cast<int64_t>(c) * b.n;
         for (int j = tid; j < r; j += blockDim.x) xr[j] = v[b.red[j]];
         __syncthreads();
@@ -318,7 +324,9 @@ __global__ void __launch_bounds__(kThreads) mul_forward_one_kernel(const SolveBo
     T* xs = sh;
     T* xr = sh + b.k;
     const int tid = threadIdx.x, lane = tid & 31, warp = tid >> 5, nwarps = blockDim.x >> 5;
-    for (int c = 0; c < nrhs; ++c) {
+    {  // this block's column (blockIdx.y); the columns are independent
+        const int c = static_cast<int>(blockIdx.y);
+        if (c >= nrhs) return;
         T* v = vec + b.vec * nrhs + static_cast<int64_t>(c) * b.n;
         T* xn = kSharedXn ? sh + b.k + b.r : work + b.work * nrhs + static_cast<int64_t>(c) * b.ntot;
         for (int i = tid; i < b.k; i += blockDim.x) xs[i] = v[b.skel[i]];
@@ -364,7 +372,9 @@ __global__ void __launch_bounds__(kThreads) mul_diagonal_one_kernel(const SolveB
     if (r == 0) return;
     T* x = sh;
     T* y = sh + r;
-    for (int c = 0; c < nrhs; ++c) {
+    {  // this block's column (blockIdx.y); the columns are independent
+        const int c = static_cast<int>(blockIdx.y);
+        if (c >= nrhs) return;
         T* v = vec + b.vec * nrhs + static_cast<int64_t>(c) * b.n;
         for (int j = tid; j < r; j += blockDim.x) x[j] = v[b.red[j]];
         __syncthreads();
@@ -407,7 +417,9 @@ __global__ void __launch_bounds__(kThreads) mul_backward_one_kernel(const SolveB
     T* xs = sh;
     T* xr = sh + b.k;
     const int tid = threadIdx.x, lane = tid & 31, warp = tid >> 5, nwarps = blockDim.x >> 5;
-    for (int c = 0; c < nrhs; ++c) {
+    {  // this block's column (blockIdx.y); the columns are independent
+        const int c = static_cast<int>(blockIdx.y);
+        if (c >= nrhs) return;
         T* v = vec + b.vec * nrhs + static_cast<int64_t>(c) * b.n;
         for (int i = tid; i < b.k; i += blockDim.x) xs[i] = v[b.skel[i]];
         for (int j = tid; j < b.r; j += blockDim.x) xr[j] = v[b.red[j]];
@@ -622,7 +634,9 @@ __global__ void __launch_bounds__(kThreads) solve_forward_kernel(const SolveBox*
     const T* bxnr = static_cast<const T*>(forward_xnr(b, trans));
     const int stride = b.k + b.r;
     const int tid = threadIdx.x, lane = tid & 31, warp = tid >> 5, nwarps = blockDim.x >> 5;
-    for (int c0 = 0; c0 < nrhs; c0 += cols) {
+    {  // this block's column tile (blockIdx.y); the tiles are independent
+        const int c0 = static_cast<int>(blockIdx.y) * cols;
+        if (c0 >= nrhs) return;
         const int nc = min(cols, nrhs - c0);
         T* v0 = vec + b.vec * nrhs + static_cast<int64_t>(c0) * b.n;
         load_sr(b, v0, sh, stride, nc);
@@ -687,7 +701,9 @@ __global__ void __launch_bounds__(kThreads) solve_backward_kernel(const SolveBox
     const int stride = kSharedXn ? kr + b.ntot : kr;
     const int64_t xn_stride = kSharedXn ? stride : b.ntot;
     const int tid = threadIdx.x, lane = tid & 31, warp = tid >> 5, nwarps = blockDim.x >> 5;
-    for (int c0 = 0; c0 < nrhs; c0 += cols) {
+    {  // this block's column tile (blockIdx.y); the tiles are independent
+        const int c0 = static_cast<int>(blockIdx.y) * cols;
+        if (c0 >= nrhs) return;
         const int nc = min(cols, nrhs - c0);
         T* v0 = vec + b.vec * nrhs + static_cast<int64_t>(c0) * b.n;
         T* xn = kSharedXn ? sh + kr : work + b.work * nrhs + static_cast<int64_t>(c0) * b.ntot;
@@ -753,6 +769,14 @@ __global__ void __launch_bounds__(kThreads) solve_backward_kernel(const SolveBox
 }
 
 // LAPACK getrs ('N') with the 1-based interchanges of getrf.
+// Its column passes stay in series inside the block, unlike every other
+// per-box kernel here: measured, running them as concurrent blocks of the
+// grid's y dimension makes inv_mult 'N' wrong (a deterministic O(1) error --
+// residual 4e-16 -> 1.6e-01 at 76 columns, and already at 4 -- so the columns
+// of a box are not independent in this kernel, though they look it).  The same
+// 2-D grid with all the tiles done serially by the y == 0 block is exact, so it
+// is the concurrency and not the launch.  Worth 15.9 -> 13.6 ms of a 39.9 ms
+// solve if it is ever made safe; the sweeps below it are the other 2.5x.
 template<typename T, int CB>
 __global__ void __launch_bounds__(kThreads) solve_diagonal_kernel(const SolveBox* boxes, const int* list, T* vec,
                                                                   int nrhs, int cols) {
@@ -836,7 +860,9 @@ __global__ void __launch_bounds__(kThreads) mul_forward_kernel(const SolveBox* b
     const int stride = kSharedXn ? kr + b.ntot : kr;
     const int64_t xn_stride = kSharedXn ? stride : b.ntot;
     const int tid = threadIdx.x, lane = tid & 31, warp = tid >> 5, nwarps = blockDim.x >> 5;
-    for (int c0 = 0; c0 < nrhs; c0 += cols) {
+    {  // this block's column tile (blockIdx.y); the tiles are independent
+        const int c0 = static_cast<int>(blockIdx.y) * cols;
+        if (c0 >= nrhs) return;
         const int nc = min(cols, nrhs - c0);
         T* v0 = vec + b.vec * nrhs + static_cast<int64_t>(c0) * b.n;
         T* xn = kSharedXn ? sh + kr : work + b.work * nrhs + static_cast<int64_t>(c0) * b.ntot;
@@ -916,7 +942,9 @@ __global__ void __launch_bounds__(kThreads) mul_diagonal_kernel(const SolveBox* 
     const int r = b.r, tid = threadIdx.x;
     if (r == 0) return;
     const int stride = 2 * r;  // a column's x, then its y
-    for (int c0 = 0; c0 < nrhs; c0 += cols) {
+    {  // this block's column tile (blockIdx.y); the tiles are independent
+        const int c0 = static_cast<int>(blockIdx.y) * cols;
+        if (c0 >= nrhs) return;
         const int nc = min(cols, nrhs - c0);
         T* v0 = vec + b.vec * nrhs + static_cast<int64_t>(c0) * b.n;
         for (int q = 0; q < nc; ++q) {
@@ -979,7 +1007,9 @@ __global__ void __launch_bounds__(kThreads) solve_diagonal_t_kernel(const SolveB
     const T* lu = static_cast<const T*>(b.lu);
     const int r = b.r, tid = threadIdx.x;
     if (r == 0) return;
-    for (int c0 = 0; c0 < nrhs; c0 += cols) {
+    {  // this block's column tile (blockIdx.y); the tiles are independent
+        const int c0 = static_cast<int>(blockIdx.y) * cols;
+        if (c0 >= nrhs) return;
         const int nc = min(cols, nrhs - c0);
         T* v0 = vec + b.vec * nrhs + static_cast<int64_t>(c0) * b.n;
         for (int q = 0; q < nc; ++q) {
@@ -1046,7 +1076,9 @@ __global__ void __launch_bounds__(kThreads) mul_diagonal_t_kernel(const SolveBox
     const int r = b.r, tid = threadIdx.x;
     if (r == 0) return;
     const int stride = 2 * r;  // a column's x, then its y
-    for (int c0 = 0; c0 < nrhs; c0 += cols) {
+    {  // this block's column tile (blockIdx.y); the tiles are independent
+        const int c0 = static_cast<int>(blockIdx.y) * cols;
+        if (c0 >= nrhs) return;
         const int nc = min(cols, nrhs - c0);
         T* v0 = vec + b.vec * nrhs + static_cast<int64_t>(c0) * b.n;
         for (int q = 0; q < nc; ++q) {
@@ -1109,7 +1141,9 @@ __global__ void __launch_bounds__(kThreads) mul_diagonal_large_kernel(const Solv
     const T* lu = static_cast<const T*>(b.lu);
     const int r = b.r, tid = threadIdx.x;
     if (r == 0) return;
-    for (int c = 0; c < nrhs; ++c) {
+    {  // this block's column (blockIdx.y); the columns are independent
+        const int c = static_cast<int>(blockIdx.y);
+        if (c >= nrhs) return;
         T* v = vec + b.vec * nrhs + static_cast<int64_t>(c) * b.n;
         for (int j = tid; j < r; j += blockDim.x) x[j] = v[b.red[j]];
         __syncthreads();
@@ -1176,7 +1210,9 @@ __global__ void __launch_bounds__(kThreads) mul_backward_kernel(const SolveBox* 
     const T* bxnr = static_cast<const T*>(forward_xnr(b, trans));
     const int stride = b.k + b.r;
     const int tid = threadIdx.x, lane = tid & 31, warp = tid >> 5, nwarps = blockDim.x >> 5;
-    for (int c0 = 0; c0 < nrhs; c0 += cols) {
+    {  // this block's column tile (blockIdx.y); the tiles are independent
+        const int c0 = static_cast<int>(blockIdx.y) * cols;
+        if (c0 >= nrhs) return;
         const int nc = min(cols, nrhs - c0);
         T* v0 = vec + b.vec * nrhs + static_cast<int64_t>(c0) * b.n;
         load_sr(b, v0, sh, stride, nc);
@@ -1296,6 +1332,10 @@ unsigned grid_y(int64_t max_count) {
     return static_cast<unsigned>(std::max<int64_t>(1, std::min<int64_t>(blocks, 64)));
 }
 
+unsigned column_tiles(int nrhs, int cols) {
+    return static_cast<unsigned>(std::max(1, (nrhs + std::max(cols, 1) - 1) / std::max(cols, 1)));
+}
+
 // The columns a pass of a per-box kernel takes when each needs `per_column`
 // bytes of shared memory: one, or up to kMaxCols<T> within half the limit
 // (so two blocks still fit on an SM).
@@ -1332,12 +1372,12 @@ void launch_solve_forward(const SolveBox* boxes, const int* wave, int count, T* 
     const size_t shared = static_cast<size_t>(cols) * per_column;
     if (cols == 1) {
         allow_shared(solve_forward_one_kernel<T>, shared, "solve_forward_one_kernel", max_n);
-        solve_forward_one_kernel<T><<<count, kThreads, shared, stream>>>(boxes, wave, vec, work, nrhs, transposed);
+        solve_forward_one_kernel<T><<<dim3(static_cast<unsigned>(count), column_tiles(nrhs, 1)), kThreads, shared, stream>>>(boxes, wave, vec, work, nrhs, transposed);
     } else {
         with_cols<T>(cols, [&](auto cb) {
             constexpr int CB = decltype(cb)::value;
             allow_shared(solve_forward_kernel<T, CB>, shared, "solve_forward_kernel", max_n);
-            solve_forward_kernel<T, CB><<<count, kThreads, shared, stream>>>(boxes, wave, vec, work, nrhs, cols,
+            solve_forward_kernel<T, CB><<<dim3(static_cast<unsigned>(count), column_tiles(nrhs, cols)), kThreads, shared, stream>>>(boxes, wave, vec, work, nrhs, cols,
                                                                              transposed);
         });
     }
@@ -1357,7 +1397,7 @@ void launch_solve_backward(const SolveBox* boxes, const SolveSlot* slots, const 
     const int cols_xn = per_column_xn <= kSolveSharedLimit ? pass_columns<T>(nrhs, per_column_xn) : 0;
     if (cols_xn >= cols && cols_xn == 1) {
         allow_shared(solve_backward_one_kernel<T, true>, per_column_xn, "solve_backward_one_kernel", max_n);
-        solve_backward_one_kernel<T, true><<<count, kThreads, per_column_xn, stream>>>(boxes, slots, wave, vec, ghost,
+        solve_backward_one_kernel<T, true><<<dim3(static_cast<unsigned>(count), column_tiles(nrhs, 1)), kThreads, per_column_xn, stream>>>(boxes, slots, wave, vec, ghost,
                                                                                        work, nrhs, transposed);
     } else {
         with_cols<T>(cols_xn >= cols ? cols_xn : cols, [&](auto cb) {
@@ -1365,13 +1405,13 @@ void launch_solve_backward(const SolveBox* boxes, const SolveSlot* slots, const 
             if (cols_xn >= cols) {
                 const size_t shared = static_cast<size_t>(cols_xn) * per_column_xn;
                 allow_shared(solve_backward_kernel<T, CB, true>, shared, "solve_backward_kernel", max_n);
-                solve_backward_kernel<T, CB, true><<<count, kThreads, shared, stream>>>(boxes, slots, wave, vec, ghost,
+                solve_backward_kernel<T, CB, true><<<dim3(static_cast<unsigned>(count), column_tiles(nrhs, cols_xn)), kThreads, shared, stream>>>(boxes, slots, wave, vec, ghost,
                                                                                         work, nrhs, cols_xn, transposed);
             } else {  // (x_N in the work buffer, through shared memory in chunks)
                 const size_t shared =
                     static_cast<size_t>(kChunkRows) * CB * sizeof(T) + static_cast<size_t>(cols) * per_column;
                 allow_shared(solve_backward_kernel<T, CB, false>, shared, "solve_backward_kernel", max_n);
-                solve_backward_kernel<T, CB, false><<<count, kThreads, shared, stream>>>(boxes, slots, wave, vec, ghost,
+                solve_backward_kernel<T, CB, false><<<dim3(static_cast<unsigned>(count), column_tiles(nrhs, cols)), kThreads, shared, stream>>>(boxes, slots, wave, vec, ghost,
                                                                                          work, nrhs, cols, transposed);
             }
         });
@@ -1390,11 +1430,11 @@ void launch_solve_diagonal(const SolveBox* boxes, const int* list, int count, T*
         with_cols<T>(cols, [&](auto cb) {
             constexpr int CB = decltype(cb)::value;
             allow_shared(solve_diagonal_t_kernel<T, CB>, shared, "solve_diagonal_t_kernel", max_r);
-            solve_diagonal_t_kernel<T, CB><<<count, kThreads, shared, stream>>>(boxes, list, vec, nrhs, cols);
+            solve_diagonal_t_kernel<T, CB><<<dim3(static_cast<unsigned>(count), column_tiles(nrhs, cols)), kThreads, shared, stream>>>(boxes, list, vec, nrhs, cols);
         });
     } else if (cols == 1) {
         allow_shared(solve_diagonal_one_kernel<T>, shared, "solve_diagonal_one_kernel", max_r);
-        solve_diagonal_one_kernel<T><<<count, kThreads, shared, stream>>>(boxes, list, vec, nrhs);
+        solve_diagonal_one_kernel<T><<<dim3(static_cast<unsigned>(count), column_tiles(nrhs, 1)), kThreads, shared, stream>>>(boxes, list, vec, nrhs);
     } else {
         with_cols<T>(cols, [&](auto cb) {
             constexpr int CB = decltype(cb)::value;
@@ -1512,7 +1552,7 @@ void launch_mul_forward(const SolveBox* boxes, const SolveSlot* slots, const int
     const int cols_xn = per_column_xn <= kSolveSharedLimit ? pass_columns<T>(nrhs, per_column_xn) : 0;
     if (cols_xn >= cols && cols_xn == 1) {
         allow_shared(mul_forward_one_kernel<T, true>, per_column_xn, "mul_forward_one_kernel", max_n);
-        mul_forward_one_kernel<T, true><<<count, kThreads, per_column_xn, stream>>>(boxes, slots, wave, vec, ghost,
+        mul_forward_one_kernel<T, true><<<dim3(static_cast<unsigned>(count), column_tiles(nrhs, 1)), kThreads, per_column_xn, stream>>>(boxes, slots, wave, vec, ghost,
                                                                                     work, nrhs, transposed);
     } else {
         with_cols<T>(cols_xn >= cols ? cols_xn : cols, [&](auto cb) {
@@ -1520,13 +1560,13 @@ void launch_mul_forward(const SolveBox* boxes, const SolveSlot* slots, const int
             if (cols_xn >= cols) {
                 const size_t shared = static_cast<size_t>(cols_xn) * per_column_xn;
                 allow_shared(mul_forward_kernel<T, CB, true>, shared, "mul_forward_kernel", max_n);
-                mul_forward_kernel<T, CB, true><<<count, kThreads, shared, stream>>>(boxes, slots, wave, vec, ghost,
+                mul_forward_kernel<T, CB, true><<<dim3(static_cast<unsigned>(count), column_tiles(nrhs, cols_xn)), kThreads, shared, stream>>>(boxes, slots, wave, vec, ghost,
                                                                                      work, nrhs, cols_xn, transposed);
             } else {  // (x_N in the work buffer, through shared memory in chunks)
                 const size_t shared =
                     static_cast<size_t>(kChunkRows) * CB * sizeof(T) + static_cast<size_t>(cols) * per_column;
                 allow_shared(mul_forward_kernel<T, CB, false>, shared, "mul_forward_kernel", max_n);
-                mul_forward_kernel<T, CB, false><<<count, kThreads, shared, stream>>>(boxes, slots, wave, vec, ghost,
+                mul_forward_kernel<T, CB, false><<<dim3(static_cast<unsigned>(count), column_tiles(nrhs, cols)), kThreads, shared, stream>>>(boxes, slots, wave, vec, ghost,
                                                                                       work, nrhs, cols, transposed);
             }
         });
@@ -1542,7 +1582,7 @@ void launch_mul_diagonal(const SolveBox* boxes, const int* list, int count, T* v
     if (per_column > kSolveSharedLimit) {  // (x alone in shared memory: r up to the plan's n)
         const size_t shared = static_cast<size_t>(max_r) * sizeof(T);
         allow_shared(mul_diagonal_large_kernel<T>, shared, "mul_diagonal_large_kernel", max_r);
-        mul_diagonal_large_kernel<T><<<count, kThreads, shared, stream>>>(boxes, list, vec, nrhs, transposed);
+        mul_diagonal_large_kernel<T><<<dim3(static_cast<unsigned>(count), column_tiles(nrhs, 1)), kThreads, shared, stream>>>(boxes, list, vec, nrhs, transposed);
         check_launch("mul_diagonal_large_kernel");
         return;
     }
@@ -1552,16 +1592,16 @@ void launch_mul_diagonal(const SolveBox* boxes, const int* list, int count, T* v
         with_cols<T>(cols, [&](auto cb) {
             constexpr int CB = decltype(cb)::value;
             allow_shared(mul_diagonal_t_kernel<T, CB>, shared, "mul_diagonal_t_kernel", max_r);
-            mul_diagonal_t_kernel<T, CB><<<count, kThreads, shared, stream>>>(boxes, list, vec, nrhs, cols);
+            mul_diagonal_t_kernel<T, CB><<<dim3(static_cast<unsigned>(count), column_tiles(nrhs, cols)), kThreads, shared, stream>>>(boxes, list, vec, nrhs, cols);
         });
     } else if (cols == 1) {
         allow_shared(mul_diagonal_one_kernel<T>, shared, "mul_diagonal_one_kernel", max_r);
-        mul_diagonal_one_kernel<T><<<count, kThreads, shared, stream>>>(boxes, list, vec, nrhs);
+        mul_diagonal_one_kernel<T><<<dim3(static_cast<unsigned>(count), column_tiles(nrhs, 1)), kThreads, shared, stream>>>(boxes, list, vec, nrhs);
     } else {
         with_cols<T>(cols, [&](auto cb) {
             constexpr int CB = decltype(cb)::value;
             allow_shared(mul_diagonal_kernel<T, CB>, shared, "mul_diagonal_kernel", max_r);
-            mul_diagonal_kernel<T, CB><<<count, kThreads, shared, stream>>>(boxes, list, vec, nrhs, cols);
+            mul_diagonal_kernel<T, CB><<<dim3(static_cast<unsigned>(count), column_tiles(nrhs, cols)), kThreads, shared, stream>>>(boxes, list, vec, nrhs, cols);
         });
     }
     check_launch("mul_diagonal_kernel");
@@ -1576,12 +1616,12 @@ void launch_mul_backward(const SolveBox* boxes, const int* wave, int count, T* v
     const size_t shared = static_cast<size_t>(cols) * per_column;
     if (cols == 1) {
         allow_shared(mul_backward_one_kernel<T>, shared, "mul_backward_one_kernel", max_n);
-        mul_backward_one_kernel<T><<<count, kThreads, shared, stream>>>(boxes, wave, vec, work, nrhs, transposed);
+        mul_backward_one_kernel<T><<<dim3(static_cast<unsigned>(count), column_tiles(nrhs, 1)), kThreads, shared, stream>>>(boxes, wave, vec, work, nrhs, transposed);
     } else {
         with_cols<T>(cols, [&](auto cb) {
             constexpr int CB = decltype(cb)::value;
             allow_shared(mul_backward_kernel<T, CB>, shared, "mul_backward_kernel", max_n);
-            mul_backward_kernel<T, CB><<<count, kThreads, shared, stream>>>(boxes, wave, vec, work, nrhs, cols,
+            mul_backward_kernel<T, CB><<<dim3(static_cast<unsigned>(count), column_tiles(nrhs, cols)), kThreads, shared, stream>>>(boxes, wave, vec, work, nrhs, cols,
                                                                             transposed);
         });
     }

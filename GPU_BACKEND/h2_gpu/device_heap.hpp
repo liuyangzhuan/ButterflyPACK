@@ -828,8 +828,9 @@ inline void reserve_exchange_arena(int nproc, int share, double fraction = 0.0) 
 // preconditioner on a 40 GB GPU, where all 16 fit.)
 //
 // Every H2 call on an operator activates it before it reads a store: the
-// builds (begin_operator_build), the solve (run_device_solve), the matvec
-// (run_device_h2_mul) and the logdet (hierarchical_logdet_parallel).
+// builds (begin_operator_build) for their duration, the other calls (the
+// solve, the matvec, entries, the logdet, the partial calls) until they
+// return (OperatorCall), since they may run inside a build.
 struct OperatorContext {
     const void* active = nullptr;                         // the operator of the current H2 call
     uint64_t clock = 0;
@@ -857,20 +858,28 @@ inline void activate_operator(const void* tree) {
     c.last_use[tree] = ++c.clock;
 }
 
+// An H2 call on operator `tree` that may run inside another operator's
+// build (a solve, a multiply, entries, the logdet, the partial calls): the
+// stores serve `tree` until it returns, then the operator active before it.
+// A build takes its entries through the user's callback, which may call
+// other operators (a STRUMPACK front's entries are its children's), and goes
+// on with its own stores afterwards - its kept records and factors.
+class OperatorCall {
+public:
+    explicit OperatorCall(const void* tree) : previous_(operator_context().active) { activate_operator(tree); }
+    ~OperatorCall() { operator_context().active = previous_; }
+    OperatorCall(const OperatorCall&) = delete;
+    OperatorCall& operator=(const OperatorCall&) = delete;
+
+private:
+    const void* previous_;
+};
+
 // Device bytes the stores hold for operator `tree`.
 inline size_t operator_bytes(const void* tree) {
     size_t bytes = 0;
     for (const auto& held : operator_context().holders) bytes += held(tree);
     return bytes;
-}
-
-// Whether operators other than the active one hold device data.
-inline bool other_operators_hold_data() {
-    const OperatorContext& c = operator_context();
-    for (const auto& entry : c.last_use) {
-        if (entry.first != c.active && operator_bytes(entry.first) > 0) return true;
-    }
-    return false;
 }
 
 // Operator `tree` gives up its device data to make room (an eviction, on

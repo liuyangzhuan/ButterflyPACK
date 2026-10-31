@@ -1683,12 +1683,13 @@ static void parallel_copy(BfScalar* dst, int64_t ldd, const BfScalar* src, int64
 // y = op(bf) x for host x (nin x nrhs, ld ldx) and y (nout x nrhs, ld ldy),
 // through the device buffers dx (nin x nrhs) and dy (nout x nrhs), chunk by
 // chunk as described above; conj: each chunk conjugated on the device before
-// the sweep and after it ('C' on complex data).  Returns the flops.
+// the sweep and after it ('C' on complex data).  rows sets the chunk width: the
+// largest max(nin, nout) of the group's ranks, since every chunk is a
+// collective sweep and all ranks must sweep the same ones.  Returns the flops.
 static double pipelined_mult(bf::gpu::BfResident<BfScalar>& r, bf::gpu::SweepPlan<BfScalar>& plan, int nrhs, const BfScalar* x,
                       int64_t ldx, BfScalar* y, int64_t ldy, BfScalar* dx, BfScalar* dy, int64_t nin, int64_t nout,
-                      cudaStream_t stream, bool conj) {
+                      int64_t rows, cudaStream_t stream, bool conj) {
   HostStage& h = host_stage();
-  const int64_t rows = std::max<int64_t>({nin, nout, 1});
   const int64_t step = std::min<int64_t>(
       nrhs, std::max<int64_t>(HostStage::kMinColumns, static_cast<int64_t>(HostStage::kChunkBytes / sizeof(BfScalar)) / rows));
   const size_t in_bytes = static_cast<size_t>(std::max<int64_t>(nin, 1) * step) * sizeof(BfScalar);
@@ -1768,10 +1769,12 @@ void c_bf_gpu_mult_host(void* bf, void* ptree, const char* op, const int* nrhs, 
     const size_t bout = static_cast<size_t>(std::max(nout, 1)) * *nrhs * sizeof(BfScalar);
     char* dx = heap.try_alloc(bin, fmm::gpu::ResidentKind::Matvec);
     char* dy = heap.try_alloc(bout, fmm::gpu::ResidentKind::Matvec);
-    // a rank without room must not leave the others in the sweep's exchanges
-    int room = (dx != nullptr && dy != nullptr) ? 1 : 0;
-    if (r->bridge.nproc > 1) MPI_Allreduce(MPI_IN_PLACE, &room, 1, MPI_INT, MPI_MIN, r->bridge.comm);
-    if (!room) {
+    // a rank without room must not leave the others in the sweep's exchanges,
+    // and the chunks come from the widest rank's rows (pipelined_mult): its
+    // own would split nrhs differently there once a chunk is narrower than nrhs
+    int64_t agree[2] = {(dx != nullptr && dy != nullptr) ? 1 : 0, -std::max<int64_t>({nin, nout, 1})};
+    if (r->bridge.nproc > 1) MPI_Allreduce(MPI_IN_PLACE, agree, 2, MPI_INT64_T, MPI_MIN, r->bridge.comm);
+    if (agree[0] == 0) {
       if (dx != nullptr) heap.free(dx);
       if (dy != nullptr) heap.free(dy);
       return;
@@ -1780,7 +1783,7 @@ void c_bf_gpu_mult_host(void* bf, void* ptree, const char* op, const int* nrhs, 
     const bool conj = (*op == 'C' || *op == 'c') && fmm::gpu::is_complex_scalar<BfScalar>;
     const double f = pipelined_mult(*r, plan, *nrhs, static_cast<const BfScalar*>(x), *ldx, static_cast<BfScalar*>(y),
                                     *ldy, reinterpret_cast<BfScalar*>(dx), reinterpret_cast<BfScalar*>(dy), nin, nout,
-                                    stream, conj);
+                                    -agree[1], stream, conj);
     fmm::gpu::check_cuda(cudaStreamSynchronize(stream), "c_bf_gpu_mult_host");
     heap.free(dx);
     heap.free(dy);

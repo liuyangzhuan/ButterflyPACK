@@ -45,7 +45,7 @@ inline constexpr Value kCheckValues[] = {
 inline constexpr Value kTraceValues[] = {
     {"wave", false}, {"exchange", false}, {"phase", false},    {"bk", false},
     {"memory", false}, {"id", true},      {"hodlr-qr", false}, {"sync", false},
-    {"skew", false},
+    {"skew", false}, {"extract", false},
 };
 
 struct List {

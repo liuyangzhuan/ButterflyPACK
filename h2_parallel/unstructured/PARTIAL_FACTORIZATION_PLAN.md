@@ -611,7 +611,7 @@ point set and on a plain cube split, dense checks at small N.
     ranks' sum order).  Not done: NCCL (the exchanges are now under a fifth
     of the round); the product's exchanges (610/611) carry host vectors -
     the product keeps its vectors on the host (G2), 0.063 s at 4 ranks.
-- **Proxy modes (2026-10-28, uncommitted): `H2_ID_proxy` 1 and 2 in the
+- **Proxy modes (2026-10-28, committed 99f9b43): `H2_ID_proxy` 1 and 2 in the
   partial factorization, CPU and GPU.**  The option check refused both.
   Mode 1's static training rows were already evaluated against each
   target's own columns - the F11 step's box points, the F22 step's live
@@ -667,3 +667,101 @@ point set and on a plain cube split, dense checks at small N.
   Runs: /pscratch/sd/l/liuyangz/bpack_partial_runs/proxy (t_, u_, v_, x_
   logs; cmp_traces.py compares two traces).  Not measured: the modes' cost
   at scale (20^3: the device F22 step 35 -> 48 ms with proxy 2).
+- **Entries through a collective callback (2026-10-28, committed c0c65c9).**  The
+  STRUMPACK session's testH2Partial (BPACKMatrix over F11 then F22, its
+  entries from a block callback, elem_extract 1) threw "H2 entries: a block
+  not fetched yet (collective callback)" once the tree was deep enough (16^3,
+  leaf 64; leaf 256 passed), on the CPU.  The F22 step's host passes asked
+  for kernel blocks - the far sketch, a box's self block when the F11 step
+  formed none, and the near blocks of the pairs no elimination touched -
+  outside an entry item, where a miss throws at once (collective_entries.hpp)
+  instead of being recorded for a round.  Now:
+  - host: both passes run as entry phases (run_entry_phase).  A box asks for
+    all its blocks before its checkpoint and changes nothing outside itself
+    before it: the kernel's self block is kept by the item until then, and
+    a pair without a view takes its X_RN block (pass 1) or X_NR block
+    (pass 2) over all of S_old, the rows or columns the ID keeps then sliced
+    from it (the same entries as the two blocks over posR and posS; the ID
+    is not known before the checkpoint).  A box abandoned at its checkpoint
+    runs again from the start after the round;
+  - device: the passes fetch on the spot (the collective evaluator) as
+    before; the driver quiesces the level's ranks after f22_ids and
+    f22_records, before the step's exchanges between ranks;
+  - the driver reproduces it without STRUMPACK: `--extract_ranks P
+    --H2_partial n11` (the partial H2 from a compression-only H2's entries;
+    the source no longer inherits H2_partial).
+  Validation (skew Laplace or STRUMPACK's test kernel, tol 1e-6):
+  - testH2Partial 16^3, F11 2048, leaf 64, 1 rank: the old library throws,
+    the new one passes (CB entries 8.5e-07, product 7.8e-07, forward 1.4e-06,
+    backward 1.8e-06 against dense LAPACK), CPU = GPU to every printed digit;
+    20^3 (F11 4000) too; leaf 256 (which passed before): old = new bitwise.
+    Its runs on 2+ ranks crash in the first level's waves for the full
+    factorization (F11 0) as well, old library and new: its callback is
+    BPACK_block_evaluation_seq, which fills every intersection of a round
+    into the local buffer (a round's intersections are the asking ranks'),
+    a limit of the test, not of the H2;
+  - the driver with `--extract_ranks 1`, 16^3, F11 2048, leaf 64: the old
+    library throws; the new one passes on 1, 4 and 8 ranks (CPU) and 1 and
+    4 GPUs, the dense checks the same digits on 4 ranks CPU and GPU and 8
+    ranks (schur_mult 2.605e-06, extract 1.012e-06, forward 2.173e-06,
+    backward 1.918e-05; 1 rank 2.499e-06 / 1.018e-06 / 2.146e-06 / 2.305e-05,
+    the source's compression error included), proxy 2 CPU = GPU;
+  - unchanged bitwise (old library against new, entries direct): 20^3,
+    F11 1200, proxy 0 on 1 and 3 ranks CPU and GPU and proxy 2, and 16^3
+    leaf 64: logdets, dense checks and every box's BPACK_TRACE=id line.
+  Runs: /pscratch/sd/l/liuyangz/bpack_partial_runs/coll (s_ STRUMPACK's
+  test, x_ the driver from a source, d_ direct; cmp.sh).
+- **Collective rounds on 2 ranks (2026-10-28; core, not
+  partial).**  With entries through a collective callback a full or partial
+  factorization hung on 2 ranks (16^3, leaf 64; STRUMPACK's testH2Partial and
+  the driver's `--extract_ranks` alike): form_near_updates_from_generators
+  and its nonsymmetric twin (core/serialization.hpp) returned before their
+  entry phase on a rank that installed no generators in a transport, so the
+  ranks ran different numbers of phases - one waited in a round, the other in
+  the next wave's transport.  The early path now joins the phase's rounds
+  with nothing to run (every rank of a section calls every phase).  After it:
+  testH2Partial on 2, 3, 4, 6 and 8 ranks, 2 GPUs and proxy 2 on 2 ranks; the
+  driver on 2, 3, 5, 6 and 7 ranks and 2 GPUs (2 GPUs = 2 CPU ranks to every
+  digit).  Unchanged bit for bit where the rounds lined up already (4 ranks
+  full and partial, 1 rank, direct entries on 3).  The leaf-256 error on 2
+  ranks ("no region layout for 2 ranks over 2 levels") is the depth rule, not
+  this: more than one rank needs at least 3 levels (each rank builds whole
+  parent boxes, and with 2 levels the parent is the root).
+- **Several operators on one GPU (2026-10-29; STRUMPACK's fronts, GPU).**
+  Two bugs, neither specific to the partial path, that a multifrontal solver
+  with an H2 per front exposes:
+  - the stores of the active operator: every call activated its operator and
+    none restored the previous one, so a front's build that read its
+    children's entries through the callback went on with a child's stores
+    (its kept records freed with the child, its CB entries then from reused
+    memory: 17-21% of the device CB extractions wrong, the "ID input contains
+    NaN" at 200^3 with --h2_only 1).  The calls that may run inside a build
+    now restore it on return (OperatorCall, 2299797);
+  - the heap reset at a build's start: taken when no other H2 operator
+    reported data, but the butterfly and HODLR backends keep resident data in
+    the same heap (a four-block front's F12/F21 uploads), and the first
+    front's prepared solve tables were not counted either; the reset handed
+    their memory to the next H2 allocations, and the solve phase failed with
+    "CUDA error in solve upload" (illegal or misaligned address, 60^3 one
+    rank, four blocks).  A build now resets the heap only when nothing is
+    allocated.
+  STRUMPACK testPoisson3dMPIDist, GPU: four blocks 60^3 1 and 4 ranks and
+  100^3 4 ranks pass (BPACK_CHECK=solve: 466 checks, none off); --h2_only 1
+  100^3 4 ranks 0 of 33115 checks off; 200^3 4 ranks --h2_only 1 271.5 s,
+  4 its, four blocks 213.3 s, 7 its.  Single-operator driver runs unchanged
+  bit for bit (partial 1 and 3 GPUs with ID traces, full 2 GPUs, partial
+  from a source on 2 GPUs).
+- **The CB entries' path, the same on every rank (2026-10-29).**  On the
+  GPU, partial_schur_blocks took the device path when the request was large
+  or when this rank kept F22 records on the device
+  (tree.partial_records_on_device) - a rank's own flag, false on a rank
+  without F22 boxes, which a 32-rank front of STRUMPACK's (200^3, 64 ranks,
+  --h2_only 1) has.  The ranks then split between the two paths, whose
+  block messages (tags 620/621) differ, and a host rank read the device
+  path's bytes: a live-set "position" that was a double's bits, a segfault
+  (partial.hpp, the received row blocks).  Up to 8 ranks every rank had F22
+  boxes.  The records' place is now reduced over the ranks before the
+  choice, and the block messages check their positions as sent and as
+  received (a named error, not a corruption).  200^3 --h2_only 1 on 64 GPUs
+  then factors in 75.7 s, 4 its; testH2Partial 2/4/8 GPUs and the driver's
+  partial runs unchanged.

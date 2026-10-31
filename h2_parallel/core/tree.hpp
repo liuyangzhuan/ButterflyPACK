@@ -1745,6 +1745,7 @@ struct ParallelTree {
     int64_t partial_count = 0;           ///< H2_partial: points with id < partial_count are F11 (eliminated); 0: full factorization
     bool partial_compress_records = false;  ///< H2_compress_factors with H2_partial: the F22 records stored compressed
     bool partial_records_on_device = false;  ///< some F22 records kept on the device only (partial_device.hpp)
+    bool gpu_exchanges_warmed = false;       ///< the GPU exchanges with this tree's peer ranks warmed up (warm_up_exchange)
     bool partial() const { return partial_count > 0; }
     bool partial_f11(int64_t point_id) const { return point_id < partial_count; }
     PartialRootFactor<DataType> partial_root;  ///< the root of a partial factorization

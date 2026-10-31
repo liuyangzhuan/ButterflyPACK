@@ -263,6 +263,29 @@ public:
             ahead_.emplace_back(ahead_size_, std::async(std::launch::async, &PinnedChunkPool::pin_chunk, ahead_size_, device_));
         }
     }
+    // Wait for every chunk pinned ahead and keep it idle.  Nothing ever
+    // destroys these futures by itself: the pool is deliberately leaked, so
+    // their std::async threads are still inside pin_chunk -- in cudaSetDevice
+    // -- while the CUDA runtime tears itself down at process exit, and about
+    // one run in fifteen segfaults there, after the program has printed
+    // everything and main has returned.  A phase that is finished with the
+    // pool drains it instead (ColorGpuDriver's destructor).  The chunks stay
+    // pinned and idle, so the next take() has them and the wait is the one it
+    // would have done anyway.
+    void drain() {
+        while (!ahead_.empty()) {
+            auto f = std::move(ahead_.front().second);
+            ahead_.pop_front();
+            try {
+                Chunk c = f.get();
+                pin_seconds_ += c.seconds;
+                pinned_ += c.bytes;
+                give(c);
+            } catch (const std::exception&) {
+                // a chunk that could not be pinned is one we do not need here
+            }
+        }
+    }
     // Idle chunks beyond `keep` bytes unpinned, largest first; returns the
     // bytes unpinned (and adds the seconds it took to *seconds).
     size_t trim(size_t keep = kIdleKeep, double* seconds = nullptr) {

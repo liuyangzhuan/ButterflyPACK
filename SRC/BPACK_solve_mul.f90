@@ -4016,6 +4016,12 @@ contains
 &Vin(idx_start_loc, 1), Ns, vec_new(idx_start_loc, 1), Ns, ctemp1, ctemp2)
                stats%Flop_Tmp = stats%Flop_Tmp + flops_gemm(idx_end_loc - idx_start_loc + 1, num_vectors, idx_end_loc - idx_start_loc + 1)
             else
+               ! BPACK_Factorization deletes the forward off-diagonal blocks
+               ! when ErrSol=0, precon=1 and IR_HODLR<=0, so a forward multiply
+               ! after a factorization in that configuration would read freed
+               ! blockplus structures (a segfault in Bplus_block_MVP_twoforward_dat).
+               call BPACK_require(associated(ho_bf1%levels(level)%BP(ii*2 - 1)%LL) .and. associated(ho_bf1%levels(level)%BP(ii*2)%LL), &
+&'HODLR_Mult: the forward blocks are gone. BPACK_Factorization frees them when ErrSol=0, precon=1 and IR_HODLR<=0, so this matrix cannot be multiplied once it has been factored. Multiply before factoring, or set ErrSol=1, precon>1 or IR_HODLR>0 to keep them.')
                call Bplus_block_MVP_twoforward_dat(ho_bf1, level, ii, trans_tmp, idx_end_loc - idx_start_loc + 1, num_vectors, Vin(idx_start_loc, 1), Ns, vec_new(idx_start_loc, 1), Ns, ctemp1, ctemp2, ptree, stats)
             endif
 

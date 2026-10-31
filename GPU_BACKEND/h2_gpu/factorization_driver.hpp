@@ -69,6 +69,11 @@ public:
     ColorGpuDriver(Tree* tree, KernelType* kernel, const Options& options)
         : tree_(tree), kernel_(kernel), opt_(options) {}
 
+    // The chunks pinned ahead for this factorization are waited for here, so
+    // that no pinning thread is left running into the CUDA runtime's teardown
+    // at process exit (PinnedChunkPool::drain).
+    ~ColorGpuDriver() { pinned_chunk_pool().drain(); }
+
     // Before the first level of the process's first factorization (of this
     // data type): the batched LU, the two solves of X_RR^{-1} and the three
     // GEMM forms once per size range, so no level pays the first-use loading
@@ -182,7 +187,7 @@ public:
         }
     }
 
-    // Before the first level of the process's first factorization: a 64 KB
+    // Before the first level of an operator's first factorization: a 64 KB
     // message with every rank this one exchanges with on a level (each
     // level's one-hop neighbour ranks), sent and received the way the levels
     // will (from and into the exchange arena with GPU-aware MPI).  A pair's
@@ -198,11 +203,13 @@ public:
     // after a Color leaf at 384^3 on 8 ranks, 6.5 s at 768^3 on 64 ranks on
     // 80 GB cards; a Color leaf paid the same in its own first waves).
     // Returns its time (0 when it already ran); collective over the tree's
-    // ranks.
+    // ranks.  Once per operator, not per process: a process's operators have
+    // communicators of their own (a STRUMPACK front each), and a flag of the
+    // process let some ranks of a front skip it while the others waited for
+    // them in it.
     double warm_up_exchange() {
-        static bool done = false;
-        if (done || !color_gpu_enabled() || tree_->mpi_size <= 1) return 0.0;
-        done = true;
+        if (tree_->gpu_exchanges_warmed || !color_gpu_enabled() || tree_->mpi_size <= 1) return 0.0;
+        tree_->gpu_exchanges_warmed = true;
         const auto t0 = std::chrono::steady_clock::now();
         std::set<int> peer_set;
         for (int l = 2; l < tree_->num_levels; ++l) {
@@ -1012,10 +1019,18 @@ public:
     // ---- H2_partial's F22 step (unstructured/partial.hpp) on a device level:
     // the boxes' two passes on the device, then the level's blocks sliced there to
     // the new live sets (the transition builds the parents from them, or
-    // takes them to the host)
+    // takes them to the host).  (Entries through a collective callback: the
+    // passes fetch the near and self blocks they lack, and the level's ranks
+    // quiesce after each, before the step communicates.)
     bool f22_on_device() const { return level_ != nullptr && tree_->partial(); }
-    void f22_ids(std::vector<PartialF22Work<DataType>>& works) { level_->f22_ids(works); }
-    void f22_records(std::vector<PartialF22Work<DataType>>& works) { level_->f22_records(works); }
+    void f22_ids(std::vector<PartialF22Work<DataType>>& works) {
+        level_->f22_ids(works);
+        quiesce_entries();
+    }
+    void f22_records(std::vector<PartialF22Work<DataType>>& works) {
+        level_->f22_records(works);
+        quiesce_entries();
+    }
     void end_partial_level(const PartialF22Kept& kept) {
         if (level_) level_->f22_slice(kept);
     }

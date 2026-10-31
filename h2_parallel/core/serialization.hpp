@@ -5216,7 +5216,12 @@ void form_near_updates_from_generators(
     const std::vector<int64_t>& installed,
     int dimension,
     PendingFactorUpdates<DataType>& incoming) {
-    if (installed.empty()) return;
+    if (installed.empty()) {
+        // (entries through a collective callback: the phase's rounds all the
+        // same, with nothing to run - another rank may have generators)
+        run_entry_phase(kernel_entries(kernel, 0), {}, [](const std::vector<int64_t>&) { return std::vector<int64_t>{}; });
+        return;
+    }
 
     std::vector<int64_t> source_order(installed);
     std::sort(source_order.begin(), source_order.end(),
@@ -5549,7 +5554,11 @@ void form_near_updates_from_generators_nonsymmetric(
     const std::vector<int64_t>& installed,
     int dimension,
     PendingFactorUpdates<DataType>& incoming) {
-    if (installed.empty()) return;
+    if (installed.empty()) {
+        // (entries through a collective callback: as the symmetric case)
+        run_entry_phase(kernel_entries(kernel, 0), {}, [](const std::vector<int64_t>&) { return std::vector<int64_t>{}; });
+        return;
+    }
     auto are_one_hop = [&](int64_t first, int64_t second) {
         uint32_t a[3] = {0, 0, 0};
         uint32_t b[3] = {0, 0, 0};
