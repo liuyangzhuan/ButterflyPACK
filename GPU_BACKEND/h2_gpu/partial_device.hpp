@@ -833,14 +833,23 @@ public:
         }
         check_cuda(cudaStreamSynchronize(stream_), "partial CB upload");
     }
+    // (a piece comes over while the host copies the one before out of the other buffer)
     void download(void* dst, const void* src, size_t bytes) {
-        for (size_t at = 0, k = 0; at < bytes; at += kStage, ++k) {
-            const size_t n = std::min(kStage, bytes - at);
-            char* h = static_cast<char*>(pinned_pool().staging[k & 1].reserve(kStage));
-            check_cuda(cudaMemcpyAsync(h, static_cast<const char*>(src) + at, n, cudaMemcpyDeviceToHost, stream_),
+        const size_t pieces = (bytes + kStage - 1) / kStage;
+        char* h[2] = {nullptr, nullptr};
+        auto start = [&](size_t k) {
+            const size_t at = k * kStage, n = std::min(kStage, bytes - at);
+            h[k & 1] = static_cast<char*>(pinned_pool().staging[k & 1].reserve(kStage));
+            check_cuda(cudaMemcpyAsync(h[k & 1], static_cast<const char*>(src) + at, n, cudaMemcpyDeviceToHost, stream_),
                        "partial CB download");
-            check_cuda(cudaStreamSynchronize(stream_), "partial CB download");
-            copy(static_cast<char*>(dst) + at, h, n);
+            check_cuda(cudaEventRecord(staged_[k & 1], stream_), "cudaEventRecord");
+        };
+        if (pieces > 0) start(0);
+        for (size_t k = 0; k < pieces; ++k) {
+            if (k + 1 < pieces) start(k + 1);
+            check_cuda(cudaEventSynchronize(staged_[k & 1]), "partial CB download");
+            const size_t at = k * kStage;
+            copy(static_cast<char*>(dst) + at, h[k & 1], std::min(kStage, bytes - at));
         }
     }
     MetaBuilder& meta() {
@@ -1060,10 +1069,24 @@ size_t partial_pair_bytes(const PartialPair<DataType>& p) {
     return e * sizeof(DataType) + 256 * (4 + 3 * p.terms.size());
 }
 
-// The G (ni x nj, column major, end to end in pair order) of a group of
-// pairs, into g (host).
+// Where the G of a group go when they stay on the device: pair q's G is
+// added into out at rows[q] x cols[q], positions in its block of out (which
+// starts at base[q], leading dimension ld[q]).  The pairs of a group write
+// distinct entries: at a level, the row blocks partition the requested rows'
+// points and the column blocks the columns'.
 template<typename DataType>
-void partial_device_pairs(PartialDeviceWork& work, const std::vector<const PartialPair<DataType>*>& pairs, DataType* g) {
+struct PartialPairTargets {
+    DataType* out = nullptr;
+    std::vector<int64_t> base, ld;
+    std::vector<const std::vector<int>*> rows, cols;
+};
+
+// The G (ni x nj, column major, end to end in pair order) of a group of
+// pairs, into g (host); with targets, added into their blocks of the device
+// output instead (g unused).
+template<typename DataType>
+void partial_device_pairs(PartialDeviceWork& work, const std::vector<const PartialPair<DataType>*>& pairs, DataType* g,
+                          const PartialPairTargets<DataType>* targets = nullptr) {
     using S = typename DeviceScalar<DataType>::type;
     const size_t D = sizeof(DataType);
     if (pairs.empty()) return;
@@ -1230,8 +1253,42 @@ void partial_device_pairs(PartialDeviceWork& work, const std::vector<const Parti
             }
         }
     }
+    // (with targets: each G into its block of out, in tiles - a launch's grid
+    // covers its largest item)
+    constexpr int kScatterTile = 64;
+    std::vector<BlockCopyItemT<S>> tiles;
+    if (targets != nullptr) {
+        std::unordered_map<const std::vector<int>*, size_t> pos_at;
+        auto positions = [&](const std::vector<int>* v) {
+            auto it = pos_at.find(v);
+            if (it == pos_at.end()) it = pos_at.emplace(v, meta.append(*v)).first;
+            return static_cast<int64_t>(it->second);
+        };
+        for (size_t q = 0; q < pairs.size(); ++q) {
+            const int ni = pairs[q]->ni, nj = pairs[q]->nj;
+            const int64_t ro = positions(targets->rows[q]), co = positions(targets->cols[q]);
+            const S* G = reinterpret_cast<const S*>(d + g_off[q]);
+            for (int j0 = 0; j0 < nj; j0 += kScatterTile) {
+                for (int i0 = 0; i0 < ni; i0 += kScatterTile) {
+                    BlockCopyItemT<S> it{};
+                    it.out = reinterpret_cast<S*>(targets->out + targets->base[q]);
+                    it.ors = 1;
+                    it.ocs = targets->ld[q];
+                    it.out_rows.offset = ro + static_cast<int64_t>(i0) * static_cast<int64_t>(sizeof(int));
+                    it.out_cols.offset = co + static_cast<int64_t>(j0) * static_cast<int64_t>(sizeof(int));
+                    it.src = G + i0 + static_cast<int64_t>(j0) * ni;
+                    it.rs = 1;
+                    it.cs = ni;
+                    it.m = std::min(kScatterTile, ni - i0);
+                    it.n = std::min(kScatterTile, nj - j0);
+                    it.add = 1;
+                    tiles.push_back(it);
+                }
+            }
+        }
+    }
     const size_t gathers_off = meta.append(gathers), chunked_off = meta.append(chunked);
-    const size_t srcs_off = meta.append(srcs), dsts_off = meta.append(dsts);
+    const size_t srcs_off = meta.append(srcs), dsts_off = meta.append(dsts), tiles_off = meta.append(tiles);
     for (auto& b : batches) b.stage(meta);
     char* md = work.upload_meta();
     cudaStream_t stream = work.stream();
@@ -1261,6 +1318,12 @@ void partial_device_pairs(PartialDeviceWork& work, const std::vector<const Parti
         if (batches[base + 1].count() > 0) batches[base + 1].gemm(md, MagmaTrans, MagmaNoTrans, DataType(1), DataType(0), queue);
         if (batches[base + 2].count() > 0) batches[base + 2].gemm(md, MagmaTrans, MagmaNoTrans, DataType(1), DataType(1), queue);
         if (batches[base + 3].count() > 0) batches[base + 3].gemm(md, MagmaNoTrans, MagmaNoTrans, DataType(1), DataType(1), queue);
+    }
+    if (targets != nullptr) {
+        launch_block_copy(reinterpret_cast<const BlockCopyItemT<S>*>(md + tiles_off), static_cast<int>(tiles.size()), kScatterTile,
+                          kScatterTile, md, stream);
+        work.release(d);  // (the stream keeps a later user of the bytes behind the copy)
+        return;
     }
     // G of the pairs, end to end
     std::vector<DataType> all(g_bytes / D);

@@ -170,6 +170,15 @@ multifrontal solver's calls. The device gains the most with
 in the 64^3 case above, parent-like rounds of 2.4 M entries took 0.099 s on
 the device against 0.43 s on the host.
 
+On the device, the pair terms are added into a device copy of the call's
+result, which comes to the host once at the end (when it fits in the working
+space; else each group's terms come to the host and the host adds them in).
+A point asked for at several positions of a block gets its sums at its first
+position, copied to the others on the host. In STRUMPACK's H2-only fronts
+(Poisson 200^3, 16 ranks, the same calls timed on both under
+`BPACK_CHECK=solve`) this took the device from 287 s to 80 s summed over the
+calls, against 162 s on the host.
+
 ### Messages between ranks
 
 On several ranks, the entries' blocks that other ranks read go from device
@@ -194,7 +203,7 @@ prints on rank 0:
 GPU partial forward check: |gpu - host| / |host| = 5.476e-16
 GPU partial backward check: |gpu - host| / |host| = 3.334e-16
 GPU partial CB product check: |y_gpu - y_host| / |y_host| = 2.653e-15
-GPU partial CB entries check: |gpu - host| / |host| = 1.210e-16 (2438 entries)
+GPU partial CB entries check: |gpu - host| / |host| = 1.209e-16 (2438 entries in 4 blocks; device 0.0029 s, host 0.0052 s)
 ```
 
 Round-off is expected (about 1e-17 to 1e-14), also with compressed records:

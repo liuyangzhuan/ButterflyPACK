@@ -936,6 +936,9 @@ void partial_checks(const DriverOptions& o, const Laplace3DApplication& applicat
     for (int i = 0; i < nr[k]; ++i) rows.push_back(static_cast<int>(rng() % static_cast<uint64_t>(n22)));
     for (int j = 0; j < nc[k]; ++j) cols.push_back(static_cast<int>(rng() % static_cast<uint64_t>(n22)));
   }
+  // the first block asks for a row and a column twice, as a parent's request may
+  if (nr[0] >= 2) rows[1] = rows[0];
+  if (nc[0] >= 2) cols[1] = cols[0];
   nr[3] = nc[3] = std::min(40, n22 - n22 / 3);
   for (int i = 0; i < nr[3]; ++i) rows.push_back(n22 / 3 + i);
   for (int j = 0; j < nc[3]; ++j) cols.push_back(n22 / 3 + j);
