@@ -84,6 +84,44 @@ __global__ void block_copy_kernel(const BlockCopyItemT<T>* items, const char* me
     }
 }
 
+// (a kTile x kTile output tile a thread block, the k dimension kTileK at a time
+// through shared memory)
+constexpr int kTileK = 16;
+
+template<typename T>
+__global__ void indexed_gemm_kernel(const IndexedGemmItemT<T>* items, const char* meta) {
+    const IndexedGemmItemT<T> it = items[blockIdx.x];
+    const int i0 = blockIdx.y * kTile, j0 = blockIdx.z * kTile;
+    if (i0 >= it.m || j0 >= it.n) return;
+    __shared__ T Ls[kTile][kTileK + 1];
+    __shared__ T Rs[kTileK][kTile + 1];
+    const int tx = threadIdx.x, ty = threadIdx.y;
+    const int i = i0 + tx, jl = j0 + tx;
+    const int64_t lrow = i < it.m ? static_cast<int64_t>(index_at(meta, it.l_rows, i)) * it.lrs : 0;
+    const int64_t rcol = jl < it.n ? static_cast<int64_t>(index_at(meta, it.r_cols, jl)) * it.rcs : 0;
+    T acc[kTile / kTileRows] = {};
+    for (int x0 = 0; x0 < it.k; x0 += kTileK) {
+        for (int xx = ty; xx < kTileK; xx += kTileRows) {
+            const int x = x0 + xx;
+            Ls[tx][xx] = i < it.m && x < it.k ? it.l[lrow + static_cast<int64_t>(index_at(meta, it.l_x, x)) * it.lxs] : T(0);
+            Rs[xx][tx] = jl < it.n && x < it.k ? it.r[static_cast<int64_t>(index_at(meta, it.r_x, x)) * it.rxs + rcol] : T(0);
+        }
+        __syncthreads();
+        for (int xx = 0; xx < kTileK; ++xx) {
+            const T a = Ls[tx][xx];
+            for (int q = 0; q < kTile / kTileRows; ++q) acc[q] += a * Rs[xx][ty + q * kTileRows];
+        }
+        __syncthreads();
+    }
+    if (i >= it.m) return;
+    const int64_t orow = static_cast<int64_t>(index_at(meta, it.out_rows, i)) * it.ors;
+    for (int q = 0; q < kTile / kTileRows; ++q) {
+        const int j = j0 + ty + q * kTileRows;
+        if (j >= it.n) break;
+        atomic_add_to(it.out + orow + static_cast<int64_t>(index_at(meta, it.out_cols, j)) * it.ocs, acc[q]);
+    }
+}
+
 template<typename T>
 __global__ void chunk_gather_kernel(const ChunkGatherItemT<T>* items, const char* meta) {
     const ChunkGatherItemT<T> item = items[blockIdx.x];
@@ -293,6 +331,14 @@ void launch_index_copy(const IndexCopyItemT<T>* items, int count, int max_m, int
 }
 
 template<typename T>
+void launch_indexed_gemm(const IndexedGemmItemT<T>* items, int count, int max_m, int max_n, const char* meta,
+                         cudaStream_t stream) {
+    if (count <= 0 || max_m <= 0 || max_n <= 0) return;
+    indexed_gemm_kernel<T><<<tile_grid(count, max_m, max_n), dim3(kTile, kTileRows), 0, stream>>>(items, meta);
+    check_launch("indexed_gemm_kernel");
+}
+
+template<typename T>
 void launch_block_copy(const BlockCopyItemT<T>* items, int count, int max_m, int max_n, const char* meta,
                        cudaStream_t stream) {
     if (count <= 0 || max_m <= 0 || max_n <= 0) return;
@@ -414,6 +460,7 @@ void launch_abs_max(const AbsMaxItem* items, int count, cudaStream_t stream) {
     template void launch_add_store<T>(const AddStoreItemT<T>*, int, int, int, cudaStream_t);                       \
     template void launch_index_copy<T>(const IndexCopyItemT<T>*, int, int, int, const char*, cudaStream_t);        \
     template void launch_block_copy<T>(const BlockCopyItemT<T>*, int, int, int, const char*, cudaStream_t);        \
+    template void launch_indexed_gemm<T>(const IndexedGemmItemT<T>*, int, int, int, const char*, cudaStream_t);    \
     template void launch_chunk_gather<T>(const ChunkGatherItemT<T>*, int, int, int, const char*, cudaStream_t);    \
     template void launch_sym_add<T>(const SymAddItemT<T>*, int, int, cudaStream_t);                               \
     template void launch_symmetrize<T>(const IdentityItemT<T>*, int, int, cudaStream_t);                          \

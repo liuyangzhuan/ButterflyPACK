@@ -180,6 +180,19 @@ position, copied to the others on the host. In STRUMPACK's H2-only fronts
 `BPACK_CHECK=solve`) this took the device from 287 s to 80 s summed over the
 calls, against 162 s on the host.
 
+A call's blocks share most of their points (a parent front's near-field
+blocks: a point in 5 to 13 of them), and blocks whose points came up through
+the same child box have the same raw rows. So the entries keep one chain a
+point, in one chain block a box over every point any block of the call asks
+for, and a pair of a row block and a column block computes each record term
+once over the points the call's blocks both reach (A^T X, or X B), then each
+block its entries from it (two stages; on the device a GEMM over index lists
+adds them into the result). In STRUMPACK's H2-only fronts this took the
+factorization from 47.6 to 44.1 s on the GPU and from 61.1 to 56.2 s on the
+CPU (Poisson 200^3, 16 ranks). The sketches keep a chain block a box and
+block, since their sketched side combines each block's points by its own
+Omega.
+
 ### Messages between ranks
 
 On several ranks, the entries' blocks that other ranks read go from device
