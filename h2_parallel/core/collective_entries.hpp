@@ -267,7 +267,12 @@ public:
         auto range = pending_index_.equal_range(h);
         for (auto it = range.first; it != range.second; ++it) {
             const Block& b = pending_[it->second];
-            if (same(b, x, nx, y, ny)) return;
+            if (same(b, x, nx, y, ny)) {
+                const size_t o = static_cast<size_t>(entry_origin());
+                dup_blocks_[o] += 1.0;
+                dup_entries_[o] += static_cast<double>(nx) * static_cast<double>(ny);
+                return;
+            }
         }
         Block b;
         b.rows.assign(x, x + nx);
@@ -348,10 +353,12 @@ public:
         MPI_Allreduce(mine.data(), min.data(), n, MPI_DOUBLE, MPI_MIN, comm_);
         MPI_Allreduce(mine.data(), max.data(), n, MPI_DOUBLE, MPI_MAX, comm_);
         constexpr int kOrigins = static_cast<int>(EntryOrigin::count);
-        double origins[2 * kOrigins];
+        double origins[4 * kOrigins];
         std::copy(origin_blocks_, origin_blocks_ + kOrigins, origins);
         std::copy(origin_entries_, origin_entries_ + kOrigins, origins + kOrigins);
-        MPI_Allreduce(MPI_IN_PLACE, origins, 2 * kOrigins, MPI_DOUBLE, MPI_SUM, comm_);
+        std::copy(dup_blocks_, dup_blocks_ + kOrigins, origins + 2 * kOrigins);
+        std::copy(dup_entries_, dup_entries_ + kOrigins, origins + 3 * kOrigins);
+        MPI_Allreduce(MPI_IN_PLACE, origins, 4 * kOrigins, MPI_DOUBLE, MPI_SUM, comm_);
         double sketch_counts[3] = {sketch_requests_, sketch_values_, sketch_covered_};
         MPI_Allreduce(MPI_IN_PLACE, sketch_counts, 3, MPI_DOUBLE, MPI_SUM, comm_);
         long long calls = static_cast<long long>(xp.calls);
@@ -382,6 +389,12 @@ public:
             for (int o = 0; o < kOrigins; ++o) {
                 std::printf(" %s %.0f, %.3g%s", names[o], origins[o], origins[kOrigins + o], o + 1 < kOrigins ? ";" : "\n");
             }
+            // (requests of a block already pending in the round: fetched once)
+            std::printf("  requested again while pending, not fetched (blocks, entries):");
+            for (int o = 0; o < kOrigins; ++o) {
+                std::printf(" %s %.0f, %.3g%s", names[o], origins[2 * kOrigins + o], origins[3 * kOrigins + o],
+                            o + 1 < kOrigins ? ";" : "\n");
+            }
             if (calls > 0) {
                 constexpr int x0 = 5, xs = ExtractionProfile::kSteps;
                 std::printf("  the callback's extraction by step (s, mean / min / max over ranks, %lld calls):", calls);
@@ -409,6 +422,8 @@ public:
         sketch_requests_ = sketch_values_ = sketch_covered_ = 0.0;
         std::fill(origin_blocks_, origin_blocks_ + static_cast<int>(EntryOrigin::count), 0.0);
         std::fill(origin_entries_, origin_entries_ + static_cast<int>(EntryOrigin::count), 0.0);
+        std::fill(dup_blocks_, dup_blocks_ + static_cast<int>(EntryOrigin::count), 0.0);
+        std::fill(dup_entries_, dup_entries_ + static_cast<int>(EntryOrigin::count), 0.0);
         extraction_profile() = ExtractionProfile{};
     }
     int64_t fetched_blocks() const { return fetched_blocks_; }
@@ -721,6 +736,8 @@ private:
            delivery_seconds_ = 0.0;
     double origin_blocks_[static_cast<int>(EntryOrigin::count)] = {};
     double origin_entries_[static_cast<int>(EntryOrigin::count)] = {};
+    double dup_blocks_[static_cast<int>(EntryOrigin::count)] = {};
+    double dup_entries_[static_cast<int>(EntryOrigin::count)] = {};
 };
 
 // A phase's items until none is abandoned: run(items) runs the given items
