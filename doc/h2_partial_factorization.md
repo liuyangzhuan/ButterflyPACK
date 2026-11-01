@@ -45,7 +45,7 @@ accuracy is that of the factorization (`tol_comp`).
 | `H2_compress_factors` | 0 or 1 | Optional. 1: the F22 records are kept compressed, lossy with an error bound of 0.02 `tol_comp` (CPU and GPU builds). The F11 factors of the partial solves stay uncompressed. |
 | `H2_partial_extract` | `auto` (0), `device` (1), `host` (2) | Optional, GPU builds: where the Schur complement's entries are computed ([below](#entries-h2_partial_extract)). |
 | `H2_use_gpu` | 0 or 1 | Optional: the factorization, the partial solves and the Schur complement's products and entries on the GPU. |
-| `elem_extract` | 0, 1 or 2 | As for a full factorization. With 1 (a block callback all ranks call together, as STRUMPACK's fronts give their entries) the F22 step asks for its blocks in rounds too: on the CPU a box that lacks one runs again after the round, on the GPU the device fetches it on the spot. |
+| `elem_extract` | 0, 1 or 2 | As for a full factorization. With 1 (a block callback all ranks call together, as STRUMPACK's fronts give their entries) the F22 step asks for its blocks in rounds too: on the CPU a box that lacks one runs again after the round, on the GPU the device fetches it on the spot (on one rank, as a sequential front's H2, straight from the callback into the upload, with no round). |
 
 The H2 setup (`c_bpack_construct_init` and its variants) checks these and
 throws with the option's name when one does not hold. They are set like the

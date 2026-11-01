@@ -1731,109 +1731,166 @@ PartialCbSide<DataType> partial_cb_side(const fmm::ParallelTree<CoordType, DataT
     using Side = PartialCbSide<DataType>;
     std::vector<Side> parts(static_cast<size_t>(ninter));
     std::exception_ptr failure;
-#pragma omp parallel for schedule(dynamic, 1)
-    for (int64_t k = 0; k < ninter; ++k) {
-        try {
+    const auto& leaf_level = tree.levels[static_cast<size_t>(tree.num_levels - 1)];
+    const int64_t nleaf = leaf_level.is_process_active ? leaf_level.num_boxes_local : 0;
+    // (a thread's maps, F22 index -> distinct point and leaf box -> chain
+    // block, are arrays kept over the calls and reset after each block: a
+    // hash map and a vector a point, per block, were most of this side's
+    // time in malloc and free)
+#pragma omp parallel
+    {
+        thread_local std::vector<int64_t> point_at, block_at;
+        if (point_at.size() < static_cast<size_t>(std::max<int64_t>(n22, 0))) point_at.resize(static_cast<size_t>(n22), -1);
+        if (block_at.size() < static_cast<size_t>(nleaf)) block_at.resize(static_cast<size_t>(nleaf), -1);
+        std::vector<int64_t> point_of, tg_start;
+        std::vector<std::pair<int64_t, double>> tg;
+#pragma omp for schedule(dynamic, 1)
+        for (int64_t k = 0; k < ninter; ++k) {
             Side& part = parts[static_cast<size_t>(k)];
-            std::unordered_map<int64_t, int64_t> of;  // F22 index -> distinct point
-            const int64_t q0 = off[static_cast<size_t>(k)], n = off[static_cast<size_t>(k) + 1] - q0;
-            std::vector<int64_t> point_of(static_cast<size_t>(n));
-            for (int64_t q = 0; q < n; ++q) {
-                const int64_t f = idx[q0 + q];
-                if (f < 0 || f >= n22) throw std::runtime_error("partial Schur: an index out of range");
-                auto it = of.find(f);
-                if (it == of.end()) {
-                    it = of.emplace(f, static_cast<int64_t>(part.points.size())).first;
-                    part.points.push_back(f);
+            try {
+                const int64_t q0 = off[static_cast<size_t>(k)], n = off[static_cast<size_t>(k) + 1] - q0;
+                point_of.resize(static_cast<size_t>(n));
+                for (int64_t q = 0; q < n; ++q) {
+                    const int64_t f = idx[q0 + q];
+                    if (f < 0 || f >= n22) throw std::runtime_error("partial Schur: an index out of range");
+                    int64_t& at = point_at[static_cast<size_t>(f)];
+                    if (at < 0) {
+                        at = static_cast<int64_t>(part.points.size());
+                        part.points.push_back(f);
+                    }
+                    point_of[static_cast<size_t>(q)] = at;
                 }
-                point_of[static_cast<size_t>(q)] = it->second;
-            }
-            const size_t np = part.points.size();
-            part.pos_start.assign(np + 1, 0);
-            if (sk == nullptr) {
-                for (int64_t m : point_of) ++part.pos_start[static_cast<size_t>(m) + 1];
-                for (size_t m = 0; m < np; ++m) part.pos_start[m + 1] += part.pos_start[m];
-                part.pos.resize(static_cast<size_t>(n));
-                std::vector<int64_t> fill(part.pos_start.begin(), part.pos_start.end() - 1);
-                for (int64_t q = 0; q < n; ++q) part.pos[static_cast<size_t>(fill[static_cast<size_t>(point_of[static_cast<size_t>(q)])]++)] = q;
-            } else {
-                // a point's sketch rows: Omega_k's entries at its positions, summed by row
-                const int64_t d = sk->dims[k];
-                std::vector<std::vector<std::pair<int64_t, double>>> tg(np);
-                for (int64_t e = sk->omega_off[k]; e < sk->omega_off[k + 1]; ++e) {
-                    const int64_t q = sk->omega_pos[e], s = sk->omega_dest[e];
-                    if (q < 0 || q >= n || s < 0 || s >= d) throw std::runtime_error("partial Schur: a sketch entry out of range");
-                    tg[static_cast<size_t>(point_of[static_cast<size_t>(q)])].emplace_back(s, sk->omega_val[e]);
-                }
-                for (size_t m = 0; m < np; ++m) {
-                    auto& t = tg[m];
-                    std::sort(t.begin(), t.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
-                    for (size_t a = 0; a < t.size(); ++a) {
-                        if (!part.pos.empty() && static_cast<int64_t>(part.pos.size()) > part.pos_start[m] && part.pos.back() == t[a].first) {
-                            part.posw.back() += t[a].second;
-                        } else {
-                            part.pos.push_back(t[a].first);
-                            part.posw.push_back(t[a].second);
+                for (int64_t f : part.points) point_at[static_cast<size_t>(f)] = -1;
+                const size_t np = part.points.size();
+                part.pos_start.assign(np + 1, 0);
+                if (sk == nullptr) {
+                    for (int64_t m : point_of) ++part.pos_start[static_cast<size_t>(m) + 1];
+                    for (size_t m = 0; m < np; ++m) part.pos_start[m + 1] += part.pos_start[m];
+                    part.pos.resize(static_cast<size_t>(n));
+                    std::vector<int64_t> fill(part.pos_start.begin(), part.pos_start.end() - 1);
+                    for (int64_t q = 0; q < n; ++q) part.pos[static_cast<size_t>(fill[static_cast<size_t>(point_of[static_cast<size_t>(q)])]++)] = q;
+                } else {
+                    // a point's sketch rows: Omega_k's entries at its positions
+                    // (by point, in their order, then by row), summed by row
+                    const int64_t d = sk->dims[k];
+                    tg_start.assign(np + 1, 0);
+                    for (int64_t e = sk->omega_off[k]; e < sk->omega_off[k + 1]; ++e) {
+                        const int64_t q = sk->omega_pos[e], s = sk->omega_dest[e];
+                        if (q < 0 || q >= n || s < 0 || s >= d) throw std::runtime_error("partial Schur: a sketch entry out of range");
+                        ++tg_start[static_cast<size_t>(point_of[static_cast<size_t>(q)]) + 1];
+                    }
+                    for (size_t m = 0; m < np; ++m) tg_start[m + 1] += tg_start[m];
+                    tg.resize(static_cast<size_t>(tg_start[np]));
+                    {
+                        std::vector<int64_t> fill(tg_start.begin(), tg_start.end() - 1);
+                        for (int64_t e = sk->omega_off[k]; e < sk->omega_off[k + 1]; ++e) {
+                            const size_t m = static_cast<size_t>(point_of[static_cast<size_t>(sk->omega_pos[e])]);
+                            tg[static_cast<size_t>(fill[m]++)] = {sk->omega_dest[e], sk->omega_val[e]};
                         }
                     }
-                    part.pos_start[m + 1] = static_cast<int64_t>(part.pos.size());
+                    part.pos.reserve(tg.size() + static_cast<size_t>(d));
+                    part.posw.reserve(tg.size() + static_cast<size_t>(d));
+                    for (size_t m = 0; m < np; ++m) {
+                        auto* t0 = tg.data() + tg_start[m];
+                        auto* t1 = tg.data() + tg_start[m + 1];
+                        std::sort(t0, t1, [](const auto& a, const auto& b) { return a.first < b.first; });
+                        for (auto* t = t0; t != t1; ++t) {
+                            if (!part.pos.empty() && static_cast<int64_t>(part.pos.size()) > part.pos_start[m] && part.pos.back() == t->first) {
+                                part.posw.back() += t->second;
+                            } else {
+                                part.pos.push_back(t->first);
+                                part.posw.push_back(t->second);
+                            }
+                        }
+                        part.pos_start[m + 1] = static_cast<int64_t>(part.pos.size());
+                    }
+                    part.sk_first.push_back(static_cast<int64_t>(np));
+                    part.sk_dim.push_back(d);
+                    for (int64_t s = 0; s < d; ++s) {
+                        part.points.push_back(-1);
+                        part.pos.push_back(s);
+                        part.posw.push_back(1.0);
+                        part.pos_start.push_back(static_cast<int64_t>(part.pos.size()));
+                    }
                 }
-                part.sk_first.push_back(static_cast<int64_t>(np));
-                part.sk_dim.push_back(d);
-                for (int64_t s = 0; s < d; ++s) {
-                    part.points.push_back(-1);
-                    part.pos.push_back(s);
-                    part.posw.push_back(1.0);
-                    part.pos_start.push_back(static_cast<int64_t>(part.pos.size()));
+                // the leaf chain blocks of the points with positions
+                for (size_t m = 0; m < np; ++m) {
+                    if (part.pos_start[m] == part.pos_start[m + 1]) continue;
+                    const int64_t f = part.points[m], b = pr.leaf_box[static_cast<size_t>(f)];
+                    if (b < 0) {
+                        if (nranks == 1) throw std::runtime_error("partial Schur: a point is not in a local leaf");
+                        continue;  // (another rank's)
+                    }
+                    int64_t& at = block_at[static_cast<size_t>(b)];
+                    if (at < 0) {
+                        at = static_cast<int64_t>(part.blocks.size());
+                        part.blocks.emplace_back();
+                        part.blocks.back().box = b;
+                        part.blocks.back().inter = k;
+                    }
+                    auto& blk = part.blocks[static_cast<size_t>(at)];
+                    blk.members.push_back(static_cast<int64_t>(m));
+                    blk.rows.push_back(pr.leaf_slot[static_cast<size_t>(f)]);
                 }
-            }
-            // the leaf chain blocks of the points with positions
-            std::unordered_map<int64_t, size_t> block_of;  // leaf box -> chain block
-            for (size_t m = 0; m < np; ++m) {
-                if (part.pos_start[m] == part.pos_start[m + 1]) continue;
-                const int64_t f = part.points[m], b = pr.leaf_box[static_cast<size_t>(f)];
-                if (b < 0) {
-                    if (nranks == 1) throw std::runtime_error("partial Schur: a point is not in a local leaf");
-                    continue;  // (another rank's)
+                for (const auto& blk : part.blocks) block_at[static_cast<size_t>(blk.box)] = -1;
+                if (values) {
+                    for (auto& blk : part.blocks) {
+                        const int64_t nb = static_cast<int64_t>(blk.members.size());
+                        blk.v.assign(static_cast<size_t>(nb * nb), DataType(0));
+                        for (int64_t t = 0; t < nb; ++t) blk.v[static_cast<size_t>(t + t * nb)] = DataType(1);
+                    }
                 }
-                auto bt = block_of.find(b);
-                if (bt == block_of.end()) {
-                    bt = block_of.emplace(b, part.blocks.size()).first;
-                    part.blocks.emplace_back();
-                    part.blocks.back().box = b;
-                    part.blocks.back().inter = k;
-                }
-                auto& blk = part.blocks[bt->second];
-                blk.members.push_back(static_cast<int64_t>(m));
-                blk.rows.push_back(pr.leaf_slot[static_cast<size_t>(f)]);
-            }
-            if (values) {
-                for (auto& blk : part.blocks) {
-                    const int64_t nb = static_cast<int64_t>(blk.members.size());
-                    blk.v.assign(static_cast<size_t>(nb * nb), DataType(0));
-                    for (int64_t t = 0; t < nb; ++t) blk.v[static_cast<size_t>(t + t * nb)] = DataType(1);
-                }
-            }
-        } catch (...) {
+            } catch (...) {
 #pragma omp critical(partial_schur_blocks_failure)
-            if (!failure) failure = std::current_exception();
+                if (!failure) failure = std::current_exception();
+                // (the maps reset for the thread's next block)
+                std::fill(point_at.begin(), point_at.end(), -1);
+                std::fill(block_at.begin(), block_at.end(), -1);
+            }
         }
     }
     if (failure) std::rethrow_exception(failure);
+    // the blocks one after another: each one's offsets, then a thread a block
+    const size_t nk = parts.size();
+    std::vector<size_t> o_points(nk + 1, 0), o_pos(nk + 1, 0), o_posw(nk + 1, 0), o_sk(nk + 1, 0), o_blocks(nk + 1, 0);
+    for (size_t k = 0; k < nk; ++k) {
+        const Side& part = parts[k];
+        o_points[k + 1] = o_points[k] + part.points.size();
+        o_pos[k + 1] = o_pos[k] + part.pos.size();
+        o_posw[k + 1] = o_posw[k] + part.posw.size();
+        o_sk[k + 1] = o_sk[k] + part.sk_first.size();
+        o_blocks[k + 1] = o_blocks[k] + part.blocks.size();
+    }
     Side side;
-    side.pos_start.push_back(0);
-    for (auto& part : parts) {
-        const int64_t m0 = static_cast<int64_t>(side.points.size()), p0 = static_cast<int64_t>(side.pos.size());
-        side.points.insert(side.points.end(), part.points.begin(), part.points.end());
-        for (size_t m = 1; m < part.pos_start.size(); ++m) side.pos_start.push_back(p0 + part.pos_start[m]);
-        side.pos.insert(side.pos.end(), part.pos.begin(), part.pos.end());
-        side.posw.insert(side.posw.end(), part.posw.begin(), part.posw.end());
-        for (int64_t f : part.sk_first) side.sk_first.push_back(m0 + f);
-        side.sk_dim.insert(side.sk_dim.end(), part.sk_dim.begin(), part.sk_dim.end());
-        for (auto& blk : part.blocks) {
-            for (auto& m : blk.members) m += m0;
-            side.blocks.push_back(std::move(blk));
+    side.points.resize(o_points[nk]);
+    side.pos_start.resize(o_points[nk] + 1);
+    side.pos_start[0] = 0;
+    side.pos.resize(o_pos[nk]);
+    side.posw.resize(o_posw[nk]);
+    side.sk_first.resize(o_sk[nk]);
+    side.sk_dim.resize(o_sk[nk]);
+    side.blocks.resize(o_blocks[nk]);
+#pragma omp parallel for schedule(dynamic, 16)
+    for (size_t k = 0; k < nk; ++k) {
+        Side& part = parts[k];
+        const int64_t m0 = static_cast<int64_t>(o_points[k]), p0 = static_cast<int64_t>(o_pos[k]);
+        std::copy(part.points.begin(), part.points.end(), side.points.begin() + o_points[k]);
+        for (size_t m = 1; m < part.pos_start.size(); ++m) side.pos_start[o_points[k] + m] = p0 + part.pos_start[m];
+        std::copy(part.pos.begin(), part.pos.end(), side.pos.begin() + o_pos[k]);
+        std::copy(part.posw.begin(), part.posw.end(), side.posw.begin() + o_posw[k]);
+        for (size_t t = 0; t < part.sk_first.size(); ++t) {
+            side.sk_first[o_sk[k] + t] = m0 + part.sk_first[t];
+            side.sk_dim[o_sk[k] + t] = part.sk_dim[t];
         }
+        for (size_t b = 0; b < part.blocks.size(); ++b) {
+            auto& blk = part.blocks[b];
+            for (auto& m : blk.members) m += m0;
+            side.blocks[o_blocks[k] + b] = std::move(blk);
+        }
+        std::vector<int64_t>().swap(part.points);  // (freed here, by this thread)
+        std::vector<int64_t>().swap(part.pos_start);
+        std::vector<int64_t>().swap(part.pos);
+        std::vector<double>().swap(part.posw);
     }
     return side;
 }

@@ -43,32 +43,45 @@ void collective_block_evaluator(const bpack_gpu_block_batch* batch, void* user) 
     }
     if (at.back() == 0) return;
     // the blocks packed column by column, those not fetched yet fetched now
+    // (one rank: all of them, straight into the image)
     std::vector<DataType> image(at.back());
-    std::vector<int> missing;
-    for (int b = 0; b < count; ++b) {
-        const bpack_gpu_block& blk = batch->blocks[b];
-        if (blk.m <= 0 || blk.n <= 0) continue;
-        if (!entries->lookup(blk.row_ids_host, blk.m, blk.col_ids_host, blk.n, image.data() + at[static_cast<size_t>(b)],
-                             blk.m)) {
-            entries->record(blk.row_ids_host, blk.m, blk.col_ids_host, blk.n);
-            missing.push_back(b);
-        }
-    }
-    if (!missing.empty()) {
-        const auto t_fetch = clock::now();
-        entries->fetch_now();
-        fetching = std::chrono::duration<double>(clock::now() - t_fetch).count();
-        for (int b : missing) {
+    if (entries->alone()) {
+        std::vector<typename Entries::BlockRef> refs;
+        refs.reserve(static_cast<size_t>(count));
+        for (int b = 0; b < count; ++b) {
             const bpack_gpu_block& blk = batch->blocks[b];
+            if (blk.m > 0 && blk.n > 0) refs.push_back({blk.row_ids_host, blk.m, blk.col_ids_host, blk.n});
+        }
+        const auto t_fetch = clock::now();
+        entries->fetch_blocks_direct(refs, image.data());
+        fetching = std::chrono::duration<double>(clock::now() - t_fetch).count();
+    } else {
+        std::vector<int> missing;
+        for (int b = 0; b < count; ++b) {
+            const bpack_gpu_block& blk = batch->blocks[b];
+            if (blk.m <= 0 || blk.n <= 0) continue;
             if (!entries->lookup(blk.row_ids_host, blk.m, blk.col_ids_host, blk.n,
                                  image.data() + at[static_cast<size_t>(b)], blk.m)) {
-                throw std::logic_error("collective GPU evaluator: a block its round did not fetch");
+                entries->record(blk.row_ids_host, blk.m, blk.col_ids_host, blk.n);
+                missing.push_back(b);
             }
         }
-    }
-    for (int b = 0; b < count; ++b) {
-        const bpack_gpu_block& blk = batch->blocks[b];
-        if (blk.m > 0 && blk.n > 0) entries->release(blk.row_ids_host, blk.m, blk.col_ids_host, blk.n);
+        if (!missing.empty()) {
+            const auto t_fetch = clock::now();
+            entries->fetch_now();
+            fetching = std::chrono::duration<double>(clock::now() - t_fetch).count();
+            for (int b : missing) {
+                const bpack_gpu_block& blk = batch->blocks[b];
+                if (!entries->lookup(blk.row_ids_host, blk.m, blk.col_ids_host, blk.n,
+                                     image.data() + at[static_cast<size_t>(b)], blk.m)) {
+                    throw std::logic_error("collective GPU evaluator: a block its round did not fetch");
+                }
+            }
+        }
+        for (int b = 0; b < count; ++b) {
+            const bpack_gpu_block& blk = batch->blocks[b];
+            if (blk.m > 0 && blk.n > 0) entries->release(blk.row_ids_host, blk.m, blk.col_ids_host, blk.n);
+        }
     }
     // one upload (pageable: staged before the call returns), then into the
     // blocks on the batch's stream
@@ -126,36 +139,70 @@ void collective_sketches(Entries* entries, std::vector<Evaluator::SketchRequest>
     }
     if (at.back() == 0) return;
     std::vector<DataType> image(at.back(), DataType{0});
-    std::vector<std::vector<DataType>> part(keys.size());
-    std::vector<size_t> missing;
-    for (size_t k = 0; k < keys.size(); ++k) {
-        const size_t q = key_of[k].first;
-        part[k].resize(static_cast<size_t>(requests[q].d) * requests[q].cols.size());
-        if (!entries->lookup_sketch(keys[k], part[k].data(), requests[q].d)) {
-            entries->record_sketch(keys[k]);
-            missing.push_back(k);
-        }
-    }
-    if (!missing.empty()) {
-        const auto t_fetch = clock::now();
-        entries->fetch_now();
-        fetching = std::chrono::duration<double>(clock::now() - t_fetch).count();
-        for (size_t k : missing) {
-            if (!entries->lookup_sketch(keys[k], part[k].data(), requests[key_of[k].first].d)) {
-                throw std::logic_error("collective GPU evaluator: a sketch its round did not fetch");
-            }
-        }
-    }
-    for (const auto& k : keys) entries->release_sketch(k);
-    // (a request of one part: its values as they came)
     std::vector<int> parts(requests.size(), 0);
     for (const auto& kq : key_of) ++parts[kq.first];
-    for (size_t k = 0; k < keys.size(); ++k) {
-        DataType* y = image.data() + at[key_of[k].first];
-        if (parts[key_of[k].first] == 1) {
-            std::copy(part[k].begin(), part[k].end(), y);
-        } else {
-            for (size_t i = 0; i < part[k].size(); ++i) y[i] += part[k][i];
+    if (entries->alone()) {
+        // One rank: each orientation's parts in one callback call, straight
+        // into the image when they lie there back to back, one a request
+        // (a symmetric matrix's), else added in from a packed copy.
+        for (int t = 0; t < 2; ++t) {
+            std::vector<typename Entries::SketchKey> ks;
+            std::vector<size_t> qs;
+            for (size_t k = 0; k < keys.size(); ++k) {
+                if (keys[k].transposed != (t == 1)) continue;
+                ks.push_back(keys[k]);
+                qs.push_back(key_of[k].first);
+            }
+            if (ks.empty()) continue;
+            const size_t base = at[qs[0]];
+            size_t total = 0;
+            bool in_place = true;
+            for (size_t q : qs) {
+                in_place = in_place && parts[q] == 1 && at[q] == base + total;
+                total += static_cast<size_t>(requests[q].d) * requests[q].cols.size();
+            }
+            std::vector<DataType> packed(in_place ? 0 : total);
+            const auto t_fetch = clock::now();
+            entries->fetch_sketches_direct(ks, t == 1, in_place ? image.data() + base : packed.data());
+            fetching += std::chrono::duration<double>(clock::now() - t_fetch).count();
+            if (in_place) continue;
+            for (size_t i = 0, off = 0; i < qs.size(); ++i) {
+                const size_t n = static_cast<size_t>(requests[qs[i]].d) * requests[qs[i]].cols.size();
+                DataType* y = image.data() + at[qs[i]];
+                for (size_t e = 0; e < n; ++e) y[e] += packed[off + e];
+                off += n;
+            }
+        }
+    } else {
+        std::vector<std::vector<DataType>> part(keys.size());
+        std::vector<size_t> missing;
+        for (size_t k = 0; k < keys.size(); ++k) {
+            const size_t q = key_of[k].first;
+            part[k].resize(static_cast<size_t>(requests[q].d) * requests[q].cols.size());
+            if (!entries->lookup_sketch(keys[k], part[k].data(), requests[q].d)) {
+                entries->record_sketch(keys[k]);
+                missing.push_back(k);
+            }
+        }
+        if (!missing.empty()) {
+            const auto t_fetch = clock::now();
+            entries->fetch_now();
+            fetching = std::chrono::duration<double>(clock::now() - t_fetch).count();
+            for (size_t k : missing) {
+                if (!entries->lookup_sketch(keys[k], part[k].data(), requests[key_of[k].first].d)) {
+                    throw std::logic_error("collective GPU evaluator: a sketch its round did not fetch");
+                }
+            }
+        }
+        for (const auto& k : keys) entries->release_sketch(k);
+        // (a request of one part: its values as they came)
+        for (size_t k = 0; k < keys.size(); ++k) {
+            DataType* y = image.data() + at[key_of[k].first];
+            if (parts[key_of[k].first] == 1) {
+                std::copy(part[k].begin(), part[k].end(), y);
+            } else {
+                for (size_t i = 0; i < part[k].size(); ++i) y[i] += part[k][i];
+            }
         }
     }
     DeviceHeap& heap = DeviceHeap::instance();

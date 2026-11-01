@@ -260,6 +260,122 @@ public:
         }
     }
 
+    // One rank (a sequential front's H2, comm MPI_COMM_SELF): the device
+    // path's blocks and sketches come straight from the callbacks into its
+    // buffer, packed in its order, without being recorded, gathered, stored
+    // and looked up again.  Those three copies of every value and the
+    // recording's hashing were a quarter of a sequential front's host time
+    // (Poisson 400^3, 64 ranks, GPU); the device path reads each block once,
+    // and with one rank nobody else asks.
+    bool alone() const { return size_ == 1; }
+    struct BlockRef {
+        const int64_t* x;
+        int64_t nx;
+        const int64_t* y;
+        int64_t ny;
+    };
+    // K(x_n, y_n), column major, packed in order into out: one callback call.
+    void fetch_blocks_direct(const std::vector<BlockRef>& blocks, DataType* out) {
+        if (!alone()) throw std::logic_error("CollectiveEntries: a direct fetch over several ranks");
+        if (blocks.empty()) return;
+        const double t_gather = MPI_Wtime();
+        int ninter = checked(static_cast<int64_t>(blocks.size()), "blocks");
+        std::vector<int> rowidx(static_cast<size_t>(ninter)), colidx(rowidx), pgidx(rowidx.size(), 0), allrows, allcols;
+        int64_t nloc = 0, nr = 0, nc = 0;
+        for (const BlockRef& b : blocks) {
+            nr += b.nx;
+            nc += b.ny;
+        }
+        allrows.reserve(static_cast<size_t>(nr));
+        allcols.reserve(static_cast<size_t>(nc));
+        const size_t o = static_cast<size_t>(entry_origin());
+        for (int n = 0; n < ninter; ++n) {
+            const BlockRef& b = blocks[static_cast<size_t>(n)];
+            rowidx[static_cast<size_t>(n)] = checked(b.nx, "a block's rows");
+            colidx[static_cast<size_t>(n)] = checked(b.ny, "a block's columns");
+            for (int64_t i = 0; i < b.nx; ++i) allrows.push_back(checked(b.x[i] + 1, "an index"));
+            for (int64_t j = 0; j < b.ny; ++j) allcols.push_back(checked(b.y[j] + 1, "an index"));
+            nloc += b.nx * b.ny;
+            origin_blocks_[o] += 1.0;
+            origin_entries_[o] += static_cast<double>(b.nx) * static_cast<double>(b.ny);
+        }
+        int nallrows = checked(nr, "the rows"), nallcols = checked(nc, "the columns"), npmap = 1;
+        int pmaps[3] = {1, 1, pids_[0]};
+        const double t_callback = MPI_Wtime();
+        gather_seconds_ += t_callback - t_gather;
+        callback_(&ninter, &nallrows, &nallcols, &nloc, allrows.data(), allcols.data(), reinterpret_cast<CallbackValue*>(out),
+                  rowidx.data(), colidx.data(), pgidx.data(), &npmap, pmaps, quant_);
+        const double t_end = MPI_Wtime();
+        callback_seconds_ += t_end - t_callback;
+        fetched_entries_ += static_cast<double>(nloc);
+        fetched_blocks_ += ninter;
+        ++fetch_rounds_;
+        ++rounds_;
+        round_seconds_ += t_end - t_gather;
+    }
+    // Every key's Omega K(x, y) (with `transposed`, all of them: Omega K(y,
+    // x)^T), d x ny column major, packed in order into out: one call of that
+    // orientation's callback.
+    void fetch_sketches_direct(const std::vector<SketchKey>& keys, bool transposed, DataType* out) {
+        if (!alone()) throw std::logic_error("CollectiveEntries: a direct fetch over several ranks");
+        if (keys.empty()) return;
+        SketchCallback callback = transposed ? sketch_t_callback_ : sketch_callback_;
+        if (callback == nullptr) throw std::logic_error("CollectiveEntries: a sketch request without its callback");
+        const double t_gather = MPI_Wtime();
+        int nsketch = checked(static_cast<int64_t>(keys.size()), "sketches");
+        const size_t ns = keys.size();
+        std::vector<int> rowidx(ns), colidx(ns), dims(ns), omegaidx(ns), pgidx(ns, 0), allrows, allcols, omega_row,
+            omega_dest;
+        std::vector<double> omega_val;
+        int64_t nloc = 0, nr = 0, nc = 0, ne = 0;
+        for (const SketchKey& k : keys) {
+            nr += k.nx;
+            nc += k.ny;
+            ne += k.nnz;
+        }
+        allrows.reserve(static_cast<size_t>(nr));
+        allcols.reserve(static_cast<size_t>(nc));
+        omega_row.reserve(static_cast<size_t>(ne));
+        omega_dest.reserve(static_cast<size_t>(ne));
+        omega_val.reserve(static_cast<size_t>(ne));
+        const size_t o = static_cast<size_t>(entry_origin());
+        for (size_t q = 0; q < ns; ++q) {
+            const SketchKey& k = keys[q];
+            if (k.transposed != transposed) throw std::logic_error("CollectiveEntries: a direct sketch of the other orientation");
+            rowidx[q] = checked(k.nx, "a sketch's rows");
+            colidx[q] = checked(k.ny, "a sketch's columns");
+            dims[q] = k.d;
+            omegaidx[q] = checked(k.nnz, "a sketch's entries");
+            for (int64_t i = 0; i < k.nx; ++i) allrows.push_back(checked(k.x[i] + 1, "an index"));
+            for (int64_t j = 0; j < k.ny; ++j) allcols.push_back(checked(k.y[j] + 1, "an index"));
+            for (int64_t e = 0; e < k.nnz; ++e) {
+                omega_row.push_back(k.orow[e] + 1);
+                omega_dest.push_back(k.odest[e] + 1);
+                omega_val.push_back(k.oval[e]);
+            }
+            nloc += static_cast<int64_t>(k.d) * k.ny;
+            origin_blocks_[o] += 1.0;
+            origin_entries_[o] += static_cast<double>(k.d) * static_cast<double>(k.ny);
+            sketch_requests_ += 1.0;
+            sketch_values_ += static_cast<double>(k.d) * static_cast<double>(k.ny);
+            sketch_covered_ += static_cast<double>(k.nx) * static_cast<double>(k.ny);
+        }
+        int nallrows = checked(nr, "the rows"), nallcols = checked(nc, "the columns"), npmap = 1;
+        int64_t nallomega = ne;
+        int pmaps[3] = {1, 1, pids_[0]};
+        const double t_callback = MPI_Wtime();
+        gather_seconds_ += t_callback - t_gather;
+        callback(&nsketch, &nallrows, &nallcols, &nallomega, &nloc, allrows.data(), allcols.data(), rowidx.data(),
+                 colidx.data(), dims.data(), omegaidx.data(), omega_row.data(), omega_dest.data(), omega_val.data(),
+                 reinterpret_cast<CallbackValue*>(out), pgidx.data(), &npmap, pmaps, quant_);
+        const double t_end = MPI_Wtime();
+        callback_seconds_ += t_end - t_callback;
+        fetched_entries_ += static_cast<double>(nloc);
+        ++fetch_rounds_;
+        ++rounds_;
+        round_seconds_ += t_end - t_gather;
+    }
+
     // Records the block for the next round.  Thread safe.
     void record(const int64_t* x, int64_t nx, const int64_t* y, int64_t ny) {
         std::lock_guard<std::mutex> lock(mutex_);
