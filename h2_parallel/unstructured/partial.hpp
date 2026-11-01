@@ -1168,10 +1168,9 @@ void partial_root_factorize(fmm::ParallelTree<CoordType, DataType>& tree,
     root_box.X_RR_pivots.assign(static_cast<size_t>(std::max<int64_t>(pr.n11, 1)), 0);
     if (pr.n11 > 0) {
         int nn = static_cast<int>(pr.n11), info = 0;
-        if constexpr (std::is_same_v<DataType, double>) {
-            dgetrf_(&nn, &nn, root_box.X_RR.data.data(), &nn, root_box.X_RR_pivots.data(), &info);
-        } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-            zgetrf_(&nn, &nn, root_box.X_RR.data.data(), &nn, root_box.X_RR_pivots.data(), &info);
+        if constexpr (std::is_same_v<DataType, double> ||
+                      std::is_same_v<DataType, std::complex<double>>) {
+            fmm::parallel_getrf(nn, root_box.X_RR.data.data(), nn, root_box.X_RR_pivots.data(), &info);
         } else {
             throw std::logic_error("partial factorization: double precision only");
         }

@@ -2198,13 +2198,11 @@ void hierarchical_factorization_unstructured(
 
             int nn = n;
             int info = 0;
-
-            if constexpr (std::is_same_v<DataType, double>) {
-                dgetrf_(&nn, &nn, root_box.X_RR.data.data(), &nn,
-                        root_box.X_RR_pivots.data(), &info);
-            } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-                zgetrf_(&nn, &nn, root_box.X_RR.data.data(), &nn,
-                        root_box.X_RR_pivots.data(), &info);
+            // the process's team over the sequential BLAS
+            if constexpr (std::is_same_v<DataType, double> ||
+                          std::is_same_v<DataType, std::complex<double>>) {
+                parallel_getrf(nn, root_box.X_RR.data.data(), nn,
+                               root_box.X_RR_pivots.data(), &info);
             }
 
             if (info != 0) {

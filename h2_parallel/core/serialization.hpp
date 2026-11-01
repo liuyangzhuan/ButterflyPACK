@@ -5256,15 +5256,89 @@ void form_near_updates_from_generators(
         std::vector<std::pair<ReplaceKey, DenseBlock<DataType>>> replaces;
         std::vector<std::pair<EdgeKey, DenseBlock<DataType>>> deltas;
     };
-    std::vector<FormedUpdates> formed(source_order.size());
+    // A source's data its units read.
+    struct SourceView {
+        int64_t morton = 0;
+        BoxData<CoordType, DataType>* box = nullptr;
+        int64_t redundant_count = 0;
+        int64_t skeleton_count = 0;
+        std::vector<int64_t> offsets;  // its neighbours' rows in X_NR
+    };
+    // The work units: a source's diagonal delta and replacement for one local
+    // neighbour L (neighbor -1), and each of its pair products (L, N), listed
+    // in the order one source's loop made them, so the merge below sums the
+    // same blocks in the same order.  One unit a source left the team idle at
+    // the top levels, where a wave brings about one generator a rank (80^3
+    // level 2: all of it on one thread, 2026-11-01).
+    struct FormUnit {
+        size_t source;     // in sources
+        size_t local;      // L, in the source's one_hop
+        int64_t neighbor;  // N, in the source's one_hop; -1: L's own updates
+    };
+    std::vector<SourceView> sources(source_order.size());
+    std::vector<FormUnit> units;
+    for (size_t s = 0; s < source_order.size(); ++s) {
+        auto& view = sources[s];
+        view.morton = source_order[s];
+        view.box = level.find_generator_box(view.morton);
+        if (view.box == nullptr) {
+            throw std::runtime_error(
+                "form_near_updates_from_generators: generator missing");
+        }
+        const auto& source = *view.box;
+        view.redundant_count =
+            source.X_NR.is_allocated() ? source.X_NR.cols : 0;
+        if (view.redundant_count == 0) continue;
+
+        const auto& neighbors = source.one_hop;
+        const auto& counts = source.deferred_xnn_neighbor_point_counts;
+        if (counts.size() != neighbors.size()) {
+            throw std::runtime_error(
+                "form_near_updates_from_generators: count metadata mismatch");
+        }
+        if (source.lazy_original_x_nr.size() !=
+            static_cast<size_t>(source.X_NR.rows * view.redundant_count)) {
+            throw std::runtime_error(
+                "form_near_updates_from_generators: original X_NR missing");
+        }
+        view.skeleton_count =
+            source.X_RS.is_allocated() ? source.X_RS.cols : 0;
+        view.offsets.assign(neighbors.size() + 1, 0);
+        for (size_t i = 0; i < neighbors.size(); ++i) {
+            view.offsets[i + 1] = view.offsets[i] + counts[i];
+        }
+
+        for (size_t local_index = 0;
+             local_index < neighbors.size(); ++local_index) {
+            const int64_t local_morton = neighbors[local_index];
+            if (counts[local_index] == 0) continue;
+            if (level.find_local_box(local_morton) == nullptr) continue;
+            units.push_back(FormUnit{s, local_index, -1});
+            for (size_t neighbor_index = 0;
+                 neighbor_index < neighbors.size(); ++neighbor_index) {
+                if (neighbor_index == local_index) continue;
+                const int64_t neighbor_morton = neighbors[neighbor_index];
+                if (counts[neighbor_index] == 0 ||
+                    !are_one_hop(local_morton, neighbor_morton)) {
+                    continue;
+                }
+                const bool neighbor_local =
+                    level.find_local_box(neighbor_morton) != nullptr;
+                if (neighbor_local && neighbor_morton < local_morton) continue;
+                units.push_back(FormUnit{
+                    s, local_index, static_cast<int64_t>(neighbor_index)});
+            }
+        }
+    }
+    std::vector<FormedUpdates> formed(units.size());
     std::exception_ptr form_exception;
     std::mutex form_exception_mutex;
     std::atomic<bool> form_failed{false};
 
-    // (entries through a collective callback: the sources that asked for a
-    // block not fetched yet form their updates again after a round; a
-    // source writes only its own entry of formed)
-    std::vector<int64_t> form_items(source_order.size());
+    // (entries through a collective callback: the units that asked for a
+    // block not fetched yet form their updates again after a round; a unit
+    // writes only its own entry of formed)
+    std::vector<int64_t> form_items(units.size());
     std::iota(form_items.begin(), form_items.end(), int64_t{0});
     run_entry_phase(kernel_entries(kernel, 0), std::move(form_items), [&](const std::vector<int64_t>& items) {
     std::vector<int64_t> abandoned;
@@ -5272,63 +5346,36 @@ void form_near_updates_from_generators(
     omp_parallel_if(items.size() > 1, [&] {
         #pragma omp for schedule(dynamic)
         for (int64_t item = 0; item < static_cast<int64_t>(items.size()); ++item) {
-            const int64_t source_index = items[static_cast<size_t>(item)];
+            const int64_t unit_index = items[static_cast<size_t>(item)];
             if (form_failed.load(std::memory_order_relaxed)) continue;
             try {
-                formed[static_cast<size_t>(source_index)] = FormedUpdates{};
+                formed[static_cast<size_t>(unit_index)] = FormedUpdates{};
                 entry_item_begin();
-                const int64_t source_morton =
-                    source_order[static_cast<size_t>(source_index)];
-                BoxData<CoordType, DataType>* source =
-                    level.find_generator_box(source_morton);
-                if (source == nullptr) {
-                    throw std::runtime_error(
-                        "form_near_updates_from_generators: generator missing");
-                }
-
-                const int64_t redundant_count =
-                    source->X_NR.is_allocated() ? source->X_NR.cols : 0;
-                if (redundant_count == 0) continue;
-
+                const FormUnit& unit = units[static_cast<size_t>(unit_index)];
+                const SourceView& view = sources[unit.source];
+                const int64_t source_morton = view.morton;
+                const auto* source = view.box;
+                const int64_t redundant_count = view.redundant_count;
+                const int64_t skeleton_count = view.skeleton_count;
                 const auto& neighbors = source->one_hop;
                 const auto& counts = source->deferred_xnn_neighbor_point_counts;
-                if (counts.size() != neighbors.size()) {
-                    throw std::runtime_error(
-                        "form_near_updates_from_generators: count metadata mismatch");
-                }
-
+                const auto& offsets = view.offsets;
                 const DataType* temp2 = source->X_NR.data.data();
                 const int64_t temp2_ld = source->X_NR.lda;
-                if (source->lazy_original_x_nr.size() !=
-                    static_cast<size_t>(source->X_NR.rows * redundant_count)) {
-                    throw std::runtime_error(
-                        "form_near_updates_from_generators: original X_NR missing");
-                }
                 const DataType* original_x_nr =
                     source->lazy_original_x_nr.data();
-                const int64_t skeleton_count =
-                    source->X_RS.is_allocated() ? source->X_RS.cols : 0;
-                std::vector<int64_t> offsets(neighbors.size() + 1, 0);
-                for (size_t i = 0; i < neighbors.size(); ++i) {
-                    offsets[i + 1] = offsets[i] + counts[i];
-                }
+                auto& output = formed[static_cast<size_t>(unit_index)];
 
-                auto& output = formed[static_cast<size_t>(source_index)];
-                std::vector<DataType> pair_product;
+                const size_t local_index = unit.local;
+                const int64_t local_morton = neighbors[local_index];
+                const int64_t local_count = counts[local_index];
+                BoxData<CoordType, DataType>* local_box =
+                    level.find_local_box(local_morton);
+                const DataType* local_temp2 = temp2 + offsets[local_index];
+                const DataType* local_original_x_nr =
+                    original_x_nr + offsets[local_index];
 
-                for (size_t local_index = 0;
-                     local_index < neighbors.size(); ++local_index) {
-                    const int64_t local_morton = neighbors[local_index];
-                    const int64_t local_count = counts[local_index];
-                    if (local_count == 0) continue;
-                    BoxData<CoordType, DataType>* local_box =
-                        level.find_local_box(local_morton);
-                    if (local_box == nullptr) continue;
-
-                    const DataType* local_temp2 = temp2 + offsets[local_index];
-                    const DataType* local_original_x_nr =
-                        original_x_nr + offsets[local_index];
-
+                if (unit.neighbor < 0) {
                     {
                         DenseBlock<DataType> block;
                         block.rows = local_count;
@@ -5432,73 +5479,62 @@ void form_near_updates_from_generators(
                             ReplaceKey{local_morton, source_morton},
                             std::move(block));
                     }
+                } else {
+                    const size_t neighbor_index = static_cast<size_t>(unit.neighbor);
+                    const int64_t neighbor_morton = neighbors[neighbor_index];
+                    const int64_t neighbor_count = counts[neighbor_index];
+                    const DataType* neighbor_temp2 =
+                        temp2 + offsets[neighbor_index];
+                    std::vector<DataType> pair_product(static_cast<size_t>(
+                        neighbor_count * local_count));
+                    {
+                        int m = static_cast<int>(neighbor_count);
+                        int n = static_cast<int>(local_count);
+                        int k = static_cast<int>(redundant_count);
+                        DataType alpha = DataType{1.0};
+                        DataType beta = DataType{0.0};
+                        int lda = static_cast<int>(temp2_ld);
+                        int ldb = static_cast<int>(temp2_ld);
+                        int ldc = static_cast<int>(neighbor_count);
+                        gemm_("N", "T", &m, &n, &k, &alpha,
+                              neighbor_temp2, &lda,
+                              local_original_x_nr, &ldb,
+                              &beta, pair_product.data(), &ldc);
+                    }
 
-                    for (size_t neighbor_index = 0;
-                         neighbor_index < neighbors.size(); ++neighbor_index) {
-                        if (neighbor_index == local_index) continue;
-                        const int64_t neighbor_morton = neighbors[neighbor_index];
-                        const int64_t neighbor_count = counts[neighbor_index];
-                        if (neighbor_count == 0 ||
-                            !are_one_hop(local_morton, neighbor_morton)) {
-                            continue;
-                        }
-                        const bool neighbor_local =
-                            level.find_local_box(neighbor_morton) != nullptr;
-                        if (neighbor_local && neighbor_morton < local_morton) continue;
-
-                        const DataType* neighbor_temp2 =
-                            temp2 + offsets[neighbor_index];
-                        pair_product.resize(static_cast<size_t>(
-                            neighbor_count * local_count));
-                        {
-                            int m = static_cast<int>(neighbor_count);
-                            int n = static_cast<int>(local_count);
-                            int k = static_cast<int>(redundant_count);
-                            DataType alpha = DataType{1.0};
-                            DataType beta = DataType{0.0};
-                            int lda = static_cast<int>(temp2_ld);
-                            int ldb = static_cast<int>(temp2_ld);
-                            int ldc = static_cast<int>(neighbor_count);
-                            gemm_("N", "T", &m, &n, &k, &alpha,
-                                  neighbor_temp2, &lda,
-                                  local_original_x_nr, &ldb,
-                                  &beta, pair_product.data(), &ldc);
-                        }
-
-                        const int64_t lo =
-                            std::min(local_morton, neighbor_morton);
-                        const int64_t hi =
-                            std::max(local_morton, neighbor_morton);
-                        DenseBlock<DataType> block;
-                        if (local_morton == lo) {
-                            block.rows = neighbor_count;
-                            block.cols = local_count;
-                            block.data = pair_product;
-                        } else {
-                            block.rows = local_count;
-                            block.cols = neighbor_count;
-                            block.data.resize(pair_product.size());
-                            for (int64_t column = 0; column < local_count; ++column) {
-                                for (int64_t row = 0; row < neighbor_count; ++row) {
-                                    block.data[static_cast<size_t>(
-                                        column + row * local_count)] =
-                                        pair_product[static_cast<size_t>(
-                                            row + column * neighbor_count)];
-                                }
+                    const int64_t lo =
+                        std::min(local_morton, neighbor_morton);
+                    const int64_t hi =
+                        std::max(local_morton, neighbor_morton);
+                    DenseBlock<DataType> block;
+                    if (local_morton == lo) {
+                        block.rows = neighbor_count;
+                        block.cols = local_count;
+                        block.data = std::move(pair_product);
+                    } else {
+                        block.rows = local_count;
+                        block.cols = neighbor_count;
+                        block.data.resize(pair_product.size());
+                        for (int64_t column = 0; column < local_count; ++column) {
+                            for (int64_t row = 0; row < neighbor_count; ++row) {
+                                block.data[static_cast<size_t>(
+                                    column + row * local_count)] =
+                                    pair_product[static_cast<size_t>(
+                                        row + column * neighbor_count)];
                             }
                         }
-                        output.deltas.emplace_back(
-                            EdgeKey{lo, hi, EdgeKind::Near}, std::move(block));
                     }
+                    output.deltas.emplace_back(
+                        EdgeKey{lo, hi, EdgeKind::Near}, std::move(block));
                 }
                 entry_item_end();
             } catch (const H2EntryMiss&) {
                 std::lock_guard<std::mutex> lock(abandoned_mutex);
-                abandoned.push_back(source_index);
+                abandoned.push_back(unit_index);
             } catch (...) {
                 if (entry_item_abandoned()) {
                     std::lock_guard<std::mutex> lock(abandoned_mutex);
-                    abandoned.push_back(source_index);
+                    abandoned.push_back(unit_index);
                     continue;
                 }
                 if (!form_failed.exchange(true, std::memory_order_relaxed)) {
