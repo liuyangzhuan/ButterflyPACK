@@ -1437,29 +1437,34 @@ void partial_backward_input(fmm::ParallelTree<CoordType, DataType>* tree,
 
 // A byte exchange over comm: send[r] goes to rank r, the result's [r]
 // came from rank r (collective; empty buffers allowed).
-inline std::vector<std::vector<char>> partial_exchange(MPI_Comm comm, const std::vector<std::vector<char>>& send, int tag) {
+inline std::vector<fmm::HostBuffer<char>> partial_exchange(MPI_Comm comm, const std::vector<std::vector<char>>& send, int tag) {
     int size = 1;
     MPI_Comm_size(comm, &size);
     std::vector<int64_t> scount(static_cast<size_t>(size)), rcount(static_cast<size_t>(size));
-    for (int r = 0; r < size; ++r) {
-        scount[static_cast<size_t>(r)] = static_cast<int64_t>(send[static_cast<size_t>(r)].size());
-        if (scount[static_cast<size_t>(r)] > INT32_MAX) throw std::runtime_error("partial exchange: a message over 2 GB");
-    }
+    for (int r = 0; r < size; ++r) scount[static_cast<size_t>(r)] = static_cast<int64_t>(send[static_cast<size_t>(r)].size());
     MPI_Alltoall(scount.data(), 1, MPI_INT64_T, rcount.data(), 1, MPI_INT64_T, comm);
-    std::vector<std::vector<char>> recv(static_cast<size_t>(size));
+    // (received in full: not zero-filled; a message over MPI's counts in
+    // pieces of 1 GB, matched in order)
+    constexpr int64_t kPiece = int64_t{1} << 30;
+    std::vector<fmm::HostBuffer<char>> recv(static_cast<size_t>(size));
     std::vector<MPI_Request> reqs;
     for (int r = 0; r < size; ++r) {
-        if (rcount[static_cast<size_t>(r)] == 0) continue;
-        recv[static_cast<size_t>(r)].resize(static_cast<size_t>(rcount[static_cast<size_t>(r)]));
-        reqs.emplace_back();
-        MPI_Irecv(recv[static_cast<size_t>(r)].data(), static_cast<int>(rcount[static_cast<size_t>(r)]), MPI_BYTE, r, tag, comm,
-                  &reqs.back());
+        const int64_t n = rcount[static_cast<size_t>(r)];
+        if (n == 0) continue;
+        recv[static_cast<size_t>(r)].resize(static_cast<size_t>(n));
+        for (int64_t at = 0; at < n; at += kPiece) {
+            reqs.emplace_back();
+            MPI_Irecv(recv[static_cast<size_t>(r)].data() + at, static_cast<int>(std::min(kPiece, n - at)), MPI_BYTE, r, tag,
+                      comm, &reqs.back());
+        }
     }
     for (int r = 0; r < size; ++r) {
-        if (scount[static_cast<size_t>(r)] == 0) continue;
-        reqs.emplace_back();
-        MPI_Isend(send[static_cast<size_t>(r)].data(), static_cast<int>(scount[static_cast<size_t>(r)]), MPI_BYTE, r, tag, comm,
-                  &reqs.back());
+        const int64_t n = scount[static_cast<size_t>(r)];
+        for (int64_t at = 0; at < n; at += kPiece) {
+            reqs.emplace_back();
+            MPI_Isend(send[static_cast<size_t>(r)].data() + at, static_cast<int>(std::min(kPiece, n - at)), MPI_BYTE, r, tag,
+                      comm, &reqs.back());
+        }
     }
     if (!reqs.empty()) MPI_Waitall(static_cast<int>(reqs.size()), reqs.data(), MPI_STATUSES_IGNORE);
     return recv;

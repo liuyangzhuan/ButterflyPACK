@@ -809,6 +809,7 @@ struct PinnedPool {
     PinnedBuffer result;       // sketches, factors, level-end blocks
     PinnedBuffer ring[4];      // fixed-size slots of chunked downloads (two per copier)
     PinnedBuffer staging[2];   // alternating uploads (restored fill sources)
+    PinnedBuffer image[2];     // alternating batch images of the collective evaluator
     static constexpr size_t kRingSlot = size_t{64} << 20;  // pinning costs ~1 s/GB
 };
 
@@ -826,6 +827,7 @@ inline size_t pinned_pool_host_bytes() {
                    p.result.capacity();
     for (const PinnedBuffer& b : p.ring) bytes += b.capacity();
     for (const PinnedBuffer& b : p.staging) bytes += b.capacity();
+    for (const PinnedBuffer& b : p.image) bytes += b.capacity();
     return bytes;
 }
 

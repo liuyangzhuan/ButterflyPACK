@@ -20,6 +20,7 @@
 #include "gpu_runtime.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <chrono>
 #include <memory>
@@ -28,6 +29,62 @@
 
 namespace fmm {
 namespace gpu {
+
+// The host image of a batch's values, uploaded in one copy: one of the pool's
+// two pinned image buffers in turn, taken once the upload from it two images
+// ago is done.  The callback writes the values into pinned memory and the
+// upload is one DMA; from pageable memory the driver staged it on the calling
+// thread (~1 s of a critical rank's 23 s of sequential fronts, Poisson 400^3,
+// 64 ranks).  An image taken while another is held (by a nested batch or
+// another thread; none is expected) is heap memory, staged as before.
+class CollectiveImage {
+public:
+    explicit CollectiveImage(size_t bytes) {
+        State& s = state();
+        bool idle = false;
+        if (!s.busy.compare_exchange_strong(idle, true)) {
+            heap_.resize(bytes);
+            data_ = heap_.data();
+            return;
+        }
+        turn_ = s.turn;
+        s.turn ^= 1;
+        check_cuda(cudaEventSynchronize(s.done[turn_]), "collective image");
+        data_ = static_cast<char*>(pinned_pool().image[turn_].reserve(std::max<size_t>(bytes, 1)));
+    }
+    ~CollectiveImage() {
+        if (turn_ >= 0) state().busy = false;
+    }
+    CollectiveImage(const CollectiveImage&) = delete;
+    CollectiveImage& operator=(const CollectiveImage&) = delete;
+    template<typename T>
+    T* as() const { return reinterpret_cast<T*>(data_); }
+    // bytes of it to dst on the stream
+    void upload(void* dst, size_t bytes, cudaStream_t stream) {
+        check_cuda(cudaMemcpyAsync(dst, data_, bytes, cudaMemcpyHostToDevice, stream), "collective image upload");
+        // (from heap memory the copy is staged before the call returns)
+        if (turn_ >= 0) check_cuda(cudaEventRecord(state().done[turn_], stream), "cudaEventRecord");
+    }
+
+private:
+    struct State {
+        cudaEvent_t done[2] = {nullptr, nullptr};
+        int turn = 0;
+        std::atomic<bool> busy{false};
+    };
+    // (never freed, as the pool: the CUDA runtime's own shutdown would race it)
+    static State& state() {
+        static State* s = [] {
+            State* p = new State;
+            for (cudaEvent_t& e : p->done) check_cuda(cudaEventCreateWithFlags(&e, cudaEventDisableTiming), "cudaEventCreate");
+            return p;
+        }();
+        return *s;
+    }
+    char* data_ = nullptr;
+    int turn_ = -1;
+    HostBuffer<char> heap_;
+};
 
 template<typename DataType, typename Entries>
 void collective_block_evaluator(const bpack_gpu_block_batch* batch, void* user) {
@@ -46,9 +103,10 @@ void collective_block_evaluator(const bpack_gpu_block_batch* batch, void* user) 
     // the blocks packed column by column, those not fetched yet fetched now
     // (one rank: all of them, straight into the image, zeroed for the
     // callback)
-    HostBuffer<DataType> image(at.back());
+    CollectiveImage img(at.back() * sizeof(DataType));
+    DataType* const image = img.as<DataType>();
     if (entries->alone()) {
-        parallel_zero(image.data(), image.size());
+        parallel_zero(image, at.back());
         std::vector<typename Entries::BlockRef> refs;
         refs.reserve(static_cast<size_t>(count));
         for (int b = 0; b < count; ++b) {
@@ -56,7 +114,7 @@ void collective_block_evaluator(const bpack_gpu_block_batch* batch, void* user) 
             if (blk.m > 0 && blk.n > 0) refs.push_back({blk.row_ids_host, blk.m, blk.col_ids_host, blk.n});
         }
         const auto t_fetch = clock::now();
-        entries->fetch_blocks_direct(refs, image.data());
+        entries->fetch_blocks_direct(refs, image);
         fetching = std::chrono::duration<double>(clock::now() - t_fetch).count();
     } else {
         std::vector<int> missing;
@@ -64,7 +122,7 @@ void collective_block_evaluator(const bpack_gpu_block_batch* batch, void* user) 
             const bpack_gpu_block& blk = batch->blocks[b];
             if (blk.m <= 0 || blk.n <= 0) continue;
             if (!entries->lookup(blk.row_ids_host, blk.m, blk.col_ids_host, blk.n,
-                                 image.data() + at[static_cast<size_t>(b)], blk.m)) {
+                                 image + at[static_cast<size_t>(b)], blk.m)) {
                 entries->record(blk.row_ids_host, blk.m, blk.col_ids_host, blk.n);
                 missing.push_back(b);
             }
@@ -76,7 +134,7 @@ void collective_block_evaluator(const bpack_gpu_block_batch* batch, void* user) 
             for (int b : missing) {
                 const bpack_gpu_block& blk = batch->blocks[b];
                 if (!entries->lookup(blk.row_ids_host, blk.m, blk.col_ids_host, blk.n,
-                                     image.data() + at[static_cast<size_t>(b)], blk.m)) {
+                                     image + at[static_cast<size_t>(b)], blk.m)) {
                     throw std::logic_error("collective GPU evaluator: a block its round did not fetch");
                 }
             }
@@ -86,13 +144,11 @@ void collective_block_evaluator(const bpack_gpu_block_batch* batch, void* user) 
             if (blk.m > 0 && blk.n > 0) entries->release(blk.row_ids_host, blk.m, blk.col_ids_host, blk.n);
         }
     }
-    // one upload (pageable: staged before the call returns), then into the
-    // blocks on the batch's stream
-    const size_t bytes = image.size() * sizeof(DataType);
+    // one upload, then into the blocks on the batch's stream
+    const size_t bytes = at.back() * sizeof(DataType);
     char* d_image = static_cast<char*>(batch->allocate(batch->allocator, bytes));
     if (d_image == nullptr) throw std::runtime_error("collective GPU evaluator: no device memory for a batch");
-    check_cuda(cudaMemcpyAsync(d_image, image.data(), bytes, cudaMemcpyHostToDevice, stream),
-               "collective GPU evaluator upload");
+    img.upload(d_image, bytes, stream);
     for (int b = 0; b < count; ++b) {
         const bpack_gpu_block& blk = batch->blocks[b];
         if (blk.m <= 0 || blk.n <= 0) continue;
@@ -141,8 +197,9 @@ void collective_sketches(Entries* entries, std::vector<Evaluator::SketchRequest>
         }
     }
     if (at.back() == 0) return;
-    HostBuffer<DataType> image(at.back());
-    parallel_zero(image.data(), image.size());
+    CollectiveImage img(at.back() * sizeof(DataType));
+    DataType* const image = img.as<DataType>();
+    parallel_zero(image, at.back());
     std::vector<int> parts(requests.size(), 0);
     for (const auto& kq : key_of) ++parts[kq.first];
     if (entries->alone()) {
@@ -168,12 +225,12 @@ void collective_sketches(Entries* entries, std::vector<Evaluator::SketchRequest>
             HostBuffer<DataType> packed(in_place ? 0 : total);
             parallel_zero(packed.data(), packed.size());
             const auto t_fetch = clock::now();
-            entries->fetch_sketches_direct(ks, t == 1, in_place ? image.data() + base : packed.data());
+            entries->fetch_sketches_direct(ks, t == 1, in_place ? image + base : packed.data());
             fetching += std::chrono::duration<double>(clock::now() - t_fetch).count();
             if (in_place) continue;
             for (size_t i = 0, off = 0; i < qs.size(); ++i) {
                 const size_t n = static_cast<size_t>(requests[qs[i]].d) * requests[qs[i]].cols.size();
-                DataType* y = image.data() + at[qs[i]];
+                DataType* y = image + at[qs[i]];
                 for (size_t e = 0; e < n; ++e) y[e] += packed[off + e];
                 off += n;
             }
@@ -202,7 +259,7 @@ void collective_sketches(Entries* entries, std::vector<Evaluator::SketchRequest>
         for (const auto& k : keys) entries->release_sketch(k);
         // (a request of one part: its values as they came)
         for (size_t k = 0; k < keys.size(); ++k) {
-            DataType* y = image.data() + at[key_of[k].first];
+            DataType* y = image + at[key_of[k].first];
             if (parts[key_of[k].first] == 1) {
                 std::copy(part[k].begin(), part[k].end(), y);
             } else {
@@ -211,9 +268,8 @@ void collective_sketches(Entries* entries, std::vector<Evaluator::SketchRequest>
         }
     }
     DeviceHeap& heap = DeviceHeap::instance();
-    char* d_image = heap.alloc(image.size() * sizeof(DataType));
-    check_cuda(cudaMemcpyAsync(d_image, image.data(), image.size() * sizeof(DataType), cudaMemcpyHostToDevice, stream),
-               "collective GPU sketches upload");
+    char* d_image = heap.alloc(at.back() * sizeof(DataType));
+    img.upload(d_image, at.back() * sizeof(DataType), stream);
     for (size_t q = 0; q < requests.size(); ++q) {
         const Evaluator::SketchRequest& r = requests[q];
         if (r.d <= 0 || r.cols.empty()) continue;
