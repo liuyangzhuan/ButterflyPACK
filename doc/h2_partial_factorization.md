@@ -193,6 +193,16 @@ CPU (Poisson 200^3, 16 ranks). The sketches keep a chain block a box and
 block, since their sketched side combines each block's points by its own
 Omega.
 
+A sketch's level terms go only where they can pair: a block of request k goes
+to the owner of a remote one-hop box only when that box is an ancestor of the
+leaf box of one of k's points on the other side (every F22 point's leaf box is
+known on every rank from the first sketch call on). A parent's ID ring is
+mostly far from its box, so most blocks had nothing to meet: in STRUMPACK's
+H2-only fronts (Poisson 400^3, 64 ranks, GPU) the terms' messages went from
+2.5 GB to 0.37 GB a rank, the sketched children's time from 1299 to 1177
+rank-seconds (CPU: 1797 to 1668) and the factorization from 167.3 to 165.0 s
+(CPU: within the runs' noise).
+
 ### Messages between ranks
 
 On several ranks, the entries' blocks that other ranks read go from device

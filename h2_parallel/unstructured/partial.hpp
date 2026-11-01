@@ -1618,6 +1618,69 @@ void partial_leaf_index(fmm::ParallelTree<CoordType, DataType>& tree) {
     }
 }
 
+// Every F22 point's leaf box (Morton index) on every rank, built once:
+// collective over the tree's communicator (a sketch call's ranks all reach
+// it in the same call).  A sketch's terms send a chain block only to ranks
+// whose boxes the request's other side can reach (PartialRequestBoxes).
+template<typename CoordType, typename DataType>
+void partial_leaf_mortons(fmm::ParallelTree<CoordType, DataType>& tree) {
+    auto& pr = tree.partial_root;
+    const int64_t pc = tree.partial_count, n22 = tree.num_points - pc;
+    if (!pr.leaf_morton.empty() || n22 <= 0) return;
+    pr.leaf_morton.assign(static_cast<size_t>(n22), -1);
+    const auto& level = tree.levels[static_cast<size_t>(tree.num_levels - 1)];
+    if (level.is_process_active) {
+        for (int64_t bi = 0; bi < level.num_boxes_local; ++bi) {
+            const auto& box = level.local_boxes[static_cast<size_t>(bi)];
+            for (int64_t s = 0; s < box.num_points; ++s) {
+                const int64_t id = box.point_indices[static_cast<size_t>(s)];
+                if (id >= pc) pr.leaf_morton[static_cast<size_t>(id - pc)] = box.morton_index;
+            }
+        }
+    }
+    for (int64_t at = 0; at < n22;) {  // (counts are ints)
+        const int64_t n = std::min<int64_t>(n22 - at, int64_t{1} << 30);
+        MPI_Allreduce(MPI_IN_PLACE, pr.leaf_morton.data() + at, static_cast<int>(n), MPI_INT64_T, MPI_MAX, tree.comm);
+        at += n;
+    }
+}
+
+// Where a side's chain blocks of each request can be: the ancestors of its
+// points' leaf boxes.  leaf_boxes[k]: request k's points' leaf boxes
+// (idx[off[k]] .. idx[off[k + 1]], F22 indices), sorted; at(l)[k]: their
+// ancestors at level l.  A block of a request's other side meets one of the side's
+// blocks in a box only if the box is among them, so a sketch's terms send
+// a block only to the owners of such boxes.
+struct PartialRequestBoxes {
+    int leaf = 0, dimension = 3;
+    std::vector<std::vector<int64_t>> leaf_boxes, level_boxes;
+    template<typename DataType>
+    PartialRequestBoxes(const fmm::PartialRootFactor<DataType>& pr, int leaf_level, int dim, int64_t ninter, const int64_t* idx,
+                        const std::vector<int64_t>& off)
+        : leaf(leaf_level), dimension(dim), leaf_boxes(static_cast<size_t>(ninter)) {
+#pragma omp parallel for schedule(dynamic, 16)
+        for (int64_t k = 0; k < ninter; ++k) {
+            auto& b = leaf_boxes[static_cast<size_t>(k)];
+            for (int64_t q = off[static_cast<size_t>(k)]; q < off[static_cast<size_t>(k) + 1]; ++q)
+                b.push_back(pr.leaf_morton[static_cast<size_t>(idx[q])]);
+            std::sort(b.begin(), b.end());
+            b.erase(std::unique(b.begin(), b.end()), b.end());
+        }
+    }
+    const std::vector<std::vector<int64_t>>& at(int l) {
+        level_boxes.resize(leaf_boxes.size());
+        const int shift = dimension * (leaf - l);
+#pragma omp parallel for schedule(dynamic, 16)
+        for (size_t k = 0; k < leaf_boxes.size(); ++k) {
+            auto& b = level_boxes[k];
+            b.clear();
+            for (int64_t m : leaf_boxes[k]) b.push_back(m >> shift);
+            b.erase(std::unique(b.begin(), b.end()), b.end());
+        }
+        return level_boxes;
+    }
+};
+
 // The sketched form of a CB request (extract_partial_sketches): request k
 // asks for Y_k = Omega_k CB(I_k, J_k) (side 0: Omega_k d_k x |I_k|, Y_k
 // d_k x |J_k|) or Y_k = Omega_k CB(I_k, J_k)^T (side 1: Omega_k d_k x |J_k|,
@@ -2831,6 +2894,13 @@ void partial_schur_blocks_device(fmm::ParallelTree<CoordType, DataType>& tree, i
     const PartialCbSide<DataType> Ch = shared ? PartialCbSide<DataType>{}
                                               : partial_cb_side(tree, ninter, cols, coff, false,
                                                                 sketch != nullptr && sketch->side == 1 ? sketch : nullptr);
+    // (the sketches: where each request's rows and columns can be, as the host's)
+    std::unique_ptr<PartialRequestBoxes> rboxes, cboxes;
+    if (!shared && nranks > 1) {
+        partial_leaf_mortons(tree);
+        rboxes = std::make_unique<PartialRequestBoxes>(pr, leaf, dimension, ninter, rows, roff);
+        cboxes = std::make_unique<PartialRequestBoxes>(pr, leaf, dimension, ninter, cols, coff);
+    }
     PartialSharedSide<DataType> Rs, Cs;
     if (shared) {
         Rs = partial_shared_side(tree, ninter, rows, roff, false);
@@ -3487,17 +3557,29 @@ void partial_schur_blocks_device(fmm::ParallelTree<CoordType, DataType>& tree, i
         if (l >= 2) {
             // this rank's blocks to the owners of their boxes' remote neighbours (row
             // blocks their w part and the box's live set, column blocks their raw
-            // values): the index lists through the host, the values device to device
+            // values): the index lists through the host, the values device to device;
+            // a sketch's block only where its request's other side can be
             std::vector<std::vector<char>> send(static_cast<size_t>(nranks));
             std::vector<std::vector<std::pair<const DataType*, size_t>>> send_vals(static_cast<size_t>(nranks));
+            const std::vector<std::vector<int64_t>>* reach[2] = {nullptr, nullptr};
+            if (rboxes) {
+                reach[0] = &cboxes->at(l);
+                reach[1] = &rboxes->at(l);
+            }
             if (active) {
                 for (int side_id = 0; side_id < 2; ++side_id) {
                     const bool row = side_id == 0;
                     for (const auto& b : sides[side_id]) {
                         const auto& box = level.local_boxes[static_cast<size_t>(b.box)];
                         std::set<int> dest;
-                        for (int64_t nm : box.one_hop)
-                            if (!level.is_box_on_process(nm)) dest.insert(level.owner_rank_of(nm));
+                        for (int64_t nm : box.one_hop) {
+                            if (level.is_box_on_process(nm)) continue;
+                            if (reach[side_id] != nullptr) {
+                                const auto& o = (*reach[side_id])[static_cast<size_t>(b.inter)];
+                                if (!std::binary_search(o.begin(), o.end(), nm)) continue;
+                            }
+                            dest.insert(level.owner_rank_of(nm));
+                        }
                         if (dest.empty()) continue;
                         std::vector<char> msg;
                         const int64_t head[8] = {side_id, box.morton_index, box.num_points, static_cast<int64_t>(b.members.size()),
@@ -4345,6 +4427,13 @@ void partial_schur_blocks(fmm::ParallelTree<CoordType, DataType>& tree, int64_t 
     const PartialSketch* rsk = sketch != nullptr && sketch->side == 0 ? sketch : nullptr;
     const PartialSketch* csk = sketch != nullptr && sketch->side == 1 ? sketch : nullptr;
     Side R = partial_cb_side(tree, ninter, rows, roff, true, rsk), C = partial_cb_side(tree, ninter, cols, coff, true, csk);
+    // where each request's rows and columns can be (a level's terms go only to ranks the other side reaches)
+    std::unique_ptr<PartialRequestBoxes> rboxes, cboxes;
+    if (nranks > 1) {
+        partial_leaf_mortons(tree);
+        rboxes = std::make_unique<PartialRequestBoxes>(pr, leaf, dimension, ninter, rows, roff);
+        cboxes = std::make_unique<PartialRequestBoxes>(pr, leaf, dimension, ninter, cols, coff);
+    }
     // G (|members_i| x |members_j|) into block k of out at the members' positions (weighted on a sketched
     // side); `atomic`: other threads may write the same entries (row blocks of one request share their
     // sketch rows)
@@ -4509,16 +4598,28 @@ void partial_schur_blocks(fmm::ParallelTree<CoordType, DataType>& tree, int64_t 
         }
         // the level's terms
         if (l >= 2) {
-            // this rank's blocks to the owners of their boxes' remote neighbours
+            // this rank's blocks to the owners of their boxes' remote neighbours, a
+            // request's only where its other side can be
             std::vector<std::vector<char>> send(static_cast<size_t>(nranks));
+            const std::vector<std::vector<int64_t>>* reach[2] = {nullptr, nullptr};
+            if (rboxes) {
+                reach[0] = &cboxes->at(l);
+                reach[1] = &rboxes->at(l);
+            }
             if (active) {
                 for (int side_id = 0; side_id < 2; ++side_id) {
                     const Side& side = side_id == 0 ? R : C;
                     for (const auto& b : side.blocks) {
                         const auto& box = level.local_boxes[static_cast<size_t>(b.box)];
                         std::set<int> dest;
-                        for (int64_t nm : box.one_hop)
-                            if (!level.is_box_on_process(nm)) dest.insert(level.owner_rank_of(nm));
+                        for (int64_t nm : box.one_hop) {
+                            if (level.is_box_on_process(nm)) continue;
+                            if (reach[side_id] != nullptr) {
+                                const auto& o = (*reach[side_id])[static_cast<size_t>(b.inter)];
+                                if (!std::binary_search(o.begin(), o.end(), nm)) continue;
+                            }
+                            dest.insert(level.owner_rank_of(nm));
+                        }
                         if (dest.empty()) continue;
                         // a row block's X_NR terms read its w part and the box's live set, a
                         // column block's X_RN terms its raw rows and values
@@ -5620,11 +5721,12 @@ size_t partial_schur_release(fmm::ParallelTree<CoordType, DataType>& tree) {
     const size_t rss0 = fmm::env::trace("memory") ? h2_diag_current_rss_bytes() : 0;
     size_t records = 0, lists = 0;
     const size_t root = pr.cb.data.capacity() * sizeof(DataType) +
-                        (pr.leaf_box.capacity() + pr.leaf_slot.capacity()) * sizeof(int64_t);
+                        (pr.leaf_box.capacity() + pr.leaf_slot.capacity() + pr.leaf_morton.capacity()) * sizeof(int64_t);
     std::vector<DataType>().swap(pr.cb.data);
     pr.cb.rows = pr.cb.cols = pr.cb.lda = 0;
     std::vector<int64_t>().swap(pr.leaf_box);
     std::vector<int64_t>().swap(pr.leaf_slot);
+    std::vector<int64_t>().swap(pr.leaf_morton);
     pr.cb_released = true;
     for (auto& level : tree.levels) {
         for (auto& box : level.local_boxes) {

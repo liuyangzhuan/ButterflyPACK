@@ -1714,6 +1714,7 @@ struct PartialRootFactor {
     bool cb_released = false;
     std::vector<int64_t> leaf_box;       ///< F22 index -> local leaf box (the CB entries; built on first use)
     std::vector<int64_t> leaf_slot;      ///< F22 index -> slot in that leaf box
+    std::vector<int64_t> leaf_morton;    ///< F22 index -> its leaf box's Morton index, every rank's (the CB sketches; built on first use)
 };
 
 template<typename CoordType, typename DataType = CoordType>
