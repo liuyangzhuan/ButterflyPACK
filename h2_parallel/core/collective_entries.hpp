@@ -35,6 +35,7 @@
 // without it.
 
 #include "extraction_profile.hpp"
+#include "tree.hpp"
 
 #include <mpi.h>
 
@@ -274,7 +275,8 @@ public:
         const int64_t* y;
         int64_t ny;
     };
-    // K(x_n, y_n), column major, packed in order into out: one callback call.
+    // K(x_n, y_n), column major, packed in order into out (zeroed, as the
+    // callback expects): one callback call.
     void fetch_blocks_direct(const std::vector<BlockRef>& blocks, DataType* out) {
         if (!alone()) throw std::logic_error("CollectiveEntries: a direct fetch over several ranks");
         if (blocks.empty()) return;
@@ -314,8 +316,8 @@ public:
         round_seconds_ += t_end - t_gather;
     }
     // Every key's Omega K(x, y) (with `transposed`, all of them: Omega K(y,
-    // x)^T), d x ny column major, packed in order into out: one call of that
-    // orientation's callback.
+    // x)^T), d x ny column major, packed in order into out (zeroed): one call
+    // of that orientation's callback.
     void fetch_sketches_direct(const std::vector<SketchKey>& keys, bool transposed, DataType* out) {
         if (!alone()) throw std::logic_error("CollectiveEntries: a direct fetch over several ranks");
         if (keys.empty()) return;
@@ -708,7 +710,8 @@ private:
         }
         int64_t nloc = 0;
         for (const Block& b : pending_) nloc += static_cast<int64_t>(b.rows.size() * b.cols.size());
-        std::vector<CallbackValue> values(static_cast<size_t>(std::max<int64_t>(nloc, 1)));
+        HostBuffer<CallbackValue> values(static_cast<size_t>(std::max<int64_t>(nloc, 1)));
+        parallel_zero(values.data(), values.size());  // (the callback is handed zeros, as from Fortran)
         int nallrows = checked(static_cast<int64_t>(allrows.size()), "the rows"),
             nallcols = checked(static_cast<int64_t>(allcols.size()), "the columns"), npmap = size_;
         const double t_callback = MPI_Wtime();
@@ -800,7 +803,8 @@ private:
         }
         int64_t nloc = 0;
         for (const Sketch* s : mine) nloc += static_cast<int64_t>(s->d) * static_cast<int64_t>(s->cols.size());
-        std::vector<CallbackValue> values(static_cast<size_t>(std::max<int64_t>(nloc, 1)));
+        HostBuffer<CallbackValue> values(static_cast<size_t>(std::max<int64_t>(nloc, 1)));
+        parallel_zero(values.data(), values.size());  // (the callback is handed zeros, as from Fortran)
         int nallrows = checked(static_cast<int64_t>(allrows.size()), "the rows"),
             nallcols = checked(static_cast<int64_t>(allcols.size()), "the columns"), npmap = size_;
         int64_t nallomega = static_cast<int64_t>(omega_val.size());

@@ -14,6 +14,7 @@
 
 #ifdef H2_HAVE_GPU
 
+#include "core/tree.hpp"
 #include "device_heap.hpp"
 #include "evaluator.hpp"
 #include "gpu_runtime.hpp"
@@ -43,9 +44,11 @@ void collective_block_evaluator(const bpack_gpu_block_batch* batch, void* user) 
     }
     if (at.back() == 0) return;
     // the blocks packed column by column, those not fetched yet fetched now
-    // (one rank: all of them, straight into the image)
-    std::vector<DataType> image(at.back());
+    // (one rank: all of them, straight into the image, zeroed for the
+    // callback)
+    HostBuffer<DataType> image(at.back());
     if (entries->alone()) {
+        parallel_zero(image.data(), image.size());
         std::vector<typename Entries::BlockRef> refs;
         refs.reserve(static_cast<size_t>(count));
         for (int b = 0; b < count; ++b) {
@@ -138,7 +141,8 @@ void collective_sketches(Entries* entries, std::vector<Evaluator::SketchRequest>
         }
     }
     if (at.back() == 0) return;
-    std::vector<DataType> image(at.back(), DataType{0});
+    HostBuffer<DataType> image(at.back());
+    parallel_zero(image.data(), image.size());
     std::vector<int> parts(requests.size(), 0);
     for (const auto& kq : key_of) ++parts[kq.first];
     if (entries->alone()) {
@@ -161,7 +165,8 @@ void collective_sketches(Entries* entries, std::vector<Evaluator::SketchRequest>
                 in_place = in_place && parts[q] == 1 && at[q] == base + total;
                 total += static_cast<size_t>(requests[q].d) * requests[q].cols.size();
             }
-            std::vector<DataType> packed(in_place ? 0 : total);
+            HostBuffer<DataType> packed(in_place ? 0 : total);
+            parallel_zero(packed.data(), packed.size());
             const auto t_fetch = clock::now();
             entries->fetch_sketches_direct(ks, t == 1, in_place ? image.data() + base : packed.data());
             fetching += std::chrono::duration<double>(clock::now() - t_fetch).count();
@@ -174,7 +179,7 @@ void collective_sketches(Entries* entries, std::vector<Evaluator::SketchRequest>
             }
         }
     } else {
-        std::vector<std::vector<DataType>> part(keys.size());
+        std::vector<HostBuffer<DataType>> part(keys.size());  // (each written in full by its lookup)
         std::vector<size_t> missing;
         for (size_t k = 0; k < keys.size(); ++k) {
             const size_t q = key_of[k].first;

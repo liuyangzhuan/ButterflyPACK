@@ -5157,7 +5157,8 @@ void extract_partial_blocks(fmm::ParallelTree<CoordType, DataType>* tree, MPI_Co
         // owns every block, in this order: its contributions are the blocks,
         // computed into alldat_loc in place
         const bool alone = csize == 1;
-        std::vector<DataType> part(alone ? 0 : static_cast<size_t>(std::max<int64_t>(boff.back(), 1)));
+        // (partial_schur_blocks writes all of its out: not zero-filled here)
+        fmm::HostBuffer<DataType> part(alone ? 0 : static_cast<size_t>(std::max<int64_t>(boff.back(), 1)));
         DataType* sums = alone ? alldat_loc : part.data();
         double xm = xtrace ? MPI_Wtime() : 0.0;
         partial_schur_blocks(*tree, ninter, rows.data(), nr.data(), cols.data(), nc.data(), sums, false, extract_mode,
@@ -5189,7 +5190,7 @@ void extract_partial_blocks(fmm::ParallelTree<CoordType, DataType>* tree, MPI_Co
                 if (c > INT_MAX) throw std::runtime_error("extract_partial_blocks: a source rank's blocks over 2^31 entries");
                 counts[static_cast<size_t>(lands[order[q]])] = static_cast<int>(c);
             }
-            std::vector<DataType> landed(static_cast<size_t>(std::max(counts[static_cast<size_t>(srank)], 1)));
+            fmm::HostBuffer<DataType> landed(static_cast<size_t>(std::max(counts[static_cast<size_t>(srank)], 1)));
             if (ssize > 1) {
                 MPI_Reduce_scatter(part.data(), landed.data(), counts.data(), partial_mpi_type<DataType>(), MPI_SUM, tree->comm);
             } else {

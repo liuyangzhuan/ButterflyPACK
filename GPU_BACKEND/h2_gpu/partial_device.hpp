@@ -950,7 +950,7 @@ char* partial_values_exchange(PartialDeviceWork& work, MPI_Comm comm,
                    "partial CB exchange");
     }
     // the messages: from and into device memory, or host copies of it
-    std::vector<char> hs, hr;
+    HostBuffer<char> hs, hr;  // (written in full: the download, the messages)
     char* s_msg = sbuf;
     char* r_msg = rbuf;
     if (!direct) {
