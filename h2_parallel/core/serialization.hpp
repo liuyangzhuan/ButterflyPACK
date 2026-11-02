@@ -51,7 +51,7 @@ inline char* write_vector(char* ptr, const std::vector<T>& v) {
     uint64_t n = static_cast<uint64_t>(v.size());
     ptr = write_pod(ptr, n);
     if (n) {
-        std::memcpy(ptr, v.data(), sizeof(T) * static_cast<size_t>(n));
+        fmm::copy_bytes_parallel(ptr, v.data(), sizeof(T) * static_cast<size_t>(n));
         ptr += sizeof(T) * static_cast<size_t>(n);
     }
     return ptr;
@@ -64,7 +64,7 @@ inline const char* read_vector(const char* ptr, std::vector<T>& v) {
     ptr = read_pod(ptr, n);
     v.resize(static_cast<size_t>(n));
     if (n) {
-        std::memcpy(v.data(), ptr, sizeof(T) * static_cast<size_t>(n));
+        fmm::copy_bytes_parallel(v.data(), ptr, sizeof(T) * static_cast<size_t>(n));
         ptr += sizeof(T) * static_cast<size_t>(n);
     }
     return ptr;
@@ -3606,6 +3606,10 @@ std::chrono::high_resolution_clock::duration exchange_assisting_for_mortons_oneh
                 lvl.lazy_generator_requesters[morton_idx].insert(
                     neighbor_ranks[i]);
             }
+            auto& requesters = lvl.assisting_requesters[morton_idx];
+            if (std::find(requesters.begin(), requesters.end(), neighbor_ranks[i]) == requesters.end()) {
+                requesters.push_back(neighbor_ranks[i]);
+            }
             auto* b = lvl.find_local_box(morton_idx);
             if (!b) throw std::runtime_error("assist: requested morton not local " + std::to_string(morton_idx));
 
@@ -5053,12 +5057,17 @@ void print_pending_factor_updates(
 }
 
 
+// lend: the boxes' temp2 (temp4) and original X_NR (X_RN) move into the
+// generators instead, for return_lent_generator_data to move back once the
+// generators are serialized (post_early_generators: before the owner pass,
+// which reads them).
 template<typename CoordType, typename DataType>
 void emit_lazy_generators(
     TreeLevel<CoordType, DataType>& level,
     const std::vector<int64_t>& wave_boxes,
     int wave,
-    PendingFactorUpdates<DataType>& pending) {
+    PendingFactorUpdates<DataType>& pending,
+    bool lend = false) {
     for (int64_t morton : wave_boxes) {
         BoxData<CoordType, DataType>* box = level.find_local_box(morton);
         if (box == nullptr) continue;
@@ -5099,10 +5108,15 @@ void emit_lazy_generators(
                 box->deferred_xnn_neighbor_point_counts;
             // Emit before finalize_deferred_xnn_source_box: X_NR is still the
             // original one-hop coupling and deferred_xnn_temp2 is the solved
-            // multiplier used by both eager and lazy Schur updates.
-            generator->temp2 = box->deferred_xnn_temp2;
+            // multiplier used by both eager and lazy Schur updates.  (The
+            // finalize replaces X_NR's data by temp2, so the original moves.)
+            if (lend) {
+                generator->temp2 = std::move(box->deferred_xnn_temp2);
+            } else {
+                generator->temp2 = box->deferred_xnn_temp2;
+            }
             if (generator_near_enabled()) {
-                generator->original_x_nr = box->X_NR.data;
+                generator->original_x_nr = std::move(box->X_NR.data);
             }
             generator->x_rr_full.assign(
                 box->X_RR_full.data.begin(),
@@ -5135,7 +5149,11 @@ void emit_lazy_generators(
                     throw std::runtime_error(
                         "emit_lazy_generators: X_RN mismatch for source " + std::to_string(morton));
                 }
-                generator->temp4 = box->deferred_xnn_temp4;
+                if (lend) {
+                    generator->temp4 = std::move(box->deferred_xnn_temp4);
+                } else {
+                    generator->temp4 = box->deferred_xnn_temp4;
+                }
                 if (generator_near_enabled()) {
                     const int64_t skeleton_count = static_cast<int64_t>(box->skeleton_indices.size());
                     if (box->X_SR.rows != skeleton_count || box->X_SR.cols != redundant_count ||
@@ -5143,13 +5161,33 @@ void emit_lazy_generators(
                         throw std::runtime_error(
                             "emit_lazy_generators: X_SR mismatch for source " + std::to_string(morton));
                     }
-                    generator->original_x_rn = box->X_RN.data;
+                    if (lend) {
+                        generator->original_x_rn = std::move(box->X_RN.data);
+                    } else {
+                        generator->original_x_rn = box->X_RN.data;
+                    }
                     generator->x_sr = box->X_SR.data;
                 }
             }
         }
 
         pending.generators[morton] = std::move(generator);
+    }
+}
+
+// The data emit_lazy_generators(..., lend = true) moved into the generators,
+// moved back to their boxes.
+template<typename CoordType, typename DataType>
+void return_lent_generator_data(
+    TreeLevel<CoordType, DataType>& level,
+    PendingFactorUpdates<DataType>& pending) {
+    for (auto& [morton, generator] : pending.generators) {
+        BoxData<CoordType, DataType>* box = level.find_local_box(morton);
+        if (box == nullptr || generator == nullptr) continue;
+        if (!generator->temp2.empty()) box->deferred_xnn_temp2 = std::move(generator->temp2);
+        if (!generator->original_x_nr.empty()) box->X_NR.data = std::move(generator->original_x_nr);
+        if (!generator->temp4.empty()) box->deferred_xnn_temp4 = std::move(generator->temp4);
+        if (!generator->original_x_rn.empty()) box->X_RN.data = std::move(generator->original_x_rn);
     }
 }
 
@@ -5837,6 +5875,61 @@ void form_near_updates_from_generators_nonsymmetric(
     }
 }
 
+// A transport's merged incoming updates applied to the level's boxes: the
+// remote generators installed, their near updates formed (lazy Schur mode 2),
+// then every update applied (transport_and_apply_factor_updates_symmetric_onehop,
+// complete_early_generators).
+template <typename KernelType, typename CoordType, typename DataType>
+void install_and_apply_incoming_updates(
+    ParallelTree<CoordType, DataType>* tree,
+    TreeLevel<CoordType, DataType>& lvl,
+    KernelType* kernel,
+    PendingFactorUpdates<DataType>& incoming_total,
+    bool is_hermitian) {
+    using clock = std::chrono::high_resolution_clock;
+    auto& timers = transport_timers();
+    auto seconds_since = [](clock::time_point t) { return std::chrono::duration<double>(clock::now() - t).count(); };
+    const auto t_install = clock::now();
+    const std::vector<int64_t> installed_generators =
+        install_remote_generators(lvl, incoming_total);
+    timers.install += seconds_since(t_install);
+    const auto t_form_near = clock::now();
+    if (generator_near_enabled()) {
+        if (kernel_symmetric(kernel, 0)) {
+            form_near_updates_from_generators(
+                lvl, kernel, installed_generators, tree->dimension,
+                incoming_total);
+        } else {
+            form_near_updates_from_generators_nonsymmetric(
+                lvl, kernel, installed_generators, tree->dimension,
+                incoming_total);
+        }
+        // The source-time coupling is needed only while forming mode-2 near
+        // updates. Release it before applying the updates so it does not stay
+        // resident for the rest of the level; lazy far updates use X_NR,
+        // X_RR_full, and X_RS instead.
+        for (int64_t morton : installed_generators) {
+            auto* generator_box = lvl.find_generator_box(morton);
+            if (generator_box != nullptr) {
+                std::vector<DataType>().swap(
+                    generator_box->lazy_original_x_nr);
+                std::vector<DataType>().swap(
+                    generator_box->lazy_original_x_rn);
+            }
+        }
+    }
+
+    timers.form_near += seconds_since(t_form_near);
+
+    const auto t_apply = clock::now();
+    if (kernel_symmetric(kernel, 0)) {
+        apply_updates_with_kernel_symmetric(tree, lvl, kernel, incoming_total, is_hermitian);
+    } else {
+        apply_updates_with_kernel_nonsymmetric(lvl, kernel, incoming_total);
+    }
+    timers.apply += seconds_since(t_apply);
+}
+
 /**
  * @brief Exchange pending factorization updates with 1-hop neighboring process-regions and apply them.
  *
@@ -6076,8 +6169,52 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
         }
         return true;
     };
-    std::vector<char> send_buffer; // reusable
-    const PendingFactorUpdates<DataType>* serialized = nullptr;  // send_buffer's payload
+    // Each distinct payload (peers sent the same one share it) is serialized
+    // once into a buffer of its own, not zero-filled (serialize writes every
+    // byte), the payloads of a batch in parallel and then sent to all their
+    // peers concurrently; a batch holds at most H2_SEND_BATCH_BYTES unless one
+    // payload alone is larger.  (One reused buffer, a blocking send after
+    // another and a serialization a peer: at levels 5 and 4 of Laplace 320^3
+    // on 8 nodes 53-66 s of payload a level, 25 s of it serializing; at a top
+    // level 1-2 GB of generators to every neighbour.)
+    constexpr size_t H2_SEND_BATCH_BYTES = size_t{16} << 30;
+    struct DistinctPayload {
+        const PendingFactorUpdates<DataType>* payload = nullptr;
+        size_t bytes = 0;
+        std::vector<size_t> peers;  // indices into neighbor_ranks
+        std::unique_ptr<char[]> buffer;
+    };
+    std::vector<DistinctPayload> distinct;
+    for (size_t i = 0; i < neighbor_ranks.size(); ++i) {
+        if (send_sizes[i] == 0) {
+            continue;
+        }
+        const int peer = neighbor_ranks[i];
+        auto it = out.find(peer);
+        if (it == out.end()) {
+            throw std::runtime_error(
+                "transport_and_apply_factor_updates_symmetric_onehop: missing payload for rank " +
+                std::to_string(peer));
+        }
+        DistinctPayload* shared = nullptr;
+        for (auto& d : distinct) {
+            if (same_payload(*d.payload, it->second)) {
+                shared = &d;
+                break;
+            }
+        }
+        if (shared == nullptr) {
+            distinct.emplace_back();
+            shared = &distinct.back();
+            shared->payload = &it->second;
+            shared->bytes = (size_t)send_sizes[i];
+        } else if (shared->bytes != (size_t)send_sizes[i]) {
+            throw std::runtime_error("serialize pending: shared payload size mismatch");
+        }
+        shared->peers.push_back(i);
+    }
+    std::vector<MPI_Request> send_requests;
+    size_t send_buffer_capacity = 0;  // the largest batch (the memory diagnostic)
     comm_start = clock::now();
     for (size_t i = 0; i < neighbor_ranks.size(); ++i) {
         if (recv_sizes[i] > 0) {
@@ -6094,39 +6231,69 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
         }
     }
 
-    for (size_t i = 0; i < neighbor_ranks.size(); ++i) {
-        if (send_sizes[i] == 0) {
-            continue;
+    for (size_t first = 0; first < distinct.size();) {
+        size_t last = first + 1;
+        size_t batch_bytes = distinct[first].bytes;
+        while (last < distinct.size() && batch_bytes + distinct[last].bytes <= H2_SEND_BATCH_BYTES) {
+            batch_bytes += distinct[last].bytes;
+            ++last;
         }
-        const int peer = neighbor_ranks[i];
-        auto it = out.find(peer);
-        if (it == out.end()) {
-            throw std::runtime_error(
-                "transport_and_apply_factor_updates_symmetric_onehop: missing payload for rank " +
-                std::to_string(peer));
+        send_buffer_capacity = std::max(send_buffer_capacity, batch_bytes);
+        const auto t_serialize = clock::now();
+        for (size_t d = first; d < last; ++d) {
+            distinct[d].buffer.reset(new char[distinct[d].bytes]);
         }
-        if (serialized == nullptr || !same_payload(*serialized, it->second)) {
-            const auto t_serialize = clock::now();
-            send_buffer.resize((size_t)send_sizes[i]);
-            char* end_ptr = serialize(it->second, send_buffer.data());
-            timers.serialize += seconds_since(t_serialize);
-            if ((size_t)(end_ptr - send_buffer.data()) != (size_t)send_sizes[i]) {
-                throw std::runtime_error("serialize pending: byte mismatch");
+        std::atomic<bool> size_mismatch{false};
+        std::exception_ptr serialize_exception;
+        std::mutex serialize_exception_mutex;
+        omp_parallel_if(last - first > 1, [&] {
+            #pragma omp for schedule(dynamic, 1)
+            for (int64_t d = static_cast<int64_t>(first); d < static_cast<int64_t>(last); ++d) {
+                try {
+                    DistinctPayload& dp = distinct[static_cast<size_t>(d)];
+                    char* end_ptr = serialize(*dp.payload, dp.buffer.get());
+                    if ((size_t)(end_ptr - dp.buffer.get()) != dp.bytes) size_mismatch = true;
+                } catch (...) {
+                    std::lock_guard<std::mutex> lock(serialize_exception_mutex);
+                    if (!serialize_exception) serialize_exception = std::current_exception();
+                }
             }
-            serialized = &it->second;
-        } else if (send_buffer.size() != (size_t)send_sizes[i]) {
-            throw std::runtime_error("serialize pending: shared payload size mismatch");
+        });
+        if (serialize_exception) std::rethrow_exception(serialize_exception);
+        if (size_mismatch) {
+            throw std::runtime_error("serialize pending: byte mismatch");
         }
-        int err = MPI_Send_large(send_buffer.data(), send_buffer.size(), MPI_CHAR,
-                                 peer, 701, tree->comm);
-        if (err != MPI_SUCCESS) {
-            char errbuf[MPI_MAX_ERROR_STRING];
-            int errlen = 0;
-            MPI_Error_string(err, errbuf, &errlen);
-            throw std::runtime_error(
-                "transport_and_apply_factor_updates_symmetric_onehop: payload Send_large failed for rank " +
-                std::to_string(peer) + " with error " + std::string(errbuf, errlen));
+        timers.serialize += seconds_since(t_serialize);
+        for (size_t d = first; d < last; ++d) {
+            for (size_t i : distinct[d].peers) {
+                int err = MPI_Isend_large(distinct[d].buffer.get(), distinct[d].bytes, MPI_CHAR,
+                                          neighbor_ranks[i], 701, tree->comm, send_requests);
+                if (err != MPI_SUCCESS) {
+                    char errbuf[MPI_MAX_ERROR_STRING];
+                    int errlen = 0;
+                    MPI_Error_string(err, errbuf, &errlen);
+                    throw std::runtime_error(
+                        "transport_and_apply_factor_updates_symmetric_onehop: payload Isend_large failed for rank " +
+                        std::to_string(neighbor_ranks[i]) + " with error " + std::string(errbuf, errlen));
+                }
+            }
         }
+        if (!send_requests.empty()) {
+            int err = MPI_Waitall(static_cast<int>(send_requests.size()), send_requests.data(), MPI_STATUSES_IGNORE);
+            if (err != MPI_SUCCESS) {
+                char errbuf[MPI_MAX_ERROR_STRING];
+                int errlen = 0;
+                MPI_Error_string(err, errbuf, &errlen);
+                throw std::runtime_error(
+                    "transport_and_apply_factor_updates_symmetric_onehop: payload send Waitall failed with error " +
+                    std::string(errbuf, errlen));
+            }
+            send_requests.clear();
+        }
+        for (size_t d = first; d < last; ++d) {
+            distinct[d].buffer.reset();
+        }
+        first = last;
     }
     if (!requests.empty()) {
         int err = MPI_Waitall(static_cast<int>(requests.size()), requests.data(), MPI_STATUSES_IGNORE);
@@ -6143,7 +6310,7 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
     communication_time += (clock::now() - comm_start);
     timers.payload += seconds_since(comm_start);
     const size_t payload_buffer_bytes = memory_diagnostic
-        ? recv_buffer_bytes + send_buffer.capacity()
+        ? recv_buffer_bytes + send_buffer_capacity
         : 0;
     if (memory_diagnostic) {
         memory_diagnostic(
@@ -6206,16 +6373,26 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
     timers.deserialize += seconds_since(t_deserialize);
     // Step 5: Refresh assisting-box data needed by the apply path.
     const auto t_assisting = clock::now();
+    // An assisting box's points once a level (the level's first transport),
+    // then its skeleton once it is eliminated: neither changes again within
+    // the level.  (Every wave refreshed the whole halo: 32 s a level at
+    // levels 5 and 4 of Laplace 320^3 on 8 nodes.)  H2_partial republishes
+    // skeletons after its F22 phase, so it refreshes every box.
+    const bool refresh_settled_skipped = lvl.partial_count == 0;
     std::vector<int64_t> need_assist;
     for (const auto& kv : lvl.assisting_box_points_for_kernel_evaluation) {
-        need_assist.push_back(kv.first);
+        const auto& assisting = lvl.assisting_boxes[static_cast<size_t>(kv.second)];
+        const bool settled = refresh_settled_skipped && !assisting.indices.empty() &&
+            (!assisting.skel_indices.empty() || lvl.eliminated_boxes.count(kv.first) == 0);
+        if (!settled) need_assist.push_back(kv.first);
     }
     // The assisting-data protocol is pairwise but collective over the process
     // neighbor graph: a rank with no requests must still enter it to serve
     // requests from its neighbors. Structured callers historically assume
-    // every rank has a request. The unstructured path opts in explicitly
-    // because empty process regions make an empty local request list common.
-    if (participate_empty_assisting_exchange || !need_assist.empty()) {
+    // every rank has a request (so do the settled boxes skipped above). The
+    // unstructured path opts in explicitly because empty process regions make
+    // an empty local request list common.
+    if (participate_empty_assisting_exchange || refresh_settled_skipped || !need_assist.empty()) {
         FactorizationMemoryDiagnosticCallback assisting_diagnostic;
         if (memory_diagnostic) {
             assisting_diagnostic =
@@ -6239,7 +6416,9 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
             "pre_apply", merged_pending_bytes, payload_buffer_bytes);
     }
 
-    kernel->register_level_coordinates(lvl);
+    // (only the boxes just refreshed: every box of the level, every wave, was
+    // millions of hash inserts a transport with distributed64 callbacks)
+    kernel->register_assisting_coordinates(lvl, need_assist);
     timers.assisting += seconds_since(t_assisting);
 
     if (device_installed != nullptr) {
@@ -6255,46 +6434,8 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
         return communication_time;
     }
 
-    const auto t_install = clock::now();
-    const std::vector<int64_t> installed_generators =
-        install_remote_generators(lvl, incoming_total);
-    timers.install += seconds_since(t_install);
-    const auto t_form_near = clock::now();
-    if (generator_near_enabled()) {
-        if (kernel_symmetric(kernel, 0)) {
-            form_near_updates_from_generators(
-                lvl, kernel, installed_generators, tree->dimension,
-                incoming_total);
-        } else {
-            form_near_updates_from_generators_nonsymmetric(
-                lvl, kernel, installed_generators, tree->dimension,
-                incoming_total);
-        }
-        // The source-time coupling is needed only while forming mode-2 near
-        // updates. Release it before applying the updates so it does not stay
-        // resident for the rest of the level; lazy far updates use X_NR,
-        // X_RR_full, and X_RS instead.
-        for (int64_t morton : installed_generators) {
-            auto* generator_box = lvl.find_generator_box(morton);
-            if (generator_box != nullptr) {
-                std::vector<DataType>().swap(
-                    generator_box->lazy_original_x_nr);
-                std::vector<DataType>().swap(
-                    generator_box->lazy_original_x_rn);
-            }
-        }
-    }
-
-    timers.form_near += seconds_since(t_form_near);
-
-    // Step 6: Apply the merged updates to local boxes.
-    const auto t_apply = clock::now();
-    if (kernel_symmetric(kernel, 0)) {
-        apply_updates_with_kernel_symmetric(tree, lvl, kernel, incoming_total, is_hermitian);
-    } else {
-        apply_updates_with_kernel_nonsymmetric(lvl, kernel, incoming_total);
-    }
-    timers.apply += seconds_since(t_apply);
+    // Step 6: Install the generators and apply the merged updates to local boxes.
+    install_and_apply_incoming_updates(tree, lvl, kernel, incoming_total, is_hermitian);
     if (memory_diagnostic) {
         memory_diagnostic(
             "post_apply", merged_pending_bytes, payload_buffer_bytes);
@@ -6318,6 +6459,344 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
 
 
 
+
+// ---------------------------------------------------------------------------
+// The early generator exchange of a Color level (lazy Schur mode 2 with the
+// generators' near updates).  As soon as a boundary wave's boxes are
+// eliminated, before its owner pass, every rank sends each neighbour rank the
+// wave's generators routed to it, and the skeletons of the wave's boxes that
+// neighbour holds as assisting boxes (it requested them in an assisting
+// exchange of the level); the next transport receives these in place of its
+// own exchange (complete_early_generators).  In this mode the owner pass
+// updates local blocks only, so a rank's next box waits for its neighbours'
+// boxes and not for their owner passes, emits and sends.  (At 160^3 on 8
+// nodes, level 2: one box a rank a wave, the wave's slowest box a central
+// one whose owner pass took ~3 s before its generator left.)
+// ---------------------------------------------------------------------------
+template <typename DataType>
+struct EarlyGeneratorExchange {
+    bool active = false;                    // posted, not yet completed
+    std::vector<int> neighbor_ranks;
+    std::vector<uint64_t> send_sizes;       // two a neighbour: generators, skeletons
+    std::vector<std::unique_ptr<char[]>> buffers;
+    std::vector<MPI_Request> requests;
+};
+
+constexpr int H2_EARLY_SIZES_TAG = 710, H2_EARLY_GENERATORS_TAG = 711, H2_EARLY_SKELETONS_TAG = 712;
+
+template <typename CoordType, typename DataType>
+void post_early_generators(
+    ParallelTree<CoordType, DataType>* tree,
+    int level,
+    const std::vector<int64_t>& wave_boxes,
+    int wave,
+    EarlyGeneratorExchange<DataType>& state) {
+    using clock = std::chrono::high_resolution_clock;
+    auto& lvl = tree->levels[level];
+    if (state.active) {
+        throw std::logic_error("post_early_generators: the previous exchange is not complete");
+    }
+    auto& timers = transport_timers();
+    const auto t_post = clock::now();
+    int rank = 0;
+    MPI_Comm_rank(tree->comm, &rank);
+    state.neighbor_ranks = compute_one_hop_neighbor_ranks(tree, lvl, level);
+    const std::vector<int>& neighbor_ranks = state.neighbor_ranks;
+    const size_t P = neighbor_ranks.size();
+    std::unordered_map<int, size_t> slot_of;
+    for (size_t i = 0; i < P; ++i) slot_of[neighbor_ranks[i]] = i;
+    auto slot = [&](int peer, const char* what) {
+        auto it = slot_of.find(peer);
+        if (it == slot_of.end()) {
+            throw std::runtime_error(std::string("post_early_generators: ") + what + " for non-1hop rank " +
+                                     std::to_string(peer));
+        }
+        return it->second;
+    };
+
+    // the generators, the boxes' temp2 and original X_NR lent while serialized
+    PendingFactorUpdates<DataType> wave_pending;
+    emit_lazy_generators(lvl, wave_boxes, wave, wave_pending, true);
+    std::vector<PendingFactorUpdates<DataType>> generators_to(P);
+    for (const auto& [source_morton, generator] : wave_pending.generators) {
+        std::unordered_set<int> destinations;
+        for (int64_t neighbor_morton : generator->one_hop) {
+            const int destination = lvl.owner_rank_of(neighbor_morton);
+            if (destination != rank) destinations.insert(destination);
+        }
+        auto requester_it = lvl.lazy_generator_requesters.find(source_morton);
+        if (requester_it != lvl.lazy_generator_requesters.end()) {
+            for (int destination : requester_it->second) {
+                if (destination != rank) destinations.insert(destination);
+            }
+        }
+        for (int destination : destinations) {
+            generators_to[slot(destination, "generator")].generators[source_morton] = generator;
+        }
+    }
+    // the skeletons: count, then (morton, length, indices) each
+    std::vector<std::vector<int64_t>> skeletons_to(P);
+    for (int64_t morton : wave_boxes) {
+        auto requesters = lvl.assisting_requesters.find(morton);
+        if (requesters == lvl.assisting_requesters.end()) continue;
+        const BoxData<CoordType, DataType>* box = lvl.find_local_box(morton);
+        if (box == nullptr) continue;
+        for (int peer : requesters->second) {
+            auto& out = skeletons_to[slot(peer, "skeleton")];
+            out.push_back(morton);
+            out.push_back(static_cast<int64_t>(box->skeleton_indices.size()));
+            out.insert(out.end(), box->skeleton_indices.begin(), box->skeleton_indices.end());
+        }
+    }
+
+    // generator payloads: each distinct one serialized once, in parallel
+    auto same_generators = [](const PendingFactorUpdates<DataType>& a, const PendingFactorUpdates<DataType>& b) {
+        if (a.generators.size() != b.generators.size()) return false;
+        for (const auto& [morton, generator] : a.generators) {
+            auto it = b.generators.find(morton);
+            if (it == b.generators.end() || it->second != generator) return false;
+        }
+        return true;
+    };
+    state.send_sizes.assign(2 * P, 0);
+    const size_t none = static_cast<size_t>(-1);
+    std::vector<size_t> payload_of(P, none);
+    std::vector<size_t> distinct;  // a neighbour slot for each distinct payload
+    for (size_t i = 0; i < P; ++i) {
+        if (generators_to[i].generators.empty()) continue;
+        for (size_t d = 0; d < distinct.size(); ++d) {
+            if (same_generators(generators_to[distinct[d]], generators_to[i])) {
+                payload_of[i] = d;
+                break;
+            }
+        }
+        if (payload_of[i] == none) {
+            payload_of[i] = distinct.size();
+            distinct.push_back(i);
+        }
+        state.send_sizes[2 * i] = static_cast<uint64_t>(bytes_pending(generators_to[i]));
+    }
+    state.buffers.clear();
+    state.buffers.resize(distinct.size() + P);
+    for (size_t d = 0; d < distinct.size(); ++d) {
+        state.buffers[d].reset(new char[state.send_sizes[2 * distinct[d]]]);
+    }
+    std::atomic<bool> size_mismatch{false};
+    std::exception_ptr serialize_exception;
+    std::mutex serialize_exception_mutex;
+    omp_parallel_if(distinct.size() > 1, [&] {
+        #pragma omp for schedule(dynamic, 1)
+        for (int64_t d = 0; d < static_cast<int64_t>(distinct.size()); ++d) {
+            try {
+                const size_t i = distinct[static_cast<size_t>(d)];
+                char* end_ptr = serialize(generators_to[i], state.buffers[static_cast<size_t>(d)].get());
+                if ((uint64_t)(end_ptr - state.buffers[static_cast<size_t>(d)].get()) != state.send_sizes[2 * i]) {
+                    size_mismatch = true;
+                }
+            } catch (...) {
+                std::lock_guard<std::mutex> lock(serialize_exception_mutex);
+                if (!serialize_exception) serialize_exception = std::current_exception();
+            }
+        }
+    });
+    // (the boxes have their data back before anything can throw past here)
+    generators_to.clear();
+    return_lent_generator_data(lvl, wave_pending);
+    if (serialize_exception) std::rethrow_exception(serialize_exception);
+    if (size_mismatch) throw std::runtime_error("post_early_generators: serialized size mismatch");
+    for (size_t i = 0; i < P; ++i) {
+        if (skeletons_to[i].empty()) continue;
+        const uint64_t bytes = sizeof(int64_t) * (skeletons_to[i].size() + 1);
+        state.send_sizes[2 * i + 1] = bytes;
+        auto& buffer = state.buffers[distinct.size() + i];
+        buffer.reset(new char[bytes]);
+        int64_t entries = 0;
+        for (size_t at = 0; at < skeletons_to[i].size(); at += 2 + static_cast<size_t>(skeletons_to[i][at + 1])) ++entries;
+        std::memcpy(buffer.get(), &entries, sizeof(int64_t));
+        std::memcpy(buffer.get() + sizeof(int64_t), skeletons_to[i].data(), sizeof(int64_t) * skeletons_to[i].size());
+    }
+    // (within the payload time too, as a transport's serialization is: the
+    // skew probe's waits are the payload time less it)
+    const double post_seconds = std::chrono::duration<double>(clock::now() - t_post).count();
+    timers.serialize += post_seconds;
+    timers.payload += post_seconds;
+
+    auto check = [&](int err, const char* op, int peer) {
+        if (err == MPI_SUCCESS) return;
+        char errbuf[MPI_MAX_ERROR_STRING];
+        int errlen = 0;
+        MPI_Error_string(err, errbuf, &errlen);
+        throw std::runtime_error(std::string("post_early_generators: ") + op + " failed for rank " +
+                                 std::to_string(peer) + " with error " + std::string(errbuf, errlen));
+    };
+    state.requests.clear();
+    for (size_t i = 0; i < P; ++i) {
+        MPI_Request request;
+        check(MPI_Isend(&state.send_sizes[2 * i], 2, MPI_UINT64_T, neighbor_ranks[i], H2_EARLY_SIZES_TAG,
+                        tree->comm, &request), "sizes Isend", neighbor_ranks[i]);
+        state.requests.push_back(request);
+        if (state.send_sizes[2 * i] > 0) {
+            check(MPI_Isend_large(state.buffers[payload_of[i]].get(), state.send_sizes[2 * i], MPI_CHAR,
+                                  neighbor_ranks[i], H2_EARLY_GENERATORS_TAG, tree->comm, state.requests),
+                  "generators Isend", neighbor_ranks[i]);
+        }
+        if (state.send_sizes[2 * i + 1] > 0) {
+            check(MPI_Isend_large(state.buffers[distinct.size() + i].get(), state.send_sizes[2 * i + 1], MPI_CHAR,
+                                  neighbor_ranks[i], H2_EARLY_SKELETONS_TAG, tree->comm, state.requests),
+                  "skeletons Isend", neighbor_ranks[i]);
+        }
+        timers.bytes_sent += static_cast<double>(state.send_sizes[2 * i] + state.send_sizes[2 * i + 1]);
+    }
+    state.active = true;
+}
+
+// The next transport of a level whose last wave posted an early exchange:
+// its messages received, the skeletons set on the assisting boxes, the
+// generators installed and their near updates formed, and the updates of the
+// owner pass since (local in this mode) applied.
+template <typename KernelType, typename CoordType, typename DataType>
+std::chrono::high_resolution_clock::duration complete_early_generators(
+    ParallelTree<CoordType, DataType>* tree,
+    int level,
+    KernelType* kernel,
+    PendingFactorUpdates<DataType>& pending,
+    EarlyGeneratorExchange<DataType>& state,
+    bool is_hermitian = false) {
+    using clock = std::chrono::high_resolution_clock;
+    clock::duration communication_time{};
+    auto& lvl = tree->levels[level];
+    auto& timers = transport_timers();
+    auto seconds_since = [](clock::time_point t) { return std::chrono::duration<double>(clock::now() - t).count(); };
+    if (!state.active) {
+        throw std::logic_error("complete_early_generators: no exchange posted");
+    }
+    int rank = 0;
+    MPI_Comm_rank(tree->comm, &rank);
+    const std::vector<int>& neighbor_ranks = state.neighbor_ranks;
+    const size_t P = neighbor_ranks.size();
+
+    // this rank's owner-pass updates: its own blocks only in this mode
+    PendingFactorUpdates<DataType> local_apply;
+    for (const auto& [k, b] : pending.replace_blocks) {
+        if (lvl.owner_rank_of(k.target_box) != rank) {
+            throw std::runtime_error("complete_early_generators: an owner-pass update for another rank");
+        }
+        local_apply.replace_blocks[k] = b;
+    }
+    for (const auto& [ek, b] : pending.accumulated_deltas) {
+        if (lvl.owner_rank_of(ek.lo) != rank || lvl.owner_rank_of(ek.hi) != rank) {
+            throw std::runtime_error("complete_early_generators: an owner-pass update for another rank");
+        }
+    }
+    if (!pending.generators.empty()) {
+        throw std::runtime_error("complete_early_generators: generators outside the early exchange");
+    }
+
+    auto check = [&](int err, const char* op, int peer) {
+        if (err == MPI_SUCCESS) return;
+        char errbuf[MPI_MAX_ERROR_STRING];
+        int errlen = 0;
+        MPI_Error_string(err, errbuf, &errlen);
+        throw std::runtime_error(std::string("complete_early_generators: ") + op + " failed for rank " +
+                                 std::to_string(peer) + " with error " + std::string(errbuf, errlen));
+    };
+    std::vector<uint64_t> recv_sizes(2 * P, 0);
+    std::vector<MPI_Request> requests;
+    auto comm_start = clock::now();
+    for (size_t i = 0; i < P; ++i) {
+        MPI_Request request;
+        check(MPI_Irecv(&recv_sizes[2 * i], 2, MPI_UINT64_T, neighbor_ranks[i], H2_EARLY_SIZES_TAG, tree->comm,
+                        &request), "sizes Irecv", neighbor_ranks[i]);
+        requests.push_back(request);
+    }
+    if (!requests.empty()) {
+        check(MPI_Waitall(static_cast<int>(requests.size()), requests.data(), MPI_STATUSES_IGNORE), "sizes Waitall", -1);
+        requests.clear();
+    }
+    communication_time += clock::now() - comm_start;
+    timers.sizes += seconds_since(comm_start);
+
+    std::vector<std::unique_ptr<char[]>> generator_bufs(P), skeleton_bufs(P);
+    comm_start = clock::now();
+    for (size_t i = 0; i < P; ++i) {
+        if (recv_sizes[2 * i] > 0) {
+            generator_bufs[i].reset(new char[recv_sizes[2 * i]]);
+            check(MPI_Irecv_large(generator_bufs[i].get(), recv_sizes[2 * i], MPI_CHAR, neighbor_ranks[i],
+                                  H2_EARLY_GENERATORS_TAG, tree->comm, requests), "generators Irecv", neighbor_ranks[i]);
+        }
+        if (recv_sizes[2 * i + 1] > 0) {
+            skeleton_bufs[i].reset(new char[recv_sizes[2 * i + 1]]);
+            check(MPI_Irecv_large(skeleton_bufs[i].get(), recv_sizes[2 * i + 1], MPI_CHAR, neighbor_ranks[i],
+                                  H2_EARLY_SKELETONS_TAG, tree->comm, requests), "skeletons Irecv", neighbor_ranks[i]);
+        }
+        timers.bytes_received += static_cast<double>(recv_sizes[2 * i] + recv_sizes[2 * i + 1]);
+    }
+    requests.insert(requests.end(), state.requests.begin(), state.requests.end());
+    state.requests.clear();
+    if (!requests.empty()) {
+        check(MPI_Waitall(static_cast<int>(requests.size()), requests.data(), MPI_STATUSES_IGNORE), "payload Waitall", -1);
+        requests.clear();
+    }
+    state.buffers.clear();
+    state.active = false;
+    communication_time += clock::now() - comm_start;
+    timers.payload += seconds_since(comm_start);
+
+    // the payloads unpacked a thread each, merged in neighbour order
+    const auto t_deserialize = clock::now();
+    PendingFactorUpdates<DataType> incoming_total;
+    merge_pending(incoming_total, local_apply);
+    std::vector<size_t> arrived;
+    for (size_t i = 0; i < P; ++i) {
+        if (recv_sizes[2 * i] != 0) arrived.push_back(i);
+    }
+    std::vector<PendingFactorUpdates<DataType>> ins(P);
+    std::exception_ptr unpack_exception;
+    std::mutex unpack_exception_mutex;
+    omp_parallel_if(arrived.size() > 1, [&] {
+        #pragma omp for schedule(dynamic)
+        for (int64_t a = 0; a < static_cast<int64_t>(arrived.size()); ++a) {
+            const size_t i = arrived[static_cast<size_t>(a)];
+            try {
+                deserialize(ins[i], generator_bufs[i].get());
+                generator_bufs[i].reset();
+            } catch (...) {
+                std::lock_guard<std::mutex> lock(unpack_exception_mutex);
+                if (!unpack_exception) unpack_exception = std::current_exception();
+            }
+        }
+    });
+    if (unpack_exception) std::rethrow_exception(unpack_exception);
+    for (size_t i : arrived) {
+        merge_pending(incoming_total, ins[i]);
+        ins[i] = PendingFactorUpdates<DataType>{};
+    }
+    for (size_t i = 0; i < P; ++i) {
+        if (recv_sizes[2 * i + 1] == 0) continue;
+        const int64_t* at = reinterpret_cast<const int64_t*>(skeleton_bufs[i].get());
+        const int64_t* end = at + recv_sizes[2 * i + 1] / sizeof(int64_t);
+        const int64_t entries = *at++;
+        for (int64_t e = 0; e < entries; ++e) {
+            if (end - at < 2) throw std::runtime_error("complete_early_generators: skeleton message truncated");
+            const int64_t morton = at[0], length = at[1];
+            at += 2;
+            if (length < 0 || end - at < length) {
+                throw std::runtime_error("complete_early_generators: skeleton message truncated");
+            }
+            auto it = lvl.assisting_box_points_for_kernel_evaluation.find(morton);
+            if (it != lvl.assisting_box_points_for_kernel_evaluation.end()) {
+                lvl.assisting_boxes[static_cast<size_t>(it->second)].skel_indices.assign(at, at + length);
+            }
+            at += length;
+        }
+        if (at != end) throw std::runtime_error("complete_early_generators: skeleton message parse mismatch");
+    }
+    timers.deserialize += seconds_since(t_deserialize);
+
+    install_and_apply_incoming_updates(tree, lvl, kernel, incoming_total, is_hermitian);
+    clear_pending_factor_updates_memory(pending);
+    return communication_time;
+}
 
 template<typename CoordType, typename DataType>
 void gather_CA_boxes_solve(

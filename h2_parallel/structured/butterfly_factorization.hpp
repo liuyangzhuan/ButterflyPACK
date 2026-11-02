@@ -909,6 +909,17 @@ void hierarchical_factorization_parallel(
 #else
             const bool gpu_level_local = false;
 #endif
+            // A host Color level in lazy Schur mode 2: its owner passes update
+            // local blocks only, so each boundary wave's generators leave
+            // before its owner pass (post_early_generators, serialization.hpp)
+            // and the next transport receives them (complete_early_generators).
+            EarlyGeneratorExchange<DataType> early_exchange;
+            bool early_generators = lazy_far_field_mode() == LazyFarFieldMode::LAZY && generator_near_enabled() &&
+                                    is_symmetric && !is_hermitian && level.partial_count == 0 &&
+                                    kernel_symmetric(kernel, 0) && !kernel_entries_collective(kernel, 0);
+#ifdef H2_HAVE_GPU
+            early_generators = early_generators && !color_gpu_enabled();
+#endif
 
             skew_probe.loop_begin();
             for (int counter = 0; counter < static_cast<int>(color_bins.size()); ++counter) {
@@ -945,6 +956,10 @@ void hierarchical_factorization_parallel(
                             };
                     }
                     std::chrono::high_resolution_clock::duration comm_duration_raw{};
+                    if (early_exchange.active) {
+                        comm_duration_raw = complete_early_generators(
+                            tree, current_level, kernel, pending_updates, early_exchange);
+                    } else
 #ifdef H2_HAVE_GPU
                     if (gpu_driver.on()) {
                         // device level on several ranks
@@ -995,7 +1010,12 @@ void hierarchical_factorization_parallel(
                 }
 
                 FMM_PHASE_LAP(wave_lap, WALL_STAGED);  // transport
-                if (color_list.empty()) continue;
+                const bool early_post = early_generators && !is_interior;
+                if (color_list.empty()) {
+                    // (every rank posts every boundary wave's early exchange)
+                    if (early_post) post_early_generators(tree, current_level, color_list, counter, early_exchange);
+                    continue;
+                }
                 FMM_PHASE_NOTE_WAVE(color_list.size());
 
                 const bool enable_deferred_xnn =
@@ -1162,6 +1182,10 @@ void hierarchical_factorization_parallel(
                 }
                 FMM_PHASE_LAP(wave_lap, WALL_BOX);
                 FMM_PHASE_WAVE_BOX_DONE();
+                if (early_post) {
+                    post_early_generators(tree, current_level, color_list, counter, early_exchange);
+                    FMM_PHASE_LAP(wave_lap, WALL_STAGED);
+                }
 
                 for (int local_boundary_count : thread_boundary_counts) {
                     boundary_count += local_boundary_count;
@@ -1371,7 +1395,7 @@ void hierarchical_factorization_parallel(
                     // original one-hop coupling. Finalization replaces X_NR
                     // with temp2, which remains the representation retained
                     // by local and installed generator boxes.
-                    if (lazy_far_field_mode() == LazyFarFieldMode::LAZY) {
+                    if (lazy_far_field_mode() == LazyFarFieldMode::LAZY && !early_post) {
                         emit_lazy_generators(
                             level, color_list, counter, pending_updates);
                     }
@@ -1438,6 +1462,9 @@ void hierarchical_factorization_parallel(
 
             }
 
+            if (early_exchange.active) {
+                throw std::logic_error("an early generator exchange was not completed in its level");
+            }
             // Keep the final flush outside the wave body so empty trailing bins
             // cannot strand updates produced by the last nonempty wave.
             if (memory_diagnostics.enabled()) {

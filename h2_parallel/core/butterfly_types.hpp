@@ -346,6 +346,21 @@ struct H2Kernel {
         }
     }
 
+    // the assisting boxes `mortons` of the level, as a transport refreshes
+    // them (its own and ghost boxes are registered at the level's start)
+    template<typename LevelData>
+    void register_assisting_coordinates(const LevelData& level, const std::vector<int64_t>& mortons) {
+        if (!uses_distributed64_callbacks()) return;
+        for (int64_t morton : mortons) {
+            const auto it = level.assisting_box_points_for_kernel_evaluation.find(morton);
+            if (it == level.assisting_box_points_for_kernel_evaluation.end()) continue;
+            const auto& request = level.assisting_boxes[static_cast<size_t>(it->second)];
+            if (!request.indices.empty()) {
+                register_points(request.indices, request.coords);
+            }
+        }
+    }
+
     void ensure_coordinates_collective(const std::vector<int64_t>& indices,
                                        MPI_Comm comm) const {
         if (!uses_distributed64_callbacks() || indices.empty()) return;

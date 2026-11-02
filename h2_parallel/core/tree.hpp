@@ -1373,6 +1373,10 @@ struct TreeLevel {
     // the next level, even when they own none of its direct endpoints.
     std::unordered_map<int64_t, std::unordered_set<int>>
         lazy_generator_requesters;
+    // The ranks that requested each local box as assisting state in this
+    // level's assisting exchanges: an early generator exchange pushes them its
+    // skeleton once it is eliminated (post_early_generators, serialization.hpp).
+    std::unordered_map<int64_t, std::vector<int>> assisting_requesters;
 
     BoxData<CoordType, DataType>* find_generator_box(int64_t morton) {
         auto it = generator_id_to_index.find(morton);

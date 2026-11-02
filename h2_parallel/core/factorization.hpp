@@ -3860,7 +3860,10 @@ void finalize_deferred_xnn_source_box(
     }
 
     if (!source_box->deferred_xnn_temp2.empty()) {
-        if (!source_box->X_NR.is_allocated()) {
+        // (its data may have moved to the box's lazy generator already)
+        if (source_box->X_NR.rows <= 0 || source_box->X_NR.cols <= 0 ||
+            static_cast<int64_t>(source_box->deferred_xnn_temp2.size()) !=
+                source_box->X_NR.rows * source_box->X_NR.cols) {
             throw std::runtime_error(
                 "finalize_deferred_xnn_source_box: source X_NR missing");
         }
@@ -11358,11 +11361,16 @@ void compute_and_modify(
         
         M = total_neighbor_points; N = r; K = k;
         alpha = -1.0; beta = 1.0;
-        
-        gemm_("N", "N", &M, &N, &K,
-               &alpha, A_NS_all.data(), &M,
-               T.data.data(), &K,
-               &beta, box->X_NR.data.data(), &M);
+
+        // (all the neighbours' rows: in a one-box wave of the top levels
+        // the box's largest product, in column pieces as r_by_r's)
+        r_by_r([&](int64_t c0, int64_t c1) {
+            int columns = static_cast<int>(c1 - c0);
+            gemm_("N", "N", &M, &columns, &K,
+                   &alpha, A_NS_all.data(), &M,
+                   T.data.data() + c0 * K, &K,
+                   &beta, box->X_NR.data.data() + c0 * M, &M);
+        });
 
         if (DEBUG) {
             // Check A_NS_all

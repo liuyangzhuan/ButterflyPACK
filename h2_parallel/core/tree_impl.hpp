@@ -157,6 +157,7 @@ void clear_modified_interaction_matrices(
     level.generator_id_to_index.clear();
     level.elimination_wave.clear();
     level.lazy_generator_requesters.clear();
+    level.assisting_requesters.clear();
     // malloc_trim(0);
 }
 
