@@ -1905,16 +1905,18 @@ PartialCbSide<DataType> partial_cb_side(const fmm::ParallelTree<CoordType, DataT
 struct PartialOutLayout {
     std::vector<int64_t> ooff, ors, ocs;
 };
-// Where a call's sketches go when the caller keeps them on the device
-// (c_bpack_extractsketch_device; one rank): sketch n (d_n x m_n, m_n its
-// unsketched side's count) added into out[n] (device memory, leading
-// dimension ld[n]), its column j into column cols[col_off[n] + j].  With
-// download the call's out is filled too (the device-vs-host check).
+// Where a call's blocks go when the caller keeps them on the device
+// (c_bpack_extractsketch_device, c_bpack_extractelement_device; one rank):
+// block n added into out[n] (device memory, leading dimension ld[n]), its
+// column j into column cols[col_off[n] + j] and, for entries, its row i into
+// row rows[row_off[n] + i] (a sketch's d_n rows are its own, its columns
+// the unsketched side's m_n).  With download the call's out is filled too
+// (the device-vs-host check).
 template<typename DataType>
 struct PartialDeviceTargets {
     std::vector<DataType*> out;
-    std::vector<int64_t> ld, col_off;
-    std::vector<int> cols;
+    std::vector<int64_t> ld, col_off, row_off;
+    std::vector<int> cols, rows;
     bool download = false;
 };
 inline PartialOutLayout partial_out_layout(int64_t ninter, const int64_t* nrows, const int64_t* ncols, const PartialSketch* sk) {
@@ -2975,9 +2977,13 @@ void partial_schur_blocks_device(fmm::ParallelTree<CoordType, DataType>& tree, i
     // entries: the chains shared by the request's blocks and two-stage pairs (as the host's,
     // partial_schur_blocks_shared), into a device copy of out; when out does not fit, the host's
     const bool shared = sketch == nullptr;
-    if (targets != nullptr && shared) throw std::logic_error("GPU partial CB: device outputs for sketches only");
     if (shared && static_cast<size_t>(ooff.back()) * D > work.budget()) {
         partial_schur_blocks_shared(tree, ninter, rows, nrows, cols, ncols, out, roff, coff, ooff);
+        if (targets != nullptr) {  // (on the host, every position written: uploaded, then added)
+            std::vector<int64_t> mk(nrows, nrows + ninter), nk(ncols, ncols + ninter);
+            gpu::partial_add_host_into(out, ooff, mk, nk, targets->out, targets->ld, targets->rows, targets->row_off,
+                                       targets->cols, targets->col_off);
+        }
         return;
     }
     partial_leaf_index(tree);
@@ -4377,30 +4383,35 @@ void partial_schur_blocks_device(fmm::ParallelTree<CoordType, DataType>& tree, i
         R = std::move(next[0]);
         C = std::move(next[1]);
     }
-    // the sketches into the caller's device outputs: d_k x m_k blocks, a repeated point's column read from its first
+    // the blocks into the caller's device outputs: a sketch's d_k x m_k, entries' nrows x ncols, a repeated point's
+    // row or column read from its first
     auto into_targets = [&](const DataType* y, bool firsts) {
-        std::vector<int64_t> dk(static_cast<size_t>(ninter)), mk(dk);
-        std::vector<int> src;
+        std::vector<int64_t> mk(static_cast<size_t>(ninter)), nk(mk);
         for (int64_t k = 0; k < ninter; ++k) {
-            dk[static_cast<size_t>(k)] = sketch->dims[k];
-            mk[static_cast<size_t>(k)] = sketch->side == 1 ? nrows[k] : ncols[k];
+            mk[static_cast<size_t>(k)] = shared ? nrows[k] : sketch->dims[k];
+            nk[static_cast<size_t>(k)] = shared ? ncols[k] : (sketch->side == 1 ? nrows[k] : ncols[k]);
         }
+        std::vector<int> srows, scols;
         if (firsts) {
-            src.resize(targets->cols.size());
+            auto first_of = [](const int64_t* idx, int64_t n, int* at) {
+                std::unordered_map<int64_t, int64_t> first;
+                for (int64_t q = 0; q < n; ++q) at[q] = static_cast<int>(first.emplace(idx[q], q).first->second);
+            };
+            scols.resize(targets->cols.size());
+            if (shared) srows.resize(targets->rows.size());
 #pragma omp parallel for schedule(dynamic, 1)
             for (int64_t k = 0; k < ninter; ++k) {
-                const bool by_rows = sketch->side == 1;
-                const int64_t n = mk[static_cast<size_t>(k)];
-                const int64_t* idx = by_rows ? rows + roff[static_cast<size_t>(k)] : cols + coff[static_cast<size_t>(k)];
-                int* sk = src.data() + targets->col_off[static_cast<size_t>(k)];
-                std::unordered_map<int64_t, int64_t> first;
-                for (int64_t q = 0; q < n; ++q) sk[q] = static_cast<int>(first.emplace(idx[q], q).first->second);
+                const size_t kk = static_cast<size_t>(k);
+                const bool by_rows = !shared && sketch->side == 1;
+                first_of(by_rows ? rows + roff[kk] : cols + coff[kk], nk[kk], scols.data() + targets->col_off[kk]);
+                if (shared) first_of(rows + roff[kk], mk[kk], srows.data() + targets->row_off[kk]);
             }
         }
-        gpu::partial_add_into(work, y, ooff, dk, mk, targets->out, targets->ld, targets->cols, targets->col_off, src);
+        gpu::partial_add_into(work, y, ooff, mk, nk, targets->out, targets->ld, targets->rows, targets->row_off,
+                              targets->cols, targets->col_off, srows, scols);
     };
-    const bool repeats = !shared && ((!Rh.sketched() && Rh.pos.size() > Rh.points.size()) ||
-                                     (!Ch.sketched() && Ch.pos.size() > Ch.points.size()));
+    const bool repeats = shared || (!Rh.sketched() && Rh.pos.size() > Rh.points.size()) ||
+                         (!Ch.sketched() && Ch.pos.size() > Ch.points.size());
     if (targets != nullptr) {
         const double t = trace ? MPI_Wtime() : 0.0;
         if (out_dev != nullptr) {
@@ -4417,7 +4428,7 @@ void partial_schur_blocks_device(fmm::ParallelTree<CoordType, DataType>& tree, i
         const double t = trace ? MPI_Wtime() : 0.0;
         work.download(out, out_dev, out_bytes);
         if (shared) partial_copy_duplicates(ninter, rows, nrows, cols, ncols, roff, coff, ooff, out);
-        if (repeats) {
+        if (!shared && repeats) {
             // a point asked for at several positions of a sketch's unsketched side: its sums are at
             // the first (the sketch's columns)
 #pragma omp parallel for schedule(dynamic, 1)
@@ -4507,9 +4518,7 @@ void partial_schur_blocks(fmm::ParallelTree<CoordType, DataType>& tree, int64_t 
         roff[static_cast<size_t>(k) + 1] = roff[static_cast<size_t>(k)] + nrows[k];
         coff[static_cast<size_t>(k) + 1] = coff[static_cast<size_t>(k)] + ncols[k];
     }
-    if (targets != nullptr && (sketch == nullptr || nranks != 1)) {
-        throw std::logic_error("partial Schur: device outputs for one rank's sketches only");
-    }
+    if (targets != nullptr && nranks != 1) throw std::logic_error("partial Schur: device outputs for one rank only");
     const PartialOutLayout layout = partial_out_layout(ninter, nrows, ncols, sketch);
     const std::vector<int64_t>& ooff = layout.ooff;
     if (ooff.back() == 0) return;
@@ -4568,14 +4577,15 @@ void partial_schur_blocks(fmm::ParallelTree<CoordType, DataType>& tree, int64_t 
             reduce();
             return;
         }
-        if (targets != nullptr) {  // (the host's sketches, then added in on the device)
+        if (targets != nullptr) {  // (the host's blocks, then added in on the device)
             partial_schur_blocks(tree, ninter, rows, nrows, cols, ncols, out, replicate, 2, sketch);
-            std::vector<int64_t> dk(static_cast<size_t>(ninter)), mk(dk);
+            std::vector<int64_t> mk(static_cast<size_t>(ninter)), nk(mk);
             for (int64_t k = 0; k < ninter; ++k) {
-                dk[static_cast<size_t>(k)] = sketch->dims[k];
-                mk[static_cast<size_t>(k)] = sketch->side == 1 ? nrows[k] : ncols[k];
+                mk[static_cast<size_t>(k)] = sketch == nullptr ? nrows[k] : sketch->dims[k];
+                nk[static_cast<size_t>(k)] = sketch == nullptr ? ncols[k] : (sketch->side == 1 ? nrows[k] : ncols[k]);
             }
-            fmm::gpu::partial_add_host_into(out, ooff, dk, mk, targets->out, targets->ld, targets->cols, targets->col_off);
+            fmm::gpu::partial_add_host_into(out, ooff, mk, nk, targets->out, targets->ld, targets->rows, targets->row_off,
+                                            targets->cols, targets->col_off);
             return;
         }
     }
@@ -5322,9 +5332,7 @@ void extract_partial_blocks(fmm::ParallelTree<CoordType, DataType>* tree, MPI_Co
         // owns every block, in this order: its contributions are the blocks,
         // computed into alldat_loc in place
         const bool alone = csize == 1;
-        if (targets != nullptr && (!alone || sketch == nullptr)) {
-            throw std::invalid_argument("extract_partial_blocks: device outputs for a lone caller's sketches only");
-        }
+        if (targets != nullptr && !alone) throw std::invalid_argument("extract_partial_blocks: device outputs for a lone caller only");
         // (partial_schur_blocks writes all of its out: not zero-filled here)
         // (kept over the calls, as the landed sums: a fresh one a call faulted its pages in again as they were written;
         // with device outputs and no alldat_loc, the host's room for the sketches)
@@ -5336,9 +5344,11 @@ void extract_partial_blocks(fmm::ParallelTree<CoordType, DataType>* tree, MPI_Co
         // (the device outputs in the blocks' order here)
         PartialDeviceTargets<DataType> ordered;
         if (targets != nullptr) {
+            const bool by_rows = !targets->rows.empty();
             ordered.out.resize(order.size());
             ordered.ld.resize(order.size());
             ordered.col_off.resize(order.size() + 1, 0);
+            if (by_rows) ordered.row_off.resize(order.size() + 1, 0);
             for (size_t q = 0; q < order.size(); ++q) {
                 const size_t n = static_cast<size_t>(order[q]);
                 ordered.out[q] = targets->out[n];
@@ -5346,6 +5356,11 @@ void extract_partial_blocks(fmm::ParallelTree<CoordType, DataType>* tree, MPI_Co
                 const int64_t c0 = targets->col_off[n], m = targets->col_off[n + 1] - c0;
                 ordered.cols.insert(ordered.cols.end(), targets->cols.begin() + c0, targets->cols.begin() + c0 + m);
                 ordered.col_off[q + 1] = ordered.col_off[q] + m;
+                if (by_rows) {
+                    const int64_t r0 = targets->row_off[n], mr = targets->row_off[n + 1] - r0;
+                    ordered.rows.insert(ordered.rows.end(), targets->rows.begin() + r0, targets->rows.begin() + r0 + mr);
+                    ordered.row_off[q + 1] = ordered.row_off[q] + mr;
+                }
             }
         }
         double xm = xtrace ? MPI_Wtime() : 0.0;

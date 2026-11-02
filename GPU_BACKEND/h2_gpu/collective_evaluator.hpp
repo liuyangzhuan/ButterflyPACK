@@ -100,6 +100,31 @@ void collective_block_evaluator(const bpack_gpu_block_batch* batch, void* user) 
         at[static_cast<size_t>(b) + 1] = at[static_cast<size_t>(b)] + static_cast<size_t>(blk.m) * blk.n;
     }
     if (at.back() == 0) return;
+    if (entries->alone() && entries->has_block_device()) {
+        // One rank with a device block callback: each block added straight
+        // into its output, zeroed here (declined: the host's below)
+        std::vector<typename Entries::BlockRef> refs;
+        std::vector<void*> outs;
+        std::vector<int64_t> lds;
+        for (int b = 0; b < count; ++b) {
+            const bpack_gpu_block& blk = batch->blocks[b];
+            if (blk.m <= 0 || blk.n <= 0) continue;
+            check_cuda(cudaMemset2DAsync(blk.out, static_cast<size_t>(blk.ld) * sizeof(DataType), 0,
+                                         static_cast<size_t>(blk.m) * sizeof(DataType), static_cast<size_t>(blk.n), stream),
+                       "collective device blocks zero");
+            refs.push_back({blk.row_ids_host, blk.m, blk.col_ids_host, blk.n});
+            outs.push_back(blk.out);
+            lds.push_back(blk.ld);
+        }
+        check_cuda(cudaStreamSynchronize(stream), "collective device blocks zero");  // (the callee's streams write next)
+        const auto t_fetch = clock::now();
+        const bool done = entries->fetch_blocks_device(refs, outs.data(), lds.data(), stream);
+        fetching = std::chrono::duration<double>(clock::now() - t_fetch).count();
+        if (done) {
+            entries->count_delivery(std::chrono::duration<double>(clock::now() - t0).count() - fetching);
+            return;
+        }
+    }
     // the blocks packed column by column, those not fetched yet fetched now
     // (one rank: all of them, straight into the image, zeroed for the
     // callback)

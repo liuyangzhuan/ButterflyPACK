@@ -138,6 +138,9 @@ public:
     // (c_bpack_func_zmn_sketch_device, BPACK_wrapper.h)
     using SketchDeviceCallback = void (*)(int*, int*, int*, int64_t*, int*, int*, int*, int*, int*, int*, int*, int*,
                                           double*, void**, int64_t*, int*, void*, int*, void*);
+    // (c_bpack_func_zmn_block_device, BPACK_wrapper.h)
+    using BlockDeviceCallback = void (*)(int*, int*, int*, int64_t*, int*, int*, int*, int*, void**, int64_t*, void*,
+                                         int*, void*);
     static constexpr int kRoundRequest = 1;  // (a rank has recorded blocks)
     static constexpr int kRoundActive = 2;   // (a section is running)
     static constexpr int kRoundBusy = 4;     // (a rank may still ask, in the device path's sense)
@@ -208,6 +211,10 @@ public:
     // (one rank: fetch_sketches_device); either orientation.
     void set_sketch_device(SketchDeviceCallback callback) { sketch_device_callback_ = callback; }
     bool has_sketch_device() const { return sketch_device_callback_ != nullptr; }
+    // A block callback that adds the blocks into device memory instead (one
+    // rank: fetch_blocks_device).
+    void set_block_device(BlockDeviceCallback callback) { block_device_callback_ = callback; }
+    bool has_block_device() const { return block_device_callback_ != nullptr; }
     bool symmetric() const { return symmetric_; }
     bool has_sketch() const {
         return sketch_callback_ != nullptr && (symmetric_ || sketch_t_callback_ != nullptr);
@@ -288,39 +295,52 @@ public:
         if (!alone()) throw std::logic_error("CollectiveEntries: a direct fetch over several ranks");
         if (blocks.empty()) return;
         const double t_gather = MPI_Wtime();
-        int ninter = checked(static_cast<int64_t>(blocks.size()), "blocks");
-        std::vector<int> rowidx(static_cast<size_t>(ninter)), colidx(rowidx), pgidx(rowidx.size(), 0), allrows, allcols;
-        int64_t nloc = 0, nr = 0, nc = 0;
-        for (const BlockRef& b : blocks) {
-            nr += b.nx;
-            nc += b.ny;
-        }
-        allrows.reserve(static_cast<size_t>(nr));
-        allcols.reserve(static_cast<size_t>(nc));
-        const size_t o = static_cast<size_t>(entry_origin());
-        for (int n = 0; n < ninter; ++n) {
-            const BlockRef& b = blocks[static_cast<size_t>(n)];
-            rowidx[static_cast<size_t>(n)] = checked(b.nx, "a block's rows");
-            colidx[static_cast<size_t>(n)] = checked(b.ny, "a block's columns");
-            for (int64_t i = 0; i < b.nx; ++i) allrows.push_back(checked(b.x[i] + 1, "an index"));
-            for (int64_t j = 0; j < b.ny; ++j) allcols.push_back(checked(b.y[j] + 1, "an index"));
-            nloc += b.nx * b.ny;
-            origin_blocks_[o] += 1.0;
-            origin_entries_[o] += static_cast<double>(b.nx) * static_cast<double>(b.ny);
-        }
-        int nallrows = checked(nr, "the rows"), nallcols = checked(nc, "the columns"), npmap = 1;
+        DirectBlocks a = pack_blocks(blocks);
+        count_blocks(blocks);
+        std::vector<int> pgidx(blocks.size(), 0);
+        int npmap = 1;
         int pmaps[3] = {1, 1, pids_[0]};
         const double t_callback = MPI_Wtime();
         gather_seconds_ += t_callback - t_gather;
-        callback_(&ninter, &nallrows, &nallcols, &nloc, allrows.data(), allcols.data(), reinterpret_cast<CallbackValue*>(out),
-                  rowidx.data(), colidx.data(), pgidx.data(), &npmap, pmaps, quant_);
+        callback_(&a.ninter, &a.nallrows, &a.nallcols, &a.nloc, a.allrows.data(), a.allcols.data(),
+                  reinterpret_cast<CallbackValue*>(out), a.rowidx.data(), a.colidx.data(), pgidx.data(), &npmap, pmaps,
+                  quant_);
         const double t_end = MPI_Wtime();
         callback_seconds_ += t_end - t_callback;
-        fetched_entries_ += static_cast<double>(nloc);
-        fetched_blocks_ += ninter;
+        fetched_entries_ += static_cast<double>(a.nloc);
+        fetched_blocks_ += a.ninter;
         ++fetch_rounds_;
         ++rounds_;
         round_seconds_ += t_end - t_gather;
+    }
+    // As fetch_blocks_direct, through the device block callback: block n
+    // added into dout[n] (device memory, leading dimension ldo[n], zeroed by
+    // the caller; distinct blocks' outputs do not overlap).  False, with
+    // nothing written, when the callback declined; on true its writes are
+    // complete.  stream: the caller's, for ordering.
+    bool fetch_blocks_device(const std::vector<BlockRef>& blocks, void* const* dout, const int64_t* ldo, void* stream) {
+        if (!alone()) throw std::logic_error("CollectiveEntries: a direct fetch over several ranks");
+        if (blocks.empty()) return true;
+        if (block_device_callback_ == nullptr) return false;
+        const double t_gather = MPI_Wtime();
+        DirectBlocks a = pack_blocks(blocks);
+        std::vector<void*> outs(dout, dout + blocks.size());
+        std::vector<int64_t> lds(ldo, ldo + blocks.size());
+        int done = 0;
+        const double t_callback = MPI_Wtime();
+        gather_seconds_ += t_callback - t_gather;
+        block_device_callback_(&a.ninter, &a.nallrows, &a.nallcols, &a.nloc, a.allrows.data(), a.allcols.data(),
+                               a.rowidx.data(), a.colidx.data(), outs.data(), lds.data(), stream, &done, quant_);
+        const double t_end = MPI_Wtime();
+        callback_seconds_ += t_end - t_callback;
+        if (done == 0) return false;
+        count_blocks(blocks);
+        fetched_entries_ += static_cast<double>(a.nloc);
+        fetched_blocks_ += a.ninter;
+        ++fetch_rounds_;
+        ++rounds_;
+        round_seconds_ += t_end - t_gather;
+        return true;
     }
     // Every key's Omega K(x, y) (with `transposed`, all of them: Omega K(y,
     // x)^T), d x ny column major, packed in order into out (zeroed): one call
@@ -636,6 +656,43 @@ private:
         }
         return nullptr;
     }
+    // A direct block fetch's lists, 1-based as the callbacks take them.
+    struct DirectBlocks {
+        int ninter = 0, nallrows = 0, nallcols = 0;
+        int64_t nloc = 0;
+        std::vector<int> rowidx, colidx, allrows, allcols;
+    };
+    DirectBlocks pack_blocks(const std::vector<BlockRef>& blocks) {
+        DirectBlocks a;
+        a.ninter = checked(static_cast<int64_t>(blocks.size()), "blocks");
+        a.rowidx.resize(blocks.size());
+        a.colidx.resize(blocks.size());
+        int64_t nr = 0, nc = 0;
+        for (const BlockRef& b : blocks) {
+            nr += b.nx;
+            nc += b.ny;
+        }
+        a.allrows.reserve(static_cast<size_t>(nr));
+        a.allcols.reserve(static_cast<size_t>(nc));
+        for (size_t n = 0; n < blocks.size(); ++n) {
+            const BlockRef& b = blocks[n];
+            a.rowidx[n] = checked(b.nx, "a block's rows");
+            a.colidx[n] = checked(b.ny, "a block's columns");
+            for (int64_t i = 0; i < b.nx; ++i) a.allrows.push_back(checked(b.x[i] + 1, "an index"));
+            for (int64_t j = 0; j < b.ny; ++j) a.allcols.push_back(checked(b.y[j] + 1, "an index"));
+            a.nloc += b.nx * b.ny;
+        }
+        a.nallrows = checked(nr, "the rows");
+        a.nallcols = checked(nc, "the columns");
+        return a;
+    }
+    void count_blocks(const std::vector<BlockRef>& blocks) {
+        const size_t o = static_cast<size_t>(entry_origin());
+        for (const BlockRef& b : blocks) {
+            origin_blocks_[o] += 1.0;
+            origin_entries_[o] += static_cast<double>(b.nx) * static_cast<double>(b.ny);
+        }
+    }
     // A direct fetch's request lists, 1-based as the callbacks take them (and
     // the keys counted in the report).
     struct DirectSketches {
@@ -907,6 +964,7 @@ private:
     std::vector<Block> pending_, blocks_;
     SketchCallback sketch_callback_ = nullptr, sketch_t_callback_ = nullptr;
     SketchDeviceCallback sketch_device_callback_ = nullptr;
+    BlockDeviceCallback block_device_callback_ = nullptr;
     std::vector<Sketch> pending_sketches_, sketches_;
     std::unordered_multimap<uint64_t, size_t> pending_sketch_index_, sketch_index_;
     double sketch_requests_ = 0.0, sketch_values_ = 0.0, sketch_covered_ = 0.0;

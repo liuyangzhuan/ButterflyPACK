@@ -165,6 +165,11 @@ void c_bpack_set_sketch_transpose_callback(F2Cptr* bmat, c_bpack_func_zmn_sketch
 // cudaStream_t, for ordering.  Tried first when set; the host callbacks are still needed.
 typedef void (*c_bpack_func_zmn_sketch_device)(int* Nsketch, int* Nallrows, int* Nallcols, int64_t* Nallomega, int* allrows, int* allcols, int* rowidx, int* colidx, int* sketchdim, int* omegaidx, int* omega_row, int* omega_dest, double* omega_val, void** dout, int64_t* ldo, int* transposed, void* stream, int* done, C2Fptr C_QuantApp);
 void c_bpack_set_sketch_device_callback(F2Cptr* bmat, c_bpack_func_zmn_sketch_device C_FuncZmnSketchDevice);
+// The same for the blocks' entries (an elem_extract=1 block callback's): block n's K(rows, columns) (rowidx[n] x
+// colidx[n]) added into dout[n] (device memory, leading dimension ldo[n], zeroed by the caller), no alldat_loc,
+// pgidx or pmaps; done as for the sketches.  Tried first when set; the host block callback is still needed.
+typedef void (*c_bpack_func_zmn_block_device)(int* Ninter, int* Nallrows, int* Nallcols, int64_t* Nalldat_loc, int* allrows, int* allcols, int* rowidx, int* colidx, void** dout, int64_t* ldo, void* stream, int* done, C2Fptr C_QuantApp);
+void c_bpack_set_block_device_callback(F2Cptr* bmat, c_bpack_func_zmn_block_device C_FuncZmnBlockDevice);
 // The sketched blocks from a matrix on a subset of the caller's ranks (as c_bpack_extractelement_bridge): a
 // compression-only H2 (format 7) sketches them from its representation, a partial factorization (H2_partial) its
 // Schur complement's blocks as it computes them (1-based F22 indices, as for c_bpack_extractelement_bridge); other
@@ -178,6 +183,10 @@ void c_bpack_extractsketch_transpose_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* 
 // the earlier requests' colidx summed).  done = 1 when added (complete on return), 0 when this matrix cannot (another
 // format, more ranks, no GPU path; nothing written).  For a device sketch callback serving its children.
 void c_bpack_extractsketch_device(F2Cptr* bmat, F2Cptr* option, F2Cptr* ptree_caller, int* Nsketch, int* Nallrows, int* Nallcols, int64_t* Nallomega, int* allrows, int* allcols, int* rowidx, int* colidx, int* sketchdim, int* omegaidx, int* omega_row, int* omega_dest, double* omega_val, int* transposed, void** dout, int64_t* ldo, int* dcols, void* stream, int* done);
+// The same for a partial factorization's blocks (as c_bpack_extractelement_bridge, 1-based F22 indices): block n's
+// entry (i, j) added into dout[n] at (drows[r_n + i], dcols[c_n + j]) (0-based; r_n, c_n the earlier blocks' rowidx
+// and colidx summed).
+void c_bpack_extractelement_device(F2Cptr* bmat, F2Cptr* option, F2Cptr* ptree_caller, int* Ninter, int* Nallrows, int* Nallcols, int* allrows, int* allcols, int* rowidx, int* colidx, void** dout, int64_t* ldo, int* drows, int* dcols, void* stream, int* done);
 void c_bpack_inv_mult_fortran(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* bmat,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);
 void c_bpack_inv_mult(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* bmat,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);
 /*

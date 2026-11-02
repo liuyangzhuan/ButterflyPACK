@@ -1644,43 +1644,48 @@ void partial_device_shared_pairs(PartialDeviceWork& work, const std::vector<cons
     work.release(d);  // (the stream keeps a later user of the bytes behind the kernels)
 }
 
-// A call's sketches added into the caller's device outputs instead of
-// downloaded (c_bpack_extractsketch_device): block k of y (at off[k], d[k] x
-// m[k] column major) into out[k] (leading dimension ld[k]), its column j
-// into column cols[col_off[k] + j], read from column src[col_off[k] + j]
-// when src is given (a point asked for at several positions has its sums at
-// its first), else from j.  The outputs of different blocks do not overlap.
-// Complete on return.
+// A call's blocks added into the caller's device outputs instead of
+// downloaded (c_bpack_extract*_device): block k of y (at off[k], m[k] x n[k]
+// column major) into out[k] (leading dimension ld[k]), its entry (i, j) into
+// (rows[row_off[k] + i], cols[col_off[k] + j]) (rows empty: row i), read
+// from (src_rows[row_off[k] + i], src_cols[col_off[k] + j]) where those are
+// given (a point asked for at several positions has its values at its
+// first), else from (i, j).  The outputs of different blocks do not
+// overlap.  Complete on return.
 template<typename DataType>
 void partial_add_into(PartialDeviceWork& work, const DataType* y, const std::vector<int64_t>& off,
-                      const std::vector<int64_t>& d, const std::vector<int64_t>& m, const std::vector<DataType*>& out,
-                      const std::vector<int64_t>& ld, const std::vector<int>& cols, const std::vector<int64_t>& col_off,
-                      const std::vector<int>& src) {
+                      const std::vector<int64_t>& m, const std::vector<int64_t>& n, const std::vector<DataType*>& out,
+                      const std::vector<int64_t>& ld, const std::vector<int>& rows, const std::vector<int64_t>& row_off,
+                      const std::vector<int>& cols, const std::vector<int64_t>& col_off, const std::vector<int>& src_rows,
+                      const std::vector<int>& src_cols) {
     using S = typename DeviceScalar<DataType>::type;
     constexpr int kTile = 64;
     MetaBuilder& meta = work.meta();
-    const int64_t cols_at = static_cast<int64_t>(meta.append(cols));
-    const int64_t src_at = src.empty() ? -1 : static_cast<int64_t>(meta.append(src));
+    auto put = [&](const std::vector<int>& v) { return v.empty() ? int64_t{-1} : static_cast<int64_t>(meta.append(v)); };
+    const int64_t rows_at = put(rows), cols_at = put(cols), srows_at = put(src_rows), scols_at = put(src_cols);
     std::vector<BlockCopyItemT<S>> tiles;
     for (size_t k = 0; k < out.size(); ++k) {
-        const int dk = static_cast<int>(d[k]), mk = static_cast<int>(m[k]);
-        for (int j0 = 0; j0 < mk; j0 += kTile) {
-            for (int i0 = 0; i0 < dk; i0 += kTile) {
-                const int64_t at = (col_off[k] + j0) * static_cast<int64_t>(sizeof(int));
+        const int mk = static_cast<int>(m[k]), nk = static_cast<int>(n[k]);
+        for (int j0 = 0; j0 < nk; j0 += kTile) {
+            for (int i0 = 0; i0 < mk; i0 += kTile) {
+                const int64_t ri = rows.empty() ? 0 : (row_off[k] + i0) * static_cast<int64_t>(sizeof(int));
+                const int64_t cj = (col_off[k] + j0) * static_cast<int64_t>(sizeof(int));
                 BlockCopyItemT<S> it{};
                 it.out = reinterpret_cast<S*>(out[k]);
                 it.ors = 1;
                 it.ocs = ld[k];
-                it.out_rows.base = i0;
-                it.out_cols.offset = cols_at + at;
+                if (rows_at >= 0) it.out_rows.offset = rows_at + ri;
+                else it.out_rows.base = i0;
+                it.out_cols.offset = cols_at + cj;
                 it.src = reinterpret_cast<const S*>(y + off[k]);
                 it.rs = 1;
-                it.cs = dk;
-                it.src_rows.base = i0;
-                if (src_at >= 0) it.src_cols.offset = src_at + at;
+                it.cs = mk;
+                if (srows_at >= 0) it.src_rows.offset = srows_at + ri;
+                else it.src_rows.base = i0;
+                if (scols_at >= 0) it.src_cols.offset = scols_at + cj;
                 else it.src_cols.base = j0;
-                it.m = std::min(kTile, dk - i0);
-                it.n = std::min(kTile, mk - j0);
+                it.m = std::min(kTile, mk - i0);
+                it.n = std::min(kTile, nk - j0);
                 it.add = 1;
                 tiles.push_back(it);
             }
@@ -1694,18 +1699,20 @@ void partial_add_into(PartialDeviceWork& work, const DataType* y, const std::vec
     work.sync();
 }
 
-// As partial_add_into, from host memory (the host path's blocks): uploaded
-// through the staging buffers first.
+// As partial_add_into, from host memory (the host path's blocks, every
+// position written): uploaded through the staging buffers first.
 template<typename DataType>
-void partial_add_host_into(const DataType* y, const std::vector<int64_t>& off, const std::vector<int64_t>& d,
-                           const std::vector<int64_t>& m, const std::vector<DataType*>& out, const std::vector<int64_t>& ld,
-                           const std::vector<int>& cols, const std::vector<int64_t>& col_off) {
+void partial_add_host_into(const DataType* y, const std::vector<int64_t>& off, const std::vector<int64_t>& m,
+                           const std::vector<int64_t>& n, const std::vector<DataType*>& out, const std::vector<int64_t>& ld,
+                           const std::vector<int>& rows, const std::vector<int64_t>& row_off, const std::vector<int>& cols,
+                           const std::vector<int64_t>& col_off) {
     PartialDeviceWork work;
     const size_t bytes = static_cast<size_t>(off.empty() ? 0 : off.back()) * sizeof(DataType);
     if (bytes == 0) return;
     char* dy = work.alloc(bytes);
     work.upload(dy, y, bytes);
-    partial_add_into(work, reinterpret_cast<const DataType*>(dy), off, d, m, out, ld, cols, col_off, std::vector<int>{});
+    partial_add_into(work, reinterpret_cast<const DataType*>(dy), off, m, n, out, ld, rows, row_off, cols, col_off,
+                     std::vector<int>{}, std::vector<int>{});
     work.release(dy);
 }
 

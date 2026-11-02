@@ -1834,6 +1834,7 @@ void c_bpack_construct_element_compute(F2Cptr* bmat, F2Cptr* option,F2Cptr* stat
 	  H2_solver->kernel.collective->set_sketch(H2_solver->kernel.sketch_callback);
 	  H2_solver->kernel.collective->set_sketch_transposed(H2_solver->kernel.sketch_transpose_callback);
 	  H2_solver->kernel.collective->set_sketch_device(H2_solver->kernel.sketch_device_callback);
+	  H2_solver->kernel.collective->set_block_device(H2_solver->kernel.block_device_callback);
 #if defined(H2_HAVE_GPU) && defined(DAT) && (DAT == 0 || DAT == 1)
 	  if (H2_solver->options.use_gpu != 0) {
 	    H2_solver->kernel.gpu_evaluator =
@@ -3050,6 +3051,23 @@ void c_bpack_set_sketch_device_callback(F2Cptr* bmat, c_bpack_func_zmn_sketch_de
 #endif
 }
 
+void c_bpack_set_block_device_callback(F2Cptr* bmat, c_bpack_func_zmn_block_device C_FuncZmnBlockDevice) {
+#ifdef HAVE_MPI
+  if (bmat == nullptr || *bmat == nullptr) {
+    throw std::invalid_argument("c_bpack_set_block_device_callback: null matrix handle");
+  }
+  using H2Data = typename butterfly::fmm_data<C_DT>::type;
+  butterfly::H2<double, H2Data>* solver = h2_of<H2Data>(bmat);
+  if (solver == nullptr) return;  // (not an H2)
+  using Entries = fmm::CollectiveEntries<H2Data, typename butterfly::H2Kernel<double, H2Data>::kerData>;
+  solver->kernel.block_device_callback = reinterpret_cast<typename Entries::BlockDeviceCallback>(C_FuncZmnBlockDevice);
+  if (solver->kernel.collective) solver->kernel.collective->set_block_device(solver->kernel.block_device_callback);
+#else
+  (void)bmat;
+  (void)C_FuncZmnBlockDevice;
+#endif
+}
+
 // c_bpack_extractsketch_bridge and its transposed form: Y_n = Omega_n
 // A(rows, columns), or with transposed Omega_n A(columns, rows)^T.
 static void extractsketch_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree,
@@ -3157,6 +3175,58 @@ void c_bpack_extractsketch_transpose_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* 
   extractsketch_bridge(bmat, option, msh, stats, ptree, ptree_caller, Nsketch, Nallrows, Nallcols, Nallomega,
     Nalldat_loc, allrows, allcols, rowidx, colidx, sketchdim, omegaidx, omega_row, omega_dest, omega_val,
     alldat_loc, pgidx, Npmap, pmaps, true, "c_bpack_extractsketch_transpose_bridge");
+}
+
+// c_bpack_extractelement_device: a partial factorization's blocks for a one-rank caller added into its device
+// outputs (extract_partial_blocks with PartialDeviceTargets); anything else declines (done = 0, nothing written).
+void c_bpack_extractelement_device(F2Cptr* bmat, F2Cptr* option, F2Cptr* ptree_caller, int* Ninter, int* Nallrows,
+	int* Nallcols, int* allrows, int* allcols, int* rowidx, int* colidx, void** dout, int64_t* ldo, int* drows,
+	int* dcols, void* stream, int* done) {
+  *done = 0;
+  (void)Nallrows;
+  (void)Nallcols;
+  (void)stream;  // (the writes are complete on return)
+#if defined(HAVE_MPI) && defined(H2_HAVE_GPU) && defined(DAT) && (DAT == 0 || DAT == 1)
+  if (bmat == nullptr || *bmat == nullptr || option == nullptr || *option == nullptr) return;
+  double tmp = 0.0;
+  c_bpack_getoption(option, "format", &tmp);
+  if (static_cast<int>(tmp) != 7) return;
+  using H2Data = typename butterfly::fmm_data<C_DT>::type;
+  butterfly::H2<double, H2Data>* h2 = h2_of<H2Data>(bmat);
+  if (h2 == nullptr || h2->build_state != butterfly::H2BuildState::RS_PARTIAL || h2->options.use_gpu == 0) return;
+  int fcomm = 0;
+  c_bpack_get_comm(ptree_caller, &fcomm);
+  MPI_Comm caller_comm = MPI_Comm_f2c(static_cast<MPI_Fint>(fcomm));
+  int csize = 0;
+  MPI_Comm_size(caller_comm, &csize);
+  if (csize != 1) return;
+  try {
+    const int ni = std::max(*Ninter, 0);
+    butterfly::color_unstructured::PartialDeviceTargets<H2Data> tg;
+    tg.out.resize(static_cast<size_t>(ni));
+    tg.ld.assign(ldo, ldo + ni);
+    tg.row_off.assign(static_cast<size_t>(ni) + 1, 0);
+    tg.col_off.assign(static_cast<size_t>(ni) + 1, 0);
+    for (int n = 0; n < ni; ++n) {
+      tg.out[static_cast<size_t>(n)] = static_cast<H2Data*>(dout[n]);
+      tg.row_off[static_cast<size_t>(n) + 1] = tg.row_off[static_cast<size_t>(n)] + rowidx[n];
+      tg.col_off[static_cast<size_t>(n) + 1] = tg.col_off[static_cast<size_t>(n)] + colidx[n];
+    }
+    tg.rows.assign(drows, drows + tg.row_off.back());
+    tg.cols.assign(dcols, dcols + tg.col_off.back());
+    const std::vector<int> owner(static_cast<size_t>(ni), 0);
+    butterfly::color_unstructured::extract_partial_blocks(h2->tree.get(), caller_comm, ni, allrows, allcols, rowidx, colidx,
+                                                          owner, static_cast<H2Data*>(nullptr), partial_extract_of(option),
+                                                          nullptr, &tg);
+    *done = 1;
+  } catch (const std::exception& e) {
+    std::cerr << "Error in c_bpack_extractelement_device: " << e.what() << std::endl;
+    MPI_Abort(caller_comm, 1);
+  }
+#else
+  (void)bmat; (void)option; (void)ptree_caller; (void)Ninter; (void)allrows; (void)allcols; (void)rowidx; (void)colidx;
+  (void)dout; (void)ldo; (void)drows; (void)dcols;
+#endif
 }
 
 // c_bpack_extractsketch_device: a partial factorization's sketches for a one-rank caller added into its device

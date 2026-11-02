@@ -293,6 +293,8 @@ struct H2Kernel {
     // (c_bpack_set_sketch_device_callback) one that adds the sketches into
     // the device path's own outputs instead, tried first on one rank
     typename fmm::CollectiveEntries<DataType, kerData>::SketchDeviceCallback sketch_device_callback = nullptr;
+    // (c_bpack_set_block_device_callback) the same for the blocks' entries
+    typename fmm::CollectiveEntries<DataType, kerData>::BlockDeviceCallback block_device_callback = nullptr;
 
 
     H2Kernel() = default;
