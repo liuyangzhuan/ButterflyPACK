@@ -6377,13 +6377,18 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
     // then its skeleton once it is eliminated: neither changes again within
     // the level.  (Every wave refreshed the whole halo: 32 s a level at
     // levels 5 and 4 of Laplace 320^3 on 8 nodes.)  H2_partial republishes
-    // skeletons after its F22 phase, so it refreshes every box.
+    // skeletons after its F22 phase, so it refreshes every box.  In lazy
+    // mode a box not known to be eliminated is asked again too: a two-hop
+    // endpoint whose generator this rank is not sent is known eliminated only
+    // from the skeleton this refresh brings (refresh_installed_lazy_remote_state;
+    // skipped, a GPU level's lazy far blocks met it with no skeleton).
     const bool refresh_settled_skipped = lvl.partial_count == 0;
+    const bool lazy = lazy_far_field_mode() == LazyFarFieldMode::LAZY;
     std::vector<int64_t> need_assist;
     for (const auto& kv : lvl.assisting_box_points_for_kernel_evaluation) {
         const auto& assisting = lvl.assisting_boxes[static_cast<size_t>(kv.second)];
         const bool settled = refresh_settled_skipped && !assisting.indices.empty() &&
-            (!assisting.skel_indices.empty() || lvl.eliminated_boxes.count(kv.first) == 0);
+            (!assisting.skel_indices.empty() || (!lazy && lvl.eliminated_boxes.count(kv.first) == 0));
         if (!settled) need_assist.push_back(kv.first);
     }
     // The assisting-data protocol is pairwise but collective over the process
