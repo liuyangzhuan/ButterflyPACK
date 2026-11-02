@@ -222,17 +222,40 @@ void collective_sketches(Entries* entries, std::vector<Evaluator::SketchRequest>
                 in_place = in_place && parts[q] == 1 && at[q] == base + total;
                 total += static_cast<size_t>(requests[q].d) * requests[q].cols.size();
             }
-            HostBuffer<DataType> packed(in_place ? 0 : total);
-            parallel_zero(packed.data(), packed.size());
+            struct PackedTag;  // (kept over the calls: a fresh one faulted its pages in again)
+            KeptBuffer<DataType, PackedTag> packed(in_place ? 0 : total);
+            parallel_zero(packed.data(), in_place ? 0 : total);
             const auto t_fetch = clock::now();
             entries->fetch_sketches_direct(ks, t == 1, in_place ? image + base : packed.data());
             fetching += std::chrono::duration<double>(clock::now() - t_fetch).count();
             if (in_place) continue;
-            for (size_t i = 0, off = 0; i < qs.size(); ++i) {
-                const size_t n = static_cast<size_t>(requests[qs[i]].d) * requests[qs[i]].cols.size();
-                DataType* y = image + at[qs[i]];
-                for (size_t e = 0; e < n; ++e) y[e] += packed[off + e];
-                off += n;
+            // each request's parts added into its slot, a piece of a slot a thread (a request's parts, next
+            // to each other in qs, in one piece and in their order: the sums as one thread made them)
+            auto len = [&](size_t q) { return static_cast<size_t>(requests[q].d) * requests[q].cols.size(); };
+            std::vector<size_t> run_q, run_at{0}, part_off;  // (runs of one request: its parts' offsets in packed)
+            for (size_t i = 0, off = 0; i < qs.size(); off += len(qs[i]), ++i) {
+                if (run_q.empty() || run_q.back() != qs[i]) {
+                    if (!run_q.empty()) run_at.push_back(part_off.size());
+                    run_q.push_back(qs[i]);
+                }
+                part_off.push_back(off);
+            }
+            run_at.push_back(part_off.size());
+            std::vector<size_t> sorted_q(run_q);
+            std::sort(sorted_q.begin(), sorted_q.end());
+            const bool distinct = std::adjacent_find(sorted_q.begin(), sorted_q.end()) == sorted_q.end();
+            constexpr size_t kPiece = size_t{1} << 15;
+            std::vector<std::pair<size_t, size_t>> pieces;  // (run, first entry)
+            for (size_t r = 0; r < run_q.size(); ++r)
+                for (size_t a = 0; a < len(run_q[r]); a += kPiece) pieces.push_back({r, a});
+#pragma omp parallel for schedule(dynamic, 4) if (distinct && pieces.size() > 1 && !omp_in_parallel())
+            for (size_t p = 0; p < pieces.size(); ++p) {
+                const size_t r = pieces[p].first, a = pieces[p].second, b = std::min(len(run_q[r]), a + kPiece);
+                DataType* y = image + at[run_q[r]];
+                for (size_t j = run_at[r]; j < run_at[r + 1]; ++j) {
+                    const DataType* x = packed.data() + part_off[j];
+                    for (size_t e = a; e < b; ++e) y[e] += x[e];
+                }
             }
         }
     } else {

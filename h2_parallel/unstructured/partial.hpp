@@ -3088,13 +3088,24 @@ void partial_schur_blocks_device(fmm::ParallelTree<CoordType, DataType>& tree, i
             tq0 = t;
         };
         npairs += static_cast<double>(pairs.size());
-        // (a row or column block's targets in its block of out: one list a block)
-        std::unordered_map<const std::vector<int64_t>*, gpu::PartialTargetList> targets_of;
-        auto targets_at = [&](const std::vector<int64_t>* members, const PartialCbSide<DataType>& side) {
-            auto it = targets_of.find(members);
-            if (it == targets_of.end()) it = targets_of.emplace(members, target_list(side, *members)).first;
-            return &it->second;
-        };
+        // (a row or column block's targets in its block of out: one list a block, every block's built first, a
+        // block a thread - one at a time as the groups reached them they were a visible part of the call)
+        std::unordered_map<const std::vector<int64_t>*, gpu::PartialTargetList> targets_of[2];
+        if (out_dev != nullptr) {
+            std::vector<const std::vector<int64_t>*> distinct[2];
+            for (const auto& f : info) {
+                if (targets_of[0].emplace(f.mi, gpu::PartialTargetList{}).second) distinct[0].push_back(f.mi);
+                if (targets_of[1].emplace(f.mj, gpu::PartialTargetList{}).second) distinct[1].push_back(f.mj);
+            }
+            const size_t n0 = distinct[0].size(), nt = n0 + distinct[1].size();
+#pragma omp parallel for schedule(dynamic, 4) if (nt > 1 && !omp_in_parallel())
+            for (size_t t = 0; t < nt; ++t) {
+                const int s = t < n0 ? 0 : 1;
+                const std::vector<int64_t>* m = s == 0 ? distinct[0][t] : distinct[1][t - n0];
+                targets_of[s].find(m)->second = target_list(s == 0 ? Rh : Ch, *m);  // (lookups only: no rehash)
+            }
+        }
+        auto targets_at = [&](const std::vector<int64_t>* members, int s) { return &targets_of[s].at(members); };
         while (i0 < pairs.size()) {
             size_t bytes = 0, chunks = 0, i1 = i0;
             std::unordered_map<const fmm::gpu::PartialDeviceRecord*, std::unordered_set<int64_t>> seen;
@@ -3125,13 +3136,19 @@ void partial_schur_blocks_device(fmm::ParallelTree<CoordType, DataType>& tree, i
                 fmm::gpu::PartialPairTargets<DataType> targets;
                 targets.out = out_dev;
                 targets.add = sketch != nullptr ? 2 : 1;
+                const size_t ng = i1 - i0;
+                targets.base.resize(ng);
+                targets.ors.resize(ng);
+                targets.ocs.resize(ng);
+                targets.rows.resize(ng);
+                targets.cols.resize(ng);
                 for (size_t q = i0; q < i1; ++q) {
                     const size_t k = static_cast<size_t>(info[q].inter);
-                    targets.base.push_back(ooff[k]);
-                    targets.ors.push_back(layout.ors[k]);
-                    targets.ocs.push_back(layout.ocs[k]);
-                    targets.rows.push_back(targets_at(info[q].mi, Rh));
-                    targets.cols.push_back(targets_at(info[q].mj, Ch));
+                    targets.base[q - i0] = ooff[k];
+                    targets.ors[q - i0] = layout.ors[k];
+                    targets.ocs[q - i0] = layout.ocs[k];
+                    targets.rows[q - i0] = targets_at(info[q].mi, 0);
+                    targets.cols[q - i0] = targets_at(info[q].mj, 1);
                 }
                 lap(1);
                 fmm::gpu::partial_device_pairs(work, group, static_cast<DataType*>(nullptr), &targets);
@@ -3564,10 +3581,11 @@ void partial_schur_blocks_device(fmm::ParallelTree<CoordType, DataType>& tree, i
             std::vector<fmm::gpu::IndexCopyItemT<S>> copies;
             fmm::gpu::VBatch<DataType> steps;
             int gm = 0, gn = 0, cm = 0, cn = 0;
-            auto list = [&](const std::vector<int64_t>& v) {
-                std::vector<int> ints(v.begin(), v.end());
+            auto list = [&](const std::vector<int64_t>& v) {  // (converted straight into the image)
                 fmm::gpu::IndexList l;
-                l.offset = static_cast<int64_t>(meta.append(ints));
+                l.offset = static_cast<int64_t>(meta.alloc(v.size() * sizeof(int)));
+                int* p = reinterpret_cast<int*>(meta.host(static_cast<size_t>(l.offset)));
+                for (size_t i = 0; i < v.size(); ++i) p[i] = static_cast<int>(v[i]);
                 return l;
             };
             size_t at = 0;
@@ -5173,28 +5191,46 @@ void extract_partial_blocks(fmm::ParallelTree<CoordType, DataType>* tree, MPI_Co
     std::vector<std::vector<char>> send(static_cast<size_t>(csize));
     if (tree != nullptr) {
         // ---- the blocks in landing order, 0-based F22 indices
-        std::vector<int64_t> rows, cols, nr(static_cast<size_t>(ninter)), nc(static_cast<size_t>(ninter)), len(nc);
+        std::vector<int64_t> nr(static_cast<size_t>(ninter)), nc(static_cast<size_t>(ninter)), len(nc);
         std::vector<int64_t> boff(static_cast<size_t>(ninter) + 1, 0);
         // (and the sketches' Omega in that order)
         std::vector<int64_t> sk_dims, sk_off(1, 0);
-        std::vector<int> sk_pos, sk_dest;
-        std::vector<double> sk_val;
+        // (each block's place in the packed lists first, then a block a thread: pushed one entry at a time
+        // these copies were a visible part of a sequential front's calls)
+        std::vector<int64_t> ro(static_cast<size_t>(ninter) + 1, 0), co(ro);
+        if (sketch != nullptr) {
+            sk_dims.resize(static_cast<size_t>(ninter));
+            sk_off.assign(static_cast<size_t>(ninter) + 1, 0);
+        }
         for (size_t q = 0; q < order.size(); ++q) {
-            const int64_t n = order[q];
-            for (int64_t i = r0[static_cast<size_t>(n)]; i < r0[static_cast<size_t>(n) + 1]; ++i) rows.push_back(int64_t{allrows[i]} - 1);
-            for (int64_t j = c0[static_cast<size_t>(n)]; j < c0[static_cast<size_t>(n) + 1]; ++j) cols.push_back(int64_t{allcols[j]} - 1);
+            const size_t n = static_cast<size_t>(order[q]);
             nr[q] = rowidx[n];
             nc[q] = colidx[n];
-            len[q] = out_len(n);
+            len[q] = out_len(static_cast<int64_t>(n));
             boff[q + 1] = boff[q] + len[q];
+            ro[q + 1] = ro[q] + rowidx[n];
+            co[q + 1] = co[q] + colidx[n];
             if (sketch != nullptr) {
-                sk_dims.push_back(sketch->dims[n]);
-                for (int64_t e = sketch->omega_off[n]; e < sketch->omega_off[n + 1]; ++e) {
-                    sk_pos.push_back(sketch->omega_pos[e]);
-                    sk_dest.push_back(sketch->omega_dest[e]);
-                    sk_val.push_back(sketch->omega_val[e]);
-                }
-                sk_off.push_back(static_cast<int64_t>(sk_pos.size()));
+                sk_dims[q] = sketch->dims[n];
+                sk_off[q + 1] = sk_off[q] + (sketch->omega_off[n + 1] - sketch->omega_off[n]);
+            }
+        }
+        std::vector<int64_t> rows(static_cast<size_t>(ro.back())), cols(static_cast<size_t>(co.back()));
+        std::vector<int> sk_pos(static_cast<size_t>(sk_off.back())), sk_dest(sk_pos.size());
+        std::vector<double> sk_val(sk_pos.size());
+#pragma omp parallel for schedule(dynamic, 16) if (order.size() > 1 && !omp_in_parallel())
+        for (size_t q = 0; q < order.size(); ++q) {
+            const size_t n = static_cast<size_t>(order[q]);
+            int64_t* rq = rows.data() + ro[q];
+            for (int64_t i = r0[n]; i < r0[n + 1]; ++i) *rq++ = int64_t{allrows[i]} - 1;
+            int64_t* cq = cols.data() + co[q];
+            for (int64_t j = c0[n]; j < c0[n + 1]; ++j) *cq++ = int64_t{allcols[j]} - 1;
+            if (sketch != nullptr) {
+                const int64_t e0 = sketch->omega_off[n], e1 = sketch->omega_off[n + 1];
+                const size_t at = static_cast<size_t>(sk_off[q]);
+                std::copy(sketch->omega_pos + e0, sketch->omega_pos + e1, sk_pos.begin() + at);
+                std::copy(sketch->omega_dest + e0, sketch->omega_dest + e1, sk_dest.begin() + at);
+                std::copy(sketch->omega_val + e0, sketch->omega_val + e1, sk_val.begin() + at);
             }
         }
         PartialSketch sk_ordered;
@@ -5211,7 +5247,9 @@ void extract_partial_blocks(fmm::ParallelTree<CoordType, DataType>* tree, MPI_Co
         // computed into alldat_loc in place
         const bool alone = csize == 1;
         // (partial_schur_blocks writes all of its out: not zero-filled here)
-        fmm::HostBuffer<DataType> part(alone ? 0 : static_cast<size_t>(std::max<int64_t>(boff.back(), 1)));
+        // (kept over the calls, as the landed sums: a fresh one a call faulted its pages in again as they were written)
+        struct PartTag;
+        fmm::KeptBuffer<DataType, PartTag> part(alone ? 0 : static_cast<size_t>(std::max<int64_t>(boff.back(), 1)));
         DataType* sums = alone ? alldat_loc : part.data();
         double xm = xtrace ? MPI_Wtime() : 0.0;
         partial_schur_blocks(*tree, ninter, rows.data(), nr.data(), cols.data(), nc.data(), sums, false, extract_mode,
@@ -5243,11 +5281,12 @@ void extract_partial_blocks(fmm::ParallelTree<CoordType, DataType>* tree, MPI_Co
                 if (c > INT_MAX) throw std::runtime_error("extract_partial_blocks: a source rank's blocks over 2^31 entries");
                 counts[static_cast<size_t>(lands[order[q]])] = static_cast<int>(c);
             }
-            fmm::HostBuffer<DataType> landed(static_cast<size_t>(std::max(counts[static_cast<size_t>(srank)], 1)));
+            struct LandedTag;
+            fmm::KeptBuffer<DataType, LandedTag> landed(static_cast<size_t>(std::max(counts[static_cast<size_t>(srank)], 1)));
             if (ssize > 1) {
                 MPI_Reduce_scatter(part.data(), landed.data(), counts.data(), partial_mpi_type<DataType>(), MPI_SUM, tree->comm);
             } else {
-                std::copy(part.begin(), part.begin() + counts[0], landed.begin());
+                std::copy(part.data(), part.data() + counts[0], landed.data());
             }
             if (xtrace) {
                 const double now = MPI_Wtime();

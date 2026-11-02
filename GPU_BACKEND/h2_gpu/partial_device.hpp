@@ -952,12 +952,14 @@ char* partial_values_exchange(PartialDeviceWork& work, MPI_Comm comm,
                    "partial CB exchange");
     }
     // the messages: from and into device memory, or host copies of it
-    HostBuffer<char> hs, hr;  // (written in full: the download, the messages)
+    // (written in full: the download, the messages; kept over the calls, their pages faulted in once)
+    struct SendTag;
+    struct RecvTag;
+    KeptBuffer<char, SendTag> hs(direct ? 0 : sbytes);
+    KeptBuffer<char, RecvTag> hr(direct ? 0 : rbytes);
     char* s_msg = sbuf;
     char* r_msg = rbuf;
     if (!direct) {
-        hs.resize(sbytes);
-        hr.resize(rbytes);
         if (sbytes > 0) work.download(hs.data(), sbuf, sbytes);
         s_msg = hs.data();
         r_msg = hr.data();
