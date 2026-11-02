@@ -14,6 +14,9 @@
 
 #include <omp.h>
 
+#include <algorithm>
+#include <cstdint>
+
 namespace fmm {
 
 // `#pragma omp parallel default(shared) if (parallel)` around region(), except
@@ -30,6 +33,25 @@ inline void omp_parallel_if(bool parallel, Region&& region) {
         region();
     } else {
         region();
+    }
+}
+
+// Column pieces of H2_GEMM_PIECE columns as OpenMP tasks, for the threads a
+// small wave leaves idle: for a function that is one gemm call on its
+// columns, the same entries bit for bit as the call cut into them (OpenBLAS's
+// zgemm packs op(B) in blocks of 6 columns and computes a call's last block
+// differently, so a call cut at multiples of 6 from its first column gives the
+// same bits, dgemm at multiples of 4: h2_c1_work/topcpu/bench
+// zgemm_probe*.cpp, 2026-11-01).
+constexpr int64_t H2_GEMM_PIECE = 48;
+// one gemm call's columns [0, columns) in pieces of `width` columns (a
+// multiple of 6)
+template <typename Function>
+inline void gemm_column_pieces(int64_t columns, const Function& function, int64_t width = H2_GEMM_PIECE) {
+    const int64_t count = (columns + width - 1) / width;
+    #pragma omp taskloop grainsize(1) default(shared)
+    for (int64_t i = 0; i < count; ++i) {
+        function(i * width, std::min(columns, (i + 1) * width));
     }
 }
 

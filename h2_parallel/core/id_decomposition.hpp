@@ -15,6 +15,7 @@
 #include <cstring>
 #include <chrono>
 #include "blas_declare.hpp"
+#include "parallel_geqp3.hpp"
 #include <cassert>
 
 /*used blas functions*/
@@ -326,6 +327,8 @@ IDResult<DataType> compute_id(
 // abs_tolerance: the absolute floor (id_absolute_tolerance; 0: the relative
 // rule |R_kk| > tolerance |R_11| only).  With a floor the rank can be 0 for a
 // nonzero A, which the callers treat as a zero A (ensure_nonempty_box_id_rank).
+// split_threads: the QRCP's products over up to that many threads (a small
+// wave's idle ones; geqp3_tasks, bitwise the reference's).
 template<typename DataType>
 IDResult<DataType> compute_id_complex(
     DataType* A,
@@ -334,7 +337,8 @@ IDResult<DataType> compute_id_complex(
     int64_t lda,
     double tolerance,
     int64_t max_rank,
-    double abs_tolerance) {
+    double abs_tolerance,
+    int split_threads = 1) {
     
     static_assert(std::is_same_v<DataType, double> || 
                   std::is_same_v<DataType, std::complex<double>>,
@@ -364,54 +368,8 @@ IDResult<DataType> compute_id_complex(
     // Permutation and Householder reflectors
     std::vector<int> JPIV(N, 0);  // Initialize to 0: all columns free
     std::vector<DataType> TAU(minMN);
-    
-    // Workspace query
-    int LWORK = -1;
-    std::vector<DataType> WORK(1);
     int INFO = 0;
-    
-    if constexpr (std::is_same_v<DataType, double>) {
-        dgeqp3_(&M, &N, A, &LDA,
-                JPIV.data(), TAU.data(),
-                WORK.data(), &LWORK, &INFO);
-        
-        if (INFO != 0) {
-            throw std::runtime_error("RRQR workspace query failed with INFO = " + 
-                                   std::to_string(INFO));
-        }
-        
-        LWORK = static_cast<int>(WORK[0]);
-        WORK.resize(LWORK);
-        
-        dgeqp3_(&M, &N, A, &LDA,
-                JPIV.data(), TAU.data(),
-                WORK.data(), &LWORK, &INFO);
-    } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-        std::vector<double> RWORK(2 * N);
-        
-        zgeqp3_(&M, &N, A, &LDA,
-                JPIV.data(), TAU.data(),
-                WORK.data(), &LWORK,
-                RWORK.data(), &INFO);
-        
-        if (INFO != 0) {
-            throw std::runtime_error("RRQR workspace query failed with INFO = " + 
-                                   std::to_string(INFO));
-        }
-        
-        LWORK = static_cast<int>(WORK[0].real());
-        WORK.resize(LWORK);
-        
-        zgeqp3_(&M, &N, A, &LDA,
-                JPIV.data(), TAU.data(),
-                WORK.data(), &LWORK,
-                RWORK.data(), &INFO);
-    }
-    
-    if (INFO != 0) {
-        throw std::runtime_error("RRQR factorization failed with INFO = " + 
-                               std::to_string(INFO));
-    }
+    geqp3_tasks(M, N, A, LDA, JPIV.data(), TAU.data(), split_threads);
     
     // Determine rank from diagonal of R
     // |R(i,i)| <= max(tolerance * |R(1,1)|, abs_tolerance) means we stop

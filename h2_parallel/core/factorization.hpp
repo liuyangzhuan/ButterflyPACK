@@ -422,8 +422,10 @@ inline void split_columns_chunked(
     const Function& function) {
     if (split_threads > 1 && columns >= 2 * H2_SPLIT_COLUMN_MIN) {
         // as many tasks as the split allows, each of at least
-        // H2_SPLIT_COLUMN_MIN columns (an output column's arithmetic does not
-        // depend on which chunk it is in: split 1 and 16 give the same bits)
+        // H2_SPLIT_COLUMN_MIN columns (a zgemm chunk's last columns are
+        // computed differently unless chunks start at multiples of 6, so the
+        // split changes the last bits: --h2_gemm_split 128 moved a 160^3
+        // logdet's phase by 1e-9, 2026-11-01)
         const int tasks = static_cast<int>(
             std::min<int64_t>(split_threads, columns / H2_SPLIT_COLUMN_MIN));
         const int64_t chunk = (columns + tasks - 1) / tasks;
@@ -442,6 +444,44 @@ inline void split_columns_chunked(
                 std::min<int64_t>(
                     columns, (chunk + 1) * H2_SPLIT_COLUMN_CHUNK));
         }
+    }
+}
+
+// (column pieces of H2_GEMM_PIECE columns: gemm_column_pieces, omp_region.hpp)
+// The pieces only where the wave leaves a box this many threads (the few
+// boxes of the top levels): with 27-37 boxes a wave (split 3) they made many
+// small calls, which this sequential OpenBLAS (USE_LOCKING) serializes, and
+// the level took 5 s longer at 160^3 on 8 nodes; the split's chunks there.
+constexpr int H2_PIECES_MIN_SPLIT = 8;
+inline bool h2_pieces(int split_threads) { return split_threads >= H2_PIECES_MIN_SPLIT; }
+// split_columns_chunked's column ranges with that split, each in pieces
+template <typename Function>
+inline void split_columns_chunked_in_pieces(
+    int64_t columns,
+    int split_threads,
+    const Function& function) {
+    std::vector<std::pair<int64_t, int64_t>> pieces;
+    auto add = [&](int64_t c0, int64_t c1) {
+        for (int64_t p = c0; p < c1; p += H2_GEMM_PIECE) {
+            pieces.emplace_back(p, std::min(c1, p + H2_GEMM_PIECE));
+        }
+    };
+    if (split_threads > 1 && columns >= 2 * H2_SPLIT_COLUMN_MIN) {
+        const int tasks = static_cast<int>(
+            std::min<int64_t>(split_threads, columns / H2_SPLIT_COLUMN_MIN));
+        const int64_t chunk = (columns + tasks - 1) / tasks;
+        for (int64_t task = 0; task < tasks; ++task) {
+            add(task * chunk, std::min<int64_t>(columns, (task + 1) * chunk));
+        }
+    } else {
+        for (int64_t c0 = 0; c0 < columns; c0 += H2_SPLIT_COLUMN_CHUNK) {
+            add(c0, std::min<int64_t>(columns, c0 + H2_SPLIT_COLUMN_CHUNK));
+        }
+    }
+    const int64_t count = static_cast<int64_t>(pieces.size());
+    #pragma omp taskloop grainsize(1) default(shared)
+    for (int64_t i = 0; i < count; ++i) {
+        function(pieces[static_cast<size_t>(i)].first, pieces[static_cast<size_t>(i)].second);
     }
 }
 
@@ -504,8 +544,10 @@ void apply_right_inverse_in_place(
     const DataType* factor = inverse_or_factor.data.data();
     constexpr int64_t row_chunk_size = 512;
     const int64_t chunks = (rows + row_chunk_size - 1) / row_chunk_size;
+    // (h2_pieces: every chunk a task, for the threads the wave leaves idle;
+    // the chunks, so the bits, do not depend on the split)
     const int tasks = (split_threads > 1 && chunks > 1)
-        ? static_cast<int>(std::min<int64_t>(split_threads, chunks))
+        ? static_cast<int>(h2_pieces(split_threads) ? chunks : std::min<int64_t>(split_threads, chunks))
         : 1;
     auto run_chunks = [&](const auto& solve_rows) {
         if (tasks > 1) {
@@ -3550,19 +3592,22 @@ void apply_owner_deferred_xnn_updates_for_candidate_box(
 
             const DataType* candidate_rows =
                 source_box->X_NR.data.data() + candidate_col_offset;
-            split_columns_chunked(
-                n_candidate, scratch.split_threads,
-                [&](int64_t column_begin, int64_t column_end) {
-                    int split_columns =
-                        static_cast<int>(column_end - column_begin);
-                    gemm_("N", "T", &m, &split_columns, &k,
-                        &alpha,
-                        source_rows_ptr, &lda,
-                        candidate_rows + column_begin, &ldb,
-                        &beta,
-                        block_update.data() + column_begin * block.rows,
-                        &ldc);
-                });
+            auto product = [&](int64_t column_begin, int64_t column_end) {
+                int split_columns =
+                    static_cast<int>(column_end - column_begin);
+                gemm_("N", "T", &m, &split_columns, &k,
+                    &alpha,
+                    source_rows_ptr, &lda,
+                    candidate_rows + column_begin, &ldb,
+                    &beta,
+                    block_update.data() + column_begin * block.rows,
+                    &ldc);
+            };
+            if (scratch.split_threads > 1) {
+                split_columns_chunked_in_pieces(n_candidate, scratch.split_threads, product);
+            } else {
+                split_columns_chunked(n_candidate, scratch.split_threads, product);
+            }
 
             if (candidate_unarrived) {
                 if (block.kind == DeferredXnnTargetKind::FAR_A_NS) {
@@ -5116,7 +5161,8 @@ IDResult<DataType> compute_id_from_workspace(
     int64_t rows,
     int64_t cols,
     double tolerance,
-    double abs_tolerance) {
+    double abs_tolerance,
+    int split_threads = 1) {
 
     if (rows == 0) {
         IDResult<DataType> empty_id;
@@ -5129,7 +5175,7 @@ IDResult<DataType> compute_id_from_workspace(
     }
     std::vector<DataType> factored = workspace;
     return compute_id_complex(
-        factored.data(), rows, cols, rows, tolerance, 0, abs_tolerance);
+        factored.data(), rows, cols, rows, tolerance, 0, abs_tolerance, split_threads);
 }
 
 template<typename DataType>
@@ -5249,7 +5295,8 @@ void append_adaptive_id_training_rows(
     int64_t workspace_cols,
     IDAdaptiveStats* stats = nullptr,
     const int64_t* column_ids = nullptr,
-    const std::vector<int64_t>* id_columns = nullptr) {
+    const std::vector<int64_t>* id_columns = nullptr,
+    int split_threads = 1) {  // the target's IDs over that many tasks
 
     if (stats != nullptr) *stats = IDAdaptiveStats{};
     if (tree->id_proxy_mode != 2 || workspace_cols == 0) return;
@@ -5266,7 +5313,7 @@ void append_adaptive_id_training_rows(
         }
         int64_t sub_rows = workspace_rows;
         append_adaptive_id_training_rows(tree, box, kernel, tolerance, is_symmetric, sub, sub_rows, nk, stats,
-                                         sub_ids.data());
+                                         sub_ids.data(), nullptr, split_threads);
         if (sub_rows == workspace_rows) return;
         const int64_t old_rows = workspace_rows;
         std::vector<DataType> expanded(static_cast<size_t>(sub_rows * workspace_cols), DataType{0});
@@ -5326,14 +5373,14 @@ void append_adaptive_id_training_rows(
     size_t queue_head = 0;
 
     IDResult<DataType> base_id = compute_id_from_workspace(
-        workspace, workspace_rows, workspace_cols, tolerance, abs_tolerance);
+        workspace, workspace_rows, workspace_cols, tolerance, abs_tolerance, split_threads);
     std::vector<IDResult<DataType>> extra_ids;
     int64_t extra_rank = 0;
     const int64_t sample_batch = std::max<int64_t>(1, tree->id_adaptive_batch);
 
     auto recompute_clean_id = [&]() {
         base_id = compute_id_from_workspace(
-            workspace, workspace_rows, workspace_cols, tolerance, abs_tolerance);
+            workspace, workspace_rows, workspace_cols, tolerance, abs_tolerance, split_threads);
         extra_ids.clear();
         extra_rank = 0;
         ++st.recomputes;
@@ -5478,6 +5525,7 @@ void gather_id_workspace(
     bool adaptive_rows = true,  // false: the caller selects them (against its sketch)
     int split_threads = 1) {  // the kernel blocks split over that many tasks (a small wave)
 
+    BoxWorkScope box_work;  // (no QRCP helper task held on this thread)
     if (adaptive_stats != nullptr) *adaptive_stats = IDAdaptiveStats{};
     if (box == nullptr || box->num_points == 0) {
         workspace_rows = 0;
@@ -5999,7 +6047,8 @@ void gather_id_workspace(
     if (adaptive_rows) {
         append_adaptive_id_training_rows(
             tree, box, kernel, id_tolerance, is_symmetric,
-            workspace, workspace_rows, workspace_cols, adaptive_stats);
+            workspace, workspace_rows, workspace_cols, adaptive_stats,
+            nullptr, nullptr, split_threads);
     }
 
     // if (DEBUG){
@@ -6464,10 +6513,20 @@ void compute_step_two_internal(
         m = total_neighbor_points; n = k; kk = r;
         alpha = 1.0; beta = 0.0;
         
-        gemm_("N", "N", &m, &n, &kk,
-               &alpha, temp2.data(), &m,
-               X_RS_original.data(), &kk,
-               &beta, X_NS_update.data(), &m);
+        // (a small wave: in column pieces over the idle threads, the same
+        // bits as the one call)
+        auto update = [&](int64_t c0, int64_t c1) {
+            int columns = static_cast<int>(c1 - c0);
+            gemm_("N", "N", &m, &columns, &kk,
+                   &alpha, temp2.data(), &m,
+                   X_RS_original.data() + c0 * r, &kk,
+                   &beta, X_NS_update.data() + c0 * total_neighbor_points, &m);
+        };
+        if (h2_pieces(scratch.split_threads)) {
+            gemm_column_pieces(n, update);
+        } else {
+            update(0, n);
+        }
         
         // Segment and update each neighbor
         int64_t current_row = 0;
@@ -8776,6 +8835,7 @@ void gather_id_target_streamed(
     bool on_boundary,
     double id_tolerance) {
 
+    BoxWorkScope box_work;  // (no QRCP helper task held on this thread)
     scratch.streamed_sketch_valid = false;
     scratch.id_adaptive = IDAdaptiveStats{};
 
@@ -8976,9 +9036,10 @@ void gather_id_target_streamed(
     // Computes P_E = X_RR_full_E * temp2_E[B-rows]^T (r x n) for box-source s
     // into P (r x n), through the row positions and the TB gather buffer
     // given; may set box_src_r[s] = 0 (nothing to contribute).  `split`: the
-    // P product's column split (1 inside a task).
+    // P product's column split; `pieces`: its calls cut further over tasks
+    // (split_columns_chunked_in_pieces: the same bits).
     auto compute_P_into = [&](size_t s, std::vector<int64_t>& positions, std::vector<DataType>& TB,
-                              DataType* P, int split) -> const DataType* {
+                              DataType* P, int split, bool pieces) -> const DataType* {
         BoxData<CoordType, DataType>* src_box = box_src_boxes[s];
         const int64_t r = box_src_r[s];
         if (r == 0 || !src_box->X_NR.is_allocated()) {
@@ -9026,18 +9087,23 @@ void gather_id_target_streamed(
             int lda = static_cast<int>(src_box->X_RR_full.lda);
             int ldb = static_cast<int>(n);
             int ldc = static_cast<int>(r);
-            split_columns_chunked(n, Kp, [&](int64_t c0, int64_t c1) {
+            auto product = [&](int64_t c0, int64_t c1) {
                 int n_t = static_cast<int>(c1 - c0);
                 gemm_("N", "T", &m_i, &n_t, &k_i, &alpha, src_box->X_RR_full.data.data(), &lda,
                       TB.data() + c0, &ldb, &beta, P + c0 * r, &ldc);
-            });
+            };
+            if (pieces) {
+                split_columns_chunked_in_pieces(n, Kp, product);
+            } else {
+                split_columns_chunked(n, Kp, product);
+            }
         }
         return P;
     };
     // ... into the box's single P slot (the loop over the sources below)
     auto compute_P = [&](size_t s) -> const DataType* {
         return compute_P_into(s, scratch.stream_positions, scratch.stream_Trow, P_all.data(),
-                              scratch.split_threads);
+                              scratch.split_threads, h2_pieces(scratch.split_threads));
     };
 
     // ------------------------------------------------------------------
@@ -9491,7 +9557,8 @@ void gather_id_target_streamed(
     if (sketch_space_fill && scratch.split_threads > 1 && box_src_mortons.size() > 1) {
         // A small wave (fewer boxes than threads, 2026-10-22): the sources'
         // P_E and W_E in parallel across the threads the wave leaves idle,
-        // one task a source, then folded into the sketch by column chunks,
+        // one task a source (h2_pieces: its P product in column pieces over
+        // the team), then folded into the sketch by column chunks (pieces),
         // every chunk taking the sources in their order - the same operations
         // in the same sequence on every entry as the loop below.
         const size_t nsrc = box_src_mortons.size();
@@ -9512,14 +9579,16 @@ void gather_id_target_streamed(
         FMM_PHASE_LAP_BEGIN(fill_lap);
         std::exception_ptr fill_failure;
         std::mutex fill_failure_mutex;
-        const int fill_tasks = static_cast<int>(std::min<size_t>(nsrc, static_cast<size_t>(scratch.split_threads)));
+        const bool pieces = h2_pieces(scratch.split_threads);
+        const int fill_tasks = static_cast<int>(
+            pieces ? nsrc : std::min<size_t>(nsrc, static_cast<size_t>(scratch.split_threads)));
         #pragma omp taskloop num_tasks(fill_tasks) default(shared)
         for (size_t s = 0; s < nsrc; ++s) {
             auto& ps = per_source[s];
             ps.any_rows = false;
             try {
                 ps.P.resize(static_cast<size_t>(std::max<int64_t>(box_src_r[s], 1) * n));
-                compute_P_into(s, ps.positions, ps.Trow, ps.P.data(), 1);
+                compute_P_into(s, ps.positions, ps.Trow, ps.P.data(), 1, pieces);
                 const int64_t r = box_src_r[s];
                 if (r > 0) {
                     ps.any_rows = accumulate_W(s, box_src_boxes[s], r, ps.positions, ps.Trow, ps.TrowT, ps.W, false);
@@ -9537,7 +9606,7 @@ void gather_id_target_streamed(
             int ldc = static_cast<int>(n);
             DataType alpha = DataType{-1.0};
             DataType beta = DataType{1.0};
-            split_columns_chunked(d, scratch.split_threads, [&](int64_t c0, int64_t c1) {
+            auto fold = [&](int64_t c0, int64_t c1) {
                 int n_t = static_cast<int>(c1 - c0);
                 for (size_t s = 0; s < nsrc; ++s) {
                     const int64_t r = box_src_r[s];
@@ -9547,7 +9616,12 @@ void gather_id_target_streamed(
                     gemm_("T", "N", &m_i, &n_t, &k_i, &alpha, per_source[s].P.data(), &ld,
                           per_source[s].W.data() + c0 * r, &ld, &beta, Oacc.data() + c0 * n, &ldc);
                 }
-            });
+            };
+            if (pieces) {
+                split_columns_chunked_in_pieces(d, scratch.split_threads, fold);
+            } else {
+                split_columns_chunked(d, scratch.split_threads, fold);
+            }
         }
         FMM_PHASE_LAP(fill_lap, SK_FILL_GEMM);
     } else if (sketch_space_fill) {
@@ -9579,11 +9653,16 @@ void gather_id_target_streamed(
             int ldb = static_cast<int>(r);
             int ldc = static_cast<int>(n);
             const int Kg = scratch.split_threads;
-            split_columns_chunked(d, Kg, [&](int64_t c0, int64_t c1) {
+            auto fold = [&](int64_t c0, int64_t c1) {
                 int n_t = static_cast<int>(c1 - c0);
                 gemm_("T", "N", &m_i, &n_t, &k_i, &alpha, P, &lda, W.data() + c0 * r, &ldb,
                       &beta, Oacc.data() + c0 * n, &ldc);
-            });
+            };
+            if (h2_pieces(Kg)) {
+                split_columns_chunked_in_pieces(d, Kg, fold);
+            } else {
+                split_columns_chunked(d, Kg, fold);
+            }
             FMM_PHASE_LAP(gemm_lap, SK_FILL_GEMM);
         }
     }
@@ -9622,7 +9701,8 @@ void gather_id_target_streamed(
     int64_t sketch_rows = d;
     append_adaptive_id_training_rows(
         tree, box, kernel, id_tolerance, true,
-        scratch.sketch_storage, sketch_rows, n, &scratch.id_adaptive);
+        scratch.sketch_storage, sketch_rows, n, &scratch.id_adaptive,
+        nullptr, nullptr, scratch.split_threads);
 
     scratch.workspace_rows = total_rows + (sketch_rows - d);
     scratch.workspace_cols = n;
@@ -9660,6 +9740,7 @@ void gather_id_target_streamed_nonsymmetric(
     // slots of the box (an eliminated box's skeleton before the phase), the
     // fill located through them; else every point of the box.
 
+    BoxWorkScope box_work;  // (no QRCP helper task held on this thread)
     scratch.streamed_sketch_valid = false;
     scratch.id_adaptive = IDAdaptiveStats{};
     if (box == nullptr || box->num_points == 0) {
@@ -10118,7 +10199,7 @@ void gather_id_target_streamed_nonsymmetric(
         }
     }
     append_adaptive_id_training_rows(tree, box, kernel, id_tolerance, false, Y, sketch_rows, n, &scratch.id_adaptive,
-                                     column_ids, partial_ids ? &id_columns : nullptr);
+                                     column_ids, partial_ids ? &id_columns : nullptr, scratch.split_threads);
     scratch.workspace_rows = total_rows + (sketch_rows - d);
     scratch.workspace_cols = n;
     scratch.streamed_sketch_rows = sketch_rows;
@@ -10144,6 +10225,7 @@ void compute_and_modify(
 
     static_assert(std::is_same_v<DataType, double> || std::is_same_v<DataType, std::complex<double>>,
                   "Only double precision supported currently");
+    BoxWorkScope box_work;  // (no QRCP helper task held on this thread)
     auto& workspace = scratch.workspace;
     const int64_t workspace_rows = scratch.workspace_rows;
     const int64_t workspace_cols = scratch.workspace_cols;
@@ -10254,17 +10336,17 @@ void compute_and_modify(
                 scratch.streamed_sketch_rows,
                 workspace_cols,
                 scratch.streamed_sketch_rows,
-                tolerance.relative, 0, tolerance.absolute);
+                tolerance.relative, 0, tolerance.absolute, scratch.split_threads);
         } else if (use_sketch != 0) {
             fmm::id_sketch(workspace.data(), workspace_rows, workspace_cols, workspace_rows, sketch_storage,
                            static_cast<uint64_t>(box->morton_index + 1));
             id_result = fmm::compute_id_complex(sketch_storage.data(), sketch_rows, workspace_cols, sketch_rows,
-                                                tolerance.relative, 0, tolerance.absolute);
+                                                tolerance.relative, 0, tolerance.absolute, scratch.split_threads);
         } else {
             id_result = fmm::compute_id_complex(
                 workspace.data(),
                 workspace_rows, workspace_cols, workspace_rows,
-                tolerance.relative, 0, tolerance.absolute
+                tolerance.relative, 0, tolerance.absolute, scratch.split_threads
             );
         }
         ensure_nonempty_box_id_rank(id_result, workspace_cols);
@@ -10493,16 +10575,28 @@ void compute_and_modify(
     // Compute X_RR, X_RS, X_SR using BLAS
     box->X_RR.set_owned(r, r, std::move(A_RR), MatrixStorage<DataType>::FULL);
     
+    // (a small wave: the r x r products in column pieces over the idle
+    // threads, the same bits as one call)
+    auto r_by_r = [&](const auto& product) {
+        if (h2_pieces(scratch.split_threads)) {
+            gemm_column_pieces(r, product);
+        } else {
+            product(0, r);
+        }
+    };
     if (is_symmetric || is_hermitian) {
         std::vector<DataType> temp1(r * r, 0.0);
         int M = r, N = r, K = k;
         DataType alpha = -1.0, beta = 0.0;
         
         // Compute temp1 = -A_SR^T * T (use transpose since A_RS not allocated)
-        gemm_("T", "N", &M, &N, &K,
-               &alpha, A_SR.data(), &K,  // A_SR is (k × r), transposed to (r × k)
-               T.data.data(), &K,
-               &beta, temp1.data(), &M);
+        r_by_r([&](int64_t c0, int64_t c1) {
+            int columns = static_cast<int>(c1 - c0);
+            gemm_("T", "N", &M, &columns, &K,
+                   &alpha, A_SR.data(), &K,  // A_SR is (k × r), transposed to (r × k)
+                   T.data.data() + c0 * K, &K,
+                   &beta, temp1.data() + c0 * M, &M);
+        });
         
         for (int64_t j = 0; j < r; ++j) {
             for (int64_t i = 0; i < r; ++i) {
@@ -10522,10 +10616,13 @@ void compute_and_modify(
         M = r; N = r; K = k;
         alpha = 1.0; beta = 1.0;
         
-        gemm_("T", "N", &M, &N, &K,
-               &alpha, T.data.data(), &K,
-               temp2.data(), &K,
-               &beta, box->X_RR.data.data(), &M);
+        r_by_r([&](int64_t c0, int64_t c1) {
+            int columns = static_cast<int>(c1 - c0);
+            gemm_("T", "N", &M, &columns, &K,
+                   &alpha, T.data.data(), &K,
+                   temp2.data() + c0 * K, &K,
+                   &beta, box->X_RR.data.data() + c0 * M, &M);
+        });
         
     } else {
         int M = r, N = r, K = k;
