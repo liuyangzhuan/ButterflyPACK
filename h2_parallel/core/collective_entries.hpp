@@ -135,6 +135,9 @@ public:
     // (c_bpack_func_zmn_sketch, BPACK_wrapper.h)
     using SketchCallback = void (*)(int*, int*, int*, int64_t*, int64_t*, int*, int*, int*, int*, int*, int*, int*,
                                     int*, double*, CallbackValue*, int*, int*, int*, void*);
+    // (c_bpack_func_zmn_sketch_device, BPACK_wrapper.h)
+    using SketchDeviceCallback = void (*)(int*, int*, int*, int64_t*, int*, int*, int*, int*, int*, int*, int*, int*,
+                                          double*, void**, int64_t*, int*, void*, int*, void*);
     static constexpr int kRoundRequest = 1;  // (a rank has recorded blocks)
     static constexpr int kRoundActive = 2;   // (a section is running)
     static constexpr int kRoundBusy = 4;     // (a rank may still ask, in the device path's sense)
@@ -201,6 +204,10 @@ public:
     // fetches its kernel rows' blocks without them.
     void set_sketch(SketchCallback callback) { sketch_callback_ = callback; }
     void set_sketch_transposed(SketchCallback callback) { sketch_t_callback_ = callback; }
+    // A sketch callback that adds the sketches into device memory instead
+    // (one rank: fetch_sketches_device); either orientation.
+    void set_sketch_device(SketchDeviceCallback callback) { sketch_device_callback_ = callback; }
+    bool has_sketch_device() const { return sketch_device_callback_ != nullptr; }
     bool symmetric() const { return symmetric_; }
     bool has_sketch() const {
         return sketch_callback_ != nullptr && (symmetric_ || sketch_t_callback_ != nullptr);
@@ -324,58 +331,54 @@ public:
         SketchCallback callback = transposed ? sketch_t_callback_ : sketch_callback_;
         if (callback == nullptr) throw std::logic_error("CollectiveEntries: a sketch request without its callback");
         const double t_gather = MPI_Wtime();
-        int nsketch = checked(static_cast<int64_t>(keys.size()), "sketches");
-        const size_t ns = keys.size();
-        std::vector<int> rowidx(ns), colidx(ns), dims(ns), omegaidx(ns), pgidx(ns, 0), allrows, allcols, omega_row,
-            omega_dest;
-        std::vector<double> omega_val;
-        int64_t nloc = 0, nr = 0, nc = 0, ne = 0;
-        for (const SketchKey& k : keys) {
-            nr += k.nx;
-            nc += k.ny;
-            ne += k.nnz;
-        }
-        allrows.reserve(static_cast<size_t>(nr));
-        allcols.reserve(static_cast<size_t>(nc));
-        omega_row.reserve(static_cast<size_t>(ne));
-        omega_dest.reserve(static_cast<size_t>(ne));
-        omega_val.reserve(static_cast<size_t>(ne));
-        const size_t o = static_cast<size_t>(entry_origin());
-        for (size_t q = 0; q < ns; ++q) {
-            const SketchKey& k = keys[q];
-            if (k.transposed != transposed) throw std::logic_error("CollectiveEntries: a direct sketch of the other orientation");
-            rowidx[q] = checked(k.nx, "a sketch's rows");
-            colidx[q] = checked(k.ny, "a sketch's columns");
-            dims[q] = k.d;
-            omegaidx[q] = checked(k.nnz, "a sketch's entries");
-            for (int64_t i = 0; i < k.nx; ++i) allrows.push_back(checked(k.x[i] + 1, "an index"));
-            for (int64_t j = 0; j < k.ny; ++j) allcols.push_back(checked(k.y[j] + 1, "an index"));
-            for (int64_t e = 0; e < k.nnz; ++e) {
-                omega_row.push_back(k.orow[e] + 1);
-                omega_dest.push_back(k.odest[e] + 1);
-                omega_val.push_back(k.oval[e]);
-            }
-            nloc += static_cast<int64_t>(k.d) * k.ny;
-            origin_blocks_[o] += 1.0;
-            origin_entries_[o] += static_cast<double>(k.d) * static_cast<double>(k.ny);
-            sketch_requests_ += 1.0;
-            sketch_values_ += static_cast<double>(k.d) * static_cast<double>(k.ny);
-            sketch_covered_ += static_cast<double>(k.nx) * static_cast<double>(k.ny);
-        }
-        int nallrows = checked(nr, "the rows"), nallcols = checked(nc, "the columns"), npmap = 1;
-        int64_t nallomega = ne;
+        DirectSketches a = pack_direct(keys, transposed);
+        count_direct(keys);
+        int npmap = 1;
         int pmaps[3] = {1, 1, pids_[0]};
+        std::vector<int> pgidx(keys.size(), 0);
         const double t_callback = MPI_Wtime();
         gather_seconds_ += t_callback - t_gather;
-        callback(&nsketch, &nallrows, &nallcols, &nallomega, &nloc, allrows.data(), allcols.data(), rowidx.data(),
-                 colidx.data(), dims.data(), omegaidx.data(), omega_row.data(), omega_dest.data(), omega_val.data(),
-                 reinterpret_cast<CallbackValue*>(out), pgidx.data(), &npmap, pmaps, quant_);
+        callback(&a.nsketch, &a.nallrows, &a.nallcols, &a.nallomega, &a.nloc, a.allrows.data(), a.allcols.data(),
+                 a.rowidx.data(), a.colidx.data(), a.dims.data(), a.omegaidx.data(), a.omega_row.data(),
+                 a.omega_dest.data(), a.omega_val.data(), reinterpret_cast<CallbackValue*>(out), pgidx.data(), &npmap,
+                 pmaps, quant_);
         const double t_end = MPI_Wtime();
         callback_seconds_ += t_end - t_callback;
-        fetched_entries_ += static_cast<double>(nloc);
+        fetched_entries_ += static_cast<double>(a.nloc);
         ++fetch_rounds_;
         ++rounds_;
         round_seconds_ += t_end - t_gather;
+    }
+    // As fetch_sketches_direct, through the device sketch callback: key n's
+    // sketch added into dout[n] (device memory, d x ny column major, leading
+    // dimension ldo[n], zeroed by the caller; distinct keys' outputs do not
+    // overlap).  False, with nothing written, when the callback declined;
+    // on true its writes are complete.  stream: the caller's, for ordering.
+    bool fetch_sketches_device(const std::vector<SketchKey>& keys, bool transposed, void* const* dout,
+                               const int64_t* ldo, void* stream) {
+        if (!alone()) throw std::logic_error("CollectiveEntries: a direct fetch over several ranks");
+        if (keys.empty()) return true;
+        if (sketch_device_callback_ == nullptr) return false;
+        const double t_gather = MPI_Wtime();
+        DirectSketches a = pack_direct(keys, transposed);
+        std::vector<void*> outs(dout, dout + keys.size());
+        std::vector<int64_t> lds(ldo, ldo + keys.size());
+        int t = transposed ? 1 : 0, done = 0;
+        const double t_callback = MPI_Wtime();
+        gather_seconds_ += t_callback - t_gather;
+        sketch_device_callback_(&a.nsketch, &a.nallrows, &a.nallcols, &a.nallomega, a.allrows.data(), a.allcols.data(),
+                                a.rowidx.data(), a.colidx.data(), a.dims.data(), a.omegaidx.data(), a.omega_row.data(),
+                                a.omega_dest.data(), a.omega_val.data(), outs.data(), lds.data(), &t, stream, &done,
+                                quant_);
+        const double t_end = MPI_Wtime();
+        callback_seconds_ += t_end - t_callback;
+        if (done == 0) return false;
+        count_direct(keys);
+        fetched_entries_ += static_cast<double>(a.nloc);
+        ++fetch_rounds_;
+        ++rounds_;
+        round_seconds_ += t_end - t_gather;
+        return true;
     }
 
     // Records the block for the next round.  Thread safe.
@@ -633,6 +636,64 @@ private:
         }
         return nullptr;
     }
+    // A direct fetch's request lists, 1-based as the callbacks take them (and
+    // the keys counted in the report).
+    struct DirectSketches {
+        int nsketch = 0, nallrows = 0, nallcols = 0;
+        int64_t nallomega = 0, nloc = 0;
+        std::vector<int> rowidx, colidx, dims, omegaidx, allrows, allcols, omega_row, omega_dest;
+        std::vector<double> omega_val;
+    };
+    DirectSketches pack_direct(const std::vector<SketchKey>& keys, bool transposed) {
+        DirectSketches a;
+        a.nsketch = checked(static_cast<int64_t>(keys.size()), "sketches");
+        const size_t ns = keys.size();
+        a.rowidx.resize(ns);
+        a.colidx.resize(ns);
+        a.dims.resize(ns);
+        a.omegaidx.resize(ns);
+        int64_t nr = 0, nc = 0, ne = 0;
+        for (const SketchKey& k : keys) {
+            nr += k.nx;
+            nc += k.ny;
+            ne += k.nnz;
+        }
+        a.allrows.reserve(static_cast<size_t>(nr));
+        a.allcols.reserve(static_cast<size_t>(nc));
+        a.omega_row.reserve(static_cast<size_t>(ne));
+        a.omega_dest.reserve(static_cast<size_t>(ne));
+        a.omega_val.reserve(static_cast<size_t>(ne));
+        for (size_t q = 0; q < ns; ++q) {
+            const SketchKey& k = keys[q];
+            if (k.transposed != transposed) throw std::logic_error("CollectiveEntries: a direct sketch of the other orientation");
+            a.rowidx[q] = checked(k.nx, "a sketch's rows");
+            a.colidx[q] = checked(k.ny, "a sketch's columns");
+            a.dims[q] = k.d;
+            a.omegaidx[q] = checked(k.nnz, "a sketch's entries");
+            for (int64_t i = 0; i < k.nx; ++i) a.allrows.push_back(checked(k.x[i] + 1, "an index"));
+            for (int64_t j = 0; j < k.ny; ++j) a.allcols.push_back(checked(k.y[j] + 1, "an index"));
+            for (int64_t e = 0; e < k.nnz; ++e) {
+                a.omega_row.push_back(k.orow[e] + 1);
+                a.omega_dest.push_back(k.odest[e] + 1);
+                a.omega_val.push_back(k.oval[e]);
+            }
+            a.nloc += static_cast<int64_t>(k.d) * k.ny;
+        }
+        a.nallrows = checked(nr, "the rows");
+        a.nallcols = checked(nc, "the columns");
+        a.nallomega = ne;
+        return a;
+    }
+    void count_direct(const std::vector<SketchKey>& keys) {
+        const size_t o = static_cast<size_t>(entry_origin());
+        for (const SketchKey& k : keys) {
+            origin_blocks_[o] += 1.0;
+            origin_entries_[o] += static_cast<double>(k.d) * static_cast<double>(k.ny);
+            sketch_requests_ += 1.0;
+            sketch_values_ += static_cast<double>(k.d) * static_cast<double>(k.ny);
+            sketch_covered_ += static_cast<double>(k.nx) * static_cast<double>(k.ny);
+        }
+    }
     static int checked(int64_t v, const char* what) {
         if (v < 0 || v > std::numeric_limits<int>::max()) {
             throw std::overflow_error(std::string("CollectiveEntries: ") + what + " exceeds INT_MAX");
@@ -845,6 +906,7 @@ private:
     std::mutex mutex_;
     std::vector<Block> pending_, blocks_;
     SketchCallback sketch_callback_ = nullptr, sketch_t_callback_ = nullptr;
+    SketchDeviceCallback sketch_device_callback_ = nullptr;
     std::vector<Sketch> pending_sketches_, sketches_;
     std::unordered_multimap<uint64_t, size_t> pending_sketch_index_, sketch_index_;
     double sketch_requests_ = 0.0, sketch_values_ = 0.0, sketch_covered_ = 0.0;

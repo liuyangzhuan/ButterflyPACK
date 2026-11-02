@@ -509,6 +509,51 @@ template<typename T>
 using HostBuffer = std::vector<T, DefaultInitAllocator<T>>;
 
 /**
+ * @brief A HostBuffer that a call site (Tag) keeps for the thread's later
+ * calls (up to kKeep bytes), grown and never shrunk, so its pages stay mapped and
+ * faulted in: the partial CB's results copied into a fresh buffer each call
+ * ran at about half the speed of warm memory (Poisson 400^3, 64 ranks).
+ * Its contents are not zeroed (as HostBuffer).  A nested use of the same
+ * site on one thread, or a request above kKeep, gets a buffer of its own.
+ */
+template<typename T, typename Tag>
+class KeptBuffer {
+public:
+    static constexpr size_t kKeep = size_t{1} << 30;  ///< bytes kept at most
+    explicit KeptBuffer(size_t n) {
+        Slot& s = slot();
+        if (!s.busy && n * sizeof(T) <= kKeep) {
+            s.busy = true;
+            held_ = &s;
+            s.buf.resize(n);
+            data_ = s.buf.data();
+        } else {
+            own_.resize(n);
+            data_ = own_.data();
+        }
+    }
+    ~KeptBuffer() {
+        if (held_ != nullptr) held_->busy = false;
+    }
+    KeptBuffer(const KeptBuffer&) = delete;
+    KeptBuffer& operator=(const KeptBuffer&) = delete;
+    T* data() const { return data_; }
+
+private:
+    struct Slot {
+        HostBuffer<T> buf;
+        bool busy = false;
+    };
+    static Slot& slot() {
+        static thread_local Slot s;
+        return s;
+    }
+    Slot* held_ = nullptr;
+    HostBuffer<T> own_;
+    T* data_ = nullptr;
+};
+
+/**
  * @brief Zero n values over the calling rank's threads (one thread when
  * called from a parallel region).  A large buffer is a fresh mapping whose
  * pages fault in as it is first written; one thread zeroed them at ~10 GB/s.
