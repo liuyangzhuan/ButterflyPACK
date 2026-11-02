@@ -1973,7 +1973,12 @@ std::vector<PartialSketchMerge> partial_sketch_merge_plan(const PartialCbSide<Da
         }
         groups[it->second].push_back(i);
     }
-    for (auto& g : groups) {
+    // (a group a thread: a top box's groups hold most of its rows)
+    std::vector<PartialSketchMerge> per(groups.size());
+    std::vector<char> take(groups.size(), 0);
+#pragma omp parallel for schedule(dynamic, 1) if (groups.size() > 1 && !omp_in_parallel())
+    for (size_t gi = 0; gi < groups.size(); ++gi) {
+        const auto& g = groups[gi];
         const auto& b0 = blocks[g[0]];
         const int64_t d = side.sk_dim[static_cast<size_t>(b0.inter)];
         if (d == 0) continue;
@@ -1989,19 +1994,23 @@ std::vector<PartialSketchMerge> partial_sketch_merge_plan(const PartialCbSide<Da
         rows.erase(std::unique(rows.begin(), rows.end()), rows.end());
         const bool merge = any_sketch ? !(g.size() == 1) : static_cast<double>(rows.size()) * static_cast<double>(d) <= now;
         if (!merge) continue;
-        PartialSketchMerge m;
+        PartialSketchMerge& m = per[gi];
         m.box = b0.box;
         m.inter = b0.inter;
         m.src = g;
         for (size_t i : g) {
-            merged[i] = 1;
             std::vector<int32_t> a(blocks[i].rows.size());
             for (size_t t = 0; t < a.size(); ++t)
                 a[t] = static_cast<int32_t>(std::lower_bound(rows.begin(), rows.end(), blocks[i].rows[t]) - rows.begin());
             m.at.push_back(std::move(a));
         }
         m.rows = std::move(rows);
-        plan.push_back(std::move(m));
+        take[gi] = 1;
+    }
+    for (size_t gi = 0; gi < groups.size(); ++gi) {
+        if (!take[gi]) continue;
+        for (size_t i : groups[gi]) merged[i] = 1;
+        plan.push_back(std::move(per[gi]));
     }
     return plan;
 }
@@ -2444,7 +2453,10 @@ void partial_schur_blocks_shared(fmm::ParallelTree<CoordType, DataType>& tree, i
                     if (t < R.blocks.size()) f22_part(R.blocks[t], R, rp[t]);
                     else f22_part(C.blocks[t - R.blocks.size()], C, cp[t - R.blocks.size()]);
                 }
-                std::vector<Pair> pairs;
+                // (a row block a thread: the root's pairs are all of its row and
+                // column blocks', on its one owner)
+                std::vector<std::vector<Pair>> per(R.blocks.size());
+#pragma omp parallel for schedule(dynamic, 1)
                 for (size_t i = 0; i < R.blocks.size(); ++i) {
                     if (rp[i].a.empty()) continue;
                     for (size_t j = 0; j < C.blocks.size(); ++j) {
@@ -2467,9 +2479,12 @@ void partial_schur_blocks_shared(fmm::ParallelTree<CoordType, DataType>& tree, i
                         T.ldb = T.k2();
                         P.terms.push_back(std::move(T));
                         key_groups(P);
-                        pairs.push_back(std::move(P));
+                        per[i].push_back(std::move(P));
                     }
                 }
+                std::vector<Pair> pairs;
+                for (auto& v : per)
+                    for (auto& P : v) pairs.push_back(std::move(P));
                 run_pairs(pairs);
             }
             break;
@@ -2675,8 +2690,7 @@ void partial_schur_blocks_shared(fmm::ParallelTree<CoordType, DataType>& tree, i
                             if (P.common.empty()) return;
                             make_terms(P.terms);
                             if (P.terms.empty()) return;
-                            key_groups(P);
-                            pairs.push_back(std::move(P));
+                            pairs.push_back(std::move(P));  // (its key groups below, a pair a thread)
                         };
                         if (!items[t].remote) {
                             const Block& bi = R.blocks[items[t].index];
@@ -2776,6 +2790,10 @@ void partial_schur_blocks_shared(fmm::ParallelTree<CoordType, DataType>& tree, i
                 std::vector<Pair> pairs;
                 for (auto& ps : item_pairs)
                     for (auto& P : ps) pairs.push_back(std::move(P));
+                // (the top owner's few row blocks pair with many: grouping their common
+                // keys a pair a thread, not a row block a thread)
+#pragma omp parallel for schedule(dynamic, 1)
+                for (size_t p = 0; p < pairs.size(); ++p) key_groups(pairs[p]);
                 run_pairs(pairs);
                 for (const auto& it : items) chunks.release(it.group);
             }
@@ -3265,32 +3283,51 @@ void partial_schur_blocks_device(fmm::ParallelTree<CoordType, DataType>& tree, i
         std::vector<fmm::gpu::BlockCopyItemT<S>> tiles;
         constexpr int kTile = 64;
         std::vector<Chain> made(plan.size());
-        size_t at = 0;
+        // (each source's columns and weights, a group a thread; then the
+        // tiles in plan order)
+        struct SrcCols { std::vector<int> scol, dcol; std::vector<double> w; };
+        std::vector<std::vector<SrcCols>> cols(plan.size());
+        std::vector<size_t> gat(plan.size() + 1, 0);
+        for (size_t g = 0; g < plan.size(); ++g) {
+            const auto& m = plan[g];
+            const int64_t d = side.sk_dim[static_cast<size_t>(m.inter)];
+            gat[g + 1] = gat[g] + fmm::gpu::align_up(m.rows.size() * static_cast<size_t>(d) * D);
+        }
+#pragma omp parallel for schedule(dynamic, 1) if (plan.size() > 1)
         for (size_t g = 0; g < plan.size(); ++g) {
             const auto& m = plan[g];
             const int64_t d = side.sk_dim[static_cast<size_t>(m.inter)], f = side.sk_first[static_cast<size_t>(m.inter)];
-            const int64_t nu = static_cast<int64_t>(m.rows.size());
             Chain& u = made[g];
             u.box = m.box;
             u.inter = m.inter;
             u.rows = m.rows;
             u.members.resize(static_cast<size_t>(d));
             std::iota(u.members.begin(), u.members.end(), f);
-            u.v = reinterpret_cast<DataType*>(arena + at);
-            at += fmm::gpu::align_up(static_cast<size_t>(nu * d) * D);
+            u.v = reinterpret_cast<DataType*>(arena + gat[g]);
+            cols[g].resize(m.src.size());
             for (size_t q = 0; q < m.src.size(); ++q) {
                 const Chain& b = chains[m.src[q]];
-                const int nr = static_cast<int>(b.rows.size());
-                std::vector<int> scol, dcol;
-                std::vector<double> w;
+                auto& sc = cols[g][q];
                 for (size_t c = 0; c < b.members.size(); ++c) {
                     const size_t mm = static_cast<size_t>(b.members[c]);
                     for (int64_t p = side.pos_start[mm]; p < side.pos_start[mm + 1]; ++p) {
-                        scol.push_back(static_cast<int>(c));
-                        dcol.push_back(static_cast<int>(side.pos[static_cast<size_t>(p)]));
-                        w.push_back(side.posw[static_cast<size_t>(p)]);
+                        sc.scol.push_back(static_cast<int>(c));
+                        sc.dcol.push_back(static_cast<int>(side.pos[static_cast<size_t>(p)]));
+                        sc.w.push_back(side.posw[static_cast<size_t>(p)]);
                     }
                 }
+            }
+        }
+        for (size_t g = 0; g < plan.size(); ++g) {
+            const auto& m = plan[g];
+            Chain& u = made[g];
+            const int64_t nu = static_cast<int64_t>(m.rows.size());
+            for (size_t q = 0; q < m.src.size(); ++q) {
+                const Chain& b = chains[m.src[q]];
+                const int nr = static_cast<int>(b.rows.size());
+                const auto& scol = cols[g][q].scol;
+                const auto& dcol = cols[g][q].dcol;
+                const auto& w = cols[g][q].w;
                 const int nt = static_cast<int>(dcol.size());
                 if (nr == 0 || nt == 0) continue;
                 const int64_t ro = static_cast<int64_t>(meta.append(m.at[q]));
@@ -3358,7 +3395,10 @@ void partial_schur_blocks_device(fmm::ParallelTree<CoordType, DataType>& tree, i
                         if (t < R.size()) rk[t] = partial_block_keys(Rs, R[t].members);
                         else ck[t - R.size()] = partial_block_keys(Cs, C[t - R.size()].members);
                     }
-                    std::vector<SPair> sp;
+                    // (a row block a thread: the root's pairs are all of its row and
+                    // column blocks', on its one owner)
+                    std::vector<std::vector<SPair>> per(R.size());
+#pragma omp parallel for schedule(dynamic, 1)
                     for (size_t i = 0; i < R.size(); ++i) {
                         if (rp[i].a.empty()) continue;
                         for (size_t j = 0; j < C.size(); ++j) {
@@ -3383,9 +3423,12 @@ void partial_schur_blocks_device(fmm::ParallelTree<CoordType, DataType>& tree, i
                             T.brows = cp[j].t;
                             P.terms.push_back(std::move(T));
                             key_groups(P);
-                            sp.push_back(std::move(P));
+                            per[i].push_back(std::move(P));
                         }
                     }
+                    std::vector<SPair> sp;
+                    for (auto& v : per)
+                        for (auto& P : v) sp.push_back(std::move(P));
                     run_shared(sp);
                     mark(kRoot);
                     break;
@@ -3456,7 +3499,10 @@ void partial_schur_blocks_device(fmm::ParallelTree<CoordType, DataType>& tree, i
         for (int sd = 0; sd < 2; ++sd) {
             auto& blocks = sides[sd];
             plans[sd].resize(blocks.size());
-#pragma omp parallel for schedule(dynamic, 16)
+            // (16 blocks a chunk where there are many; a block a chunk at the
+            // top levels, whose few blocks are the largest)
+            const int chunk = static_cast<int>(std::clamp<size_t>(blocks.size() / (8 * static_cast<size_t>(omp_get_max_threads())), 1, 16));
+#pragma omp parallel for schedule(dynamic, chunk)
             for (size_t i = 0; i < blocks.size(); ++i) {
                 Chain& b = blocks[i];
                 PartPlan& P = plans[sd][i];
@@ -3817,8 +3863,7 @@ void partial_schur_blocks_device(fmm::ParallelTree<CoordType, DataType>& tree, i
                                 if (P.common.empty()) return;
                                 make_terms(P.terms);
                                 if (P.terms.empty()) return;
-                                key_groups(P);
-                                out_pairs.push_back(std::move(P));
+                                out_pairs.push_back(std::move(P));  // (its key groups below, a pair a thread)
                             };
                             if (!sitems[t].remote) {
                                 const Chain& bi = R[sitems[t].index];
@@ -3918,6 +3963,10 @@ void partial_schur_blocks_device(fmm::ParallelTree<CoordType, DataType>& tree, i
                     std::vector<SPair> sp;
                     for (auto& v : item_sp)
                         for (auto& P : v) sp.push_back(std::move(P));
+                    // (the top owner's few row blocks pair with many: grouping their common
+                    // keys a pair a thread, not a row block a thread)
+#pragma omp parallel for schedule(dynamic, 1)
+                    for (size_t p = 0; p < sp.size(); ++p) key_groups(sp[p]);
                     run_shared(sp);
                 } else {
                 // an X_RN term: X_RN_bi(ri, bj raw slots in the column block's rows) and the block's rows of them
