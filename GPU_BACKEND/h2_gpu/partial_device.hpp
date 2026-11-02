@@ -808,11 +808,13 @@ public:
     void zero(void* p, size_t bytes) {
         if (bytes > 0) check_cuda(cudaMemsetAsync(p, 0, bytes, stream_), "partial CB zero");
     }
-    // (host copies through the pinned buffers by all threads)
+    // (host copies through the pinned buffers by all threads: a call's result
+    // is a few MB, mostly into pages it faults in, which one thread copied at
+    // 2-3 GB/s)
     static void copy(void* dst, const void* src, size_t bytes) {
-        constexpr size_t kPiece = size_t{4} << 20;
+        constexpr size_t kPiece = size_t{256} << 10;
         const int64_t n = static_cast<int64_t>((bytes + kPiece - 1) / kPiece);
-#pragma omp parallel for schedule(static) if (n > 1)
+#pragma omp parallel for schedule(static) if (n > 1 && !omp_in_parallel())
         for (int64_t i = 0; i < n; ++i) {
             const size_t a = static_cast<size_t>(i) * kPiece;
             std::memcpy(static_cast<char*>(dst) + a, static_cast<const char*>(src) + a, std::min(kPiece, bytes - a));
