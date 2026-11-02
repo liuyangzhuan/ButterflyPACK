@@ -993,8 +993,105 @@ void partial_checks(const DriverOptions& o, const Laplace3DApplication& applicat
     MPI_Allreduce(MPI_IN_PLACE, &ext_scale, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
   }
   const double t5 = MPI_Wtime();
+  // the sketches of the same blocks and of a wide one (as a parent front's ID
+  // asks a child for its rows' sketches: Omega a sparse sign, at most 4
+  // entries a position), through c_bpack_extractsketch_bridge and its
+  // transposed form, against Omega times the Schur extract's entries
+  double sk_diff[2] = {0.0, 0.0}, sk_scale[2] = {0.0, 0.0}, sk_time[2] = {0.0, 0.0};
+  {
+    std::vector<int> srows(rows), scols(cols), snr(nr), snc(nc);
+    const int wr = std::min(n22, 600), wc = std::min(n22, 30);
+    for (int i = 0; i < wr; ++i) srows.push_back(static_cast<int>(rng() % static_cast<uint64_t>(n22)));
+    for (int j = 0; j < wc; ++j) scols.push_back((n22 / 2 + j) % n22);
+    snr.push_back(wr);
+    snc.push_back(wc);
+    const int ns = nblocks + 1;
+    std::vector<std::vector<double>> B(blocks);
+    B.emplace_back(static_cast<size_t>(wr) * wc, 0.0);
+    {
+      int ra = 0, ca = 0;
+      for (int k = 0; k < nblocks; ++k) {
+        ra += nr[k];
+        ca += nc[k];
+      }
+      d_c_bpack_partial_schur_extract(B[nblocks].data(), srows.data() + ra, &snr[nblocks], scols.data() + ca, &snc[nblocks],
+                                      &resources.matrix, &resources.option);
+    }
+    for (int tr = 0; tr < 2; ++tr) {
+      // request k: Omega over the block's rows (tr 0) or columns (tr 1, the
+      // transposed form's rows, Y = Omega B^T)
+      std::vector<int> allr, allc, ridx(ns), cidx(ns), dims(ns), oidx(ns), orow, odest, pg(ns), pm(3 * ns);
+      std::vector<double> oval;
+      std::vector<std::vector<double>> want(ns);
+      int64_t nloc_dat = 0;
+      int ra = 0, ca = 0;
+      for (int k = 0; k < ns; ++k) {
+        const int m = snr[k], n = snc[k];
+        const int nw = tr == 0 ? m : n, nout = tr == 0 ? n : m, d = nout + 4, s = std::min(4, d);
+        for (int i = 0; i < m; ++i) (tr == 0 ? allr : allc).push_back(srows[static_cast<size_t>(ra + i)] + 1);
+        for (int j = 0; j < n; ++j) (tr == 0 ? allc : allr).push_back(scols[static_cast<size_t>(ca + j)] + 1);
+        ridx[k] = nw;
+        cidx[k] = nout;
+        dims[k] = d;
+        want[k].assign(static_cast<size_t>(d) * nout, 0.0);
+        const std::vector<double>& b = B[static_cast<size_t>(k)];
+        for (int p = 0; p < nw; ++p) {
+          std::vector<int> dest;
+          while (static_cast<int>(dest.size()) < s) {
+            const int x = static_cast<int>(rng() % static_cast<uint64_t>(d));
+            if (std::find(dest.begin(), dest.end(), x) == dest.end()) dest.push_back(x);
+          }
+          for (int x : dest) {
+            const double w = (rng() & 1) ? 1.0 / std::sqrt(double(s)) : -1.0 / std::sqrt(double(s));
+            orow.push_back(p + 1);
+            odest.push_back(x + 1);
+            oval.push_back(w);
+            for (int q = 0; q < nout; ++q)
+              want[k][static_cast<size_t>(x) + static_cast<size_t>(q) * d] +=
+                  w * (tr == 0 ? b[static_cast<size_t>(p) + static_cast<size_t>(q) * m] : b[static_cast<size_t>(q) + static_cast<size_t>(p) * m]);
+          }
+        }
+        oidx[k] = s * nw;
+        pg[k] = k;
+        pm[k] = 1;
+        pm[ns + k] = 1;
+        pm[2 * ns + k] = k % mpi_size;
+        if (k % mpi_size == rank) nloc_dat += static_cast<int64_t>(d) * nout;
+        ra += m;
+        ca += n;
+      }
+      std::vector<double> dat(static_cast<size_t>(std::max<int64_t>(nloc_dat, 1)));
+      int nsk = ns, nallr = static_cast<int>(allr.size()), nallc = static_cast<int>(allc.size()), npmap = ns;
+      int64_t nallomega = static_cast<int64_t>(oval.size());
+      const double ts = MPI_Wtime();
+      (tr == 0 ? d_c_bpack_extractsketch_bridge : d_c_bpack_extractsketch_transpose_bridge)(
+          &resources.matrix, &resources.option, &resources.mesh, &resources.stats, &resources.process_tree,
+          &resources.process_tree, &nsk, &nallr, &nallc, &nallomega, &nloc_dat, allr.data(), allc.data(), ridx.data(),
+          cidx.data(), dims.data(), oidx.data(), orow.data(), odest.data(), oval.data(), dat.data(), pg.data(), &npmap,
+          pm.data());
+      sk_time[tr] = MPI_Wtime() - ts;
+      int64_t at = 0;
+      for (int k = 0; k < ns; ++k) {
+        if (k % mpi_size != rank) continue;
+        for (size_t e = 0; e < want[k].size(); ++e) {
+          sk_diff[tr] = std::max(sk_diff[tr], std::abs(dat[static_cast<size_t>(at) + e] - want[k][e]));
+          sk_scale[tr] = std::max(sk_scale[tr], std::abs(want[k][e]));
+        }
+        at += static_cast<int64_t>(want[k].size());
+      }
+    }
+    MPI_Allreduce(MPI_IN_PLACE, sk_diff, 2, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+    MPI_Allreduce(MPI_IN_PLACE, sk_scale, 2, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+    MPI_Allreduce(MPI_IN_PLACE, sk_time, 2, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+  }
   double times[5] = {t1 - t0, t2 - t1, t3 - t2, t4 - t3, t5 - t4};
   MPI_Allreduce(MPI_IN_PLACE, times, 5, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+  if (rank == 0) {
+    std::cout << std::setprecision(3) << "H2 partial extractsketch: " << nblocks + 1 << " sketches " << sk_time[0]
+              << " s, against Omega times the Schur extract's " << sk_diff[0] / std::max(sk_scale[0], 1e-300)
+              << " (relative); transposed " << sk_time[1] << " s, " << sk_diff[1] / std::max(sk_scale[1], 1e-300)
+              << std::endl;
+  }
   if (rank == 0) {
     std::cout << std::setprecision(3) << "H2 partial solves: forward " << times[0] << " s, backward " << times[1]
               << " s, Schur mult " << times[2] << " s, Schur extract " << times[3] << " s; x2 returned to "

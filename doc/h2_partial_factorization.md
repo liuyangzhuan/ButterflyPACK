@@ -45,7 +45,7 @@ accuracy is that of the factorization (`tol_comp`).
 | `H2_compress_factors` | 0 or 1 | Optional. 1: the F22 records are kept compressed, lossy with an error bound of 0.02 `tol_comp` (CPU and GPU builds). The F11 factors of the partial solves stay uncompressed. |
 | `H2_partial_extract` | `auto` (0), `device` (1), `host` (2) | Optional, GPU builds: where the Schur complement's entries are computed ([below](#entries-h2_partial_extract)). |
 | `H2_use_gpu` | 0 or 1 | Optional: the factorization, the partial solves and the Schur complement's products and entries on the GPU. |
-| `elem_extract` | 0, 1 or 2 | As for a full factorization. With 1 (a block callback all ranks call together, as STRUMPACK's fronts give their entries) the F22 step asks for its blocks in rounds too: on the CPU a box that lacks one runs again after the round, on the GPU the device fetches it on the spot. |
+| `elem_extract` | 0, 1 or 2 | As for a full factorization. With 1 (a block callback all ranks call together, as STRUMPACK's fronts give their entries) the F22 step asks for its blocks in rounds too: on the CPU a box that lacks one runs again after the round, on the GPU the device fetches it on the spot (on one rank, as a sequential front's H2, straight from the callback into the upload, with no round). |
 
 The H2 setup (`c_bpack_construct_init` and its variants) checks these and
 throws with the option's name when one does not hold. They are set like the
@@ -92,6 +92,7 @@ an F22 point is its input id minus n11.
 | `c_bpack_partial_schur_mult(y2, x2, N22, Ncol, ...)` | y2 = CB x2 | `x2`, `y2`: N22 x Ncol, column-major, the same on every rank. |
 | `c_bpack_partial_schur_extract(out, rows, nrows, cols, ncols, ...)` | out = CB(rows, cols) | 0-based F22 indices; `out` nrows x ncols, column-major, the same on every rank. |
 | `c_bpack_extractelement`, `c_bpack_extractelement_bridge` | blocks of CB | The usual arguments, with CB as an N22 x N22 matrix: 1-based F22 indices in `allrows` and `allcols`, and a 1 x 1 process grid for each intersection (its `pmaps` row: 1, 1, the rank that receives it). Every intersection of a call is computed in one pass, so a parent should ask for all the blocks it reads in one call. |
+| `c_bpack_extractsketch_bridge`, `c_bpack_extractsketch_transpose_bridge` | sketches of blocks of CB: Omega CB(rows, cols), or Omega CB(cols, rows)^T | As for the blocks (1-based F22 indices, 1 x 1 grids), Omega given by its entries (BPACK_wrapper.h). The sketches are computed as the entries are, the sketched side's point vectors combined by Omega into d vectors as they go up the tree (once that is cheaper than carrying the points), so neither the blocks nor their products are formed, and only the sketches are summed over the ranks and sent. A parent front's H2 asks its children for the ID's sketches so (STRUMPACK's sketch callback). |
 | `c_bpack_partial_schur_release(...)` | frees CB | The records and the root block, nearly all of the object's memory (host and device). The partial solves keep working; Schur complement calls after it throw. |
 | `c_bpack_logdet` | log det F11 | |
 
@@ -179,6 +180,29 @@ position, copied to the others on the host. In STRUMPACK's H2-only fronts
 `BPACK_CHECK=solve`) this took the device from 287 s to 80 s summed over the
 calls, against 162 s on the host.
 
+A call's blocks share most of their points (a parent front's near-field
+blocks: a point in 5 to 13 of them), and blocks whose points came up through
+the same child box have the same raw rows. So the entries keep one chain a
+point, in one chain block a box over every point any block of the call asks
+for, and a pair of a row block and a column block computes each record term
+once over the points the call's blocks both reach (A^T X, or X B), then each
+block its entries from it (two stages; on the device a GEMM over index lists
+adds them into the result). In STRUMPACK's H2-only fronts this took the
+factorization from 47.6 to 44.1 s on the GPU and from 61.1 to 56.2 s on the
+CPU (Poisson 200^3, 16 ranks). The sketches keep a chain block a box and
+block, since their sketched side combines each block's points by its own
+Omega.
+
+A sketch's level terms go only where they can pair: a block of request k goes
+to the owner of a remote one-hop box only when that box is an ancestor of the
+leaf box of one of k's points on the other side (every F22 point's leaf box is
+known on every rank from the first sketch call on). A parent's ID ring is
+mostly far from its box, so most blocks had nothing to meet: in STRUMPACK's
+H2-only fronts (Poisson 400^3, 64 ranks, GPU) the terms' messages went from
+2.5 GB to 0.37 GB a rank, the sketched children's time from 1299 to 1177
+rank-seconds (CPU: 1797 to 1668) and the factorization from 167.3 to 165.0 s
+(CPU: within the runs' noise).
+
 ### Messages between ranks
 
 On several ranks, the entries' blocks that other ranks read go from device
@@ -196,15 +220,20 @@ partial solves on the device use the device exchanges of the full solve.
 ### Checks
 
 `BPACK_CHECK=solve` runs every partial solve, Schur complement product and
-Schur complement entry call that ran on the device again on the host, and
-prints on rank 0:
+Schur complement entry or sketch call that ran on the device again on the
+host, and prints on rank 0:
 
 ```
 GPU partial forward check: |gpu - host| / |host| = 5.476e-16
 GPU partial backward check: |gpu - host| / |host| = 3.334e-16
 GPU partial CB product check: |y_gpu - y_host| / |y_host| = 2.653e-15
 GPU partial CB entries check: |gpu - host| / |host| = 1.209e-16 (2438 entries in 4 blocks; device 0.0029 s, host 0.0052 s)
+GPU partial CB sketches check: |gpu - host| / |host| = 1.726e-16 (3790 entries in 5 blocks; device 0.0053 s, host 0.0074 s)
 ```
+
+(a sketch call's entries are its sketches' values).  The device adds the
+sketches' terms with atomic adds, so they vary from run to run in the last
+bits.
 
 Round-off is expected (about 1e-17 to 1e-14), also with compressed records:
 both sides decompress the same bytes.
@@ -214,7 +243,8 @@ both sides decompress the same bytes.
 `EXAMPLE/Laplace3D_H2Test_Driver.cpp` (`claplace3d_h2`) factors a 3D Laplace
 kernel on an n^3 grid; with `--H2_partial n11` the first n11 points (the
 grid's first planes) form F11. It then calls the partial solves, the product,
-the entries both ways (comparing them) and the release, and prints their
+the entries both ways (comparing them), the sketches both ways (against a
+sparse-sign Omega times the entries) and the release, and prints their
 times.
 
 | Option | |

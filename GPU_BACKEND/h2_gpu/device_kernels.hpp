@@ -65,7 +65,10 @@ struct IndexCopyItemT {
 // scatter of a block into indexed rows and columns of an output, and the two
 // in one.  An index list left default is the identity (index_at), and a
 // transposed source is the same item with rs and cs swapped.  The items of a
-// launch write distinct entries.
+// launch write distinct entries, except with add 2 (atomic adds).  row_w and
+// col_w (byte offsets in meta, -1: none) weight entry (i, j) by row_w[i] and
+// col_w[j] (doubles): a source row or column listed several times, each
+// with its weight, sketches the block.
 template<typename T>
 struct BlockCopyItemT {
     T* out;
@@ -81,8 +84,37 @@ struct BlockCopyItemT {
     int m;
     int n;
     int add;
+    int64_t row_w = -1;
+    int64_t col_w = -1;
 };
 using BlockCopyItem = BlockCopyItemT<double>;
+
+// out[out_rows[i] * ors + out_cols[j] * ocs] += sum_x L(i, x) R(x, j) for i
+// < m, j < n, x < k, with L(i, x) = l[l_rows[i] * lrs + l_x[x] * lxs] and R(x,
+// j) = r[r_x[x] * rxs + r_cols[j] * rcs] (index lists; default: the
+// identity), the adds atomic: a GEMM of rows and columns picked out of its
+// operands, into rows and columns of an output.
+template<typename T>
+struct IndexedGemmItemT {
+    T* out;
+    int64_t ors;
+    int64_t ocs;
+    IndexList out_rows;
+    IndexList out_cols;
+    const T* l;
+    int64_t lrs;
+    int64_t lxs;
+    IndexList l_rows;
+    IndexList l_x;
+    const T* r;
+    int64_t rxs;
+    int64_t rcs;
+    IndexList r_x;
+    IndexList r_cols;
+    int m;
+    int n;
+    int k;
+};
 
 // out(i, j) = a(rows[i], cols[j]) of a column-major matrix (leading dimension
 // lda) held as chunks of `chunk` elements, chunk k at pool + slot[k] * chunk
@@ -332,6 +364,9 @@ void launch_add_store(const AddStoreItemT<T>* items, int count, int max_m, int m
 template<typename T>
 void launch_index_copy(const IndexCopyItemT<T>* items, int count, int max_m, int max_n, const char* meta,
                        cudaStream_t stream);
+template<typename T>
+void launch_indexed_gemm(const IndexedGemmItemT<T>* items, int count, int max_m, int max_n, const char* meta,
+                         cudaStream_t stream);
 template<typename T>
 void launch_block_copy(const BlockCopyItemT<T>* items, int count, int max_m, int max_n, const char* meta,
                        cudaStream_t stream);

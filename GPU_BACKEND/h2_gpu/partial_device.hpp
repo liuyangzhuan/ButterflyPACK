@@ -808,11 +808,13 @@ public:
     void zero(void* p, size_t bytes) {
         if (bytes > 0) check_cuda(cudaMemsetAsync(p, 0, bytes, stream_), "partial CB zero");
     }
-    // (host copies through the pinned buffers by all threads)
+    // (host copies through the pinned buffers by all threads: a call's result
+    // is a few MB, mostly into pages it faults in, which one thread copied at
+    // 2-3 GB/s)
     static void copy(void* dst, const void* src, size_t bytes) {
-        constexpr size_t kPiece = size_t{4} << 20;
+        constexpr size_t kPiece = size_t{256} << 10;
         const int64_t n = static_cast<int64_t>((bytes + kPiece - 1) / kPiece);
-#pragma omp parallel for schedule(static) if (n > 1)
+#pragma omp parallel for schedule(static) if (n > 1 && !omp_in_parallel())
         for (int64_t i = 0; i < n; ++i) {
             const size_t a = static_cast<size_t>(i) * kPiece;
             std::memcpy(static_cast<char*>(dst) + a, static_cast<const char*>(src) + a, std::min(kPiece, bytes - a));
@@ -950,7 +952,7 @@ char* partial_values_exchange(PartialDeviceWork& work, MPI_Comm comm,
                    "partial CB exchange");
     }
     // the messages: from and into device memory, or host copies of it
-    std::vector<char> hs, hr;
+    HostBuffer<char> hs, hr;  // (written in full: the download, the messages)
     char* s_msg = sbuf;
     char* r_msg = rbuf;
     if (!direct) {
@@ -1069,16 +1071,26 @@ size_t partial_pair_bytes(const PartialPair<DataType>& p) {
     return e * sizeof(DataType) + 256 * (4 + 3 * p.terms.size());
 }
 
+// One side of a pair's targets: entry a of the list takes row (or column)
+// src[a] of G (src empty: a itself) to row dst[a] of the output, weighted by
+// w[a] (w empty: 1).
+struct PartialTargetList {
+    std::vector<int> src, dst;
+    std::vector<double> w;
+};
+
 // Where the G of a group go when they stay on the device: pair q's G is
-// added into out at rows[q] x cols[q], positions in its block of out (which
-// starts at base[q], leading dimension ld[q]).  The pairs of a group write
-// distinct entries: at a level, the row blocks partition the requested rows'
-// points and the column blocks the columns'.
+// added into out at rows[q] x cols[q] (PartialTargetList), entry (a, b) of
+// its block of out at base[q] + a ors[q] + b ocs[q].  With add 1 the pairs
+// of a group write distinct entries: at a level, the row blocks partition
+// the requested rows' points and the column blocks the columns'.  A
+// sketched request's blocks share its sketch rows: add 2, atomic adds.
 template<typename DataType>
 struct PartialPairTargets {
     DataType* out = nullptr;
-    std::vector<int64_t> base, ld;
-    std::vector<const std::vector<int>*> rows, cols;
+    std::vector<int64_t> base, ors, ocs;
+    std::vector<const PartialTargetList*> rows, cols;
+    int add = 1;
 };
 
 // The G (ni x nj, column major, end to end in pair order) of a group of
@@ -1258,30 +1270,47 @@ void partial_device_pairs(PartialDeviceWork& work, const std::vector<const Parti
     constexpr int kScatterTile = 64;
     std::vector<BlockCopyItemT<S>> tiles;
     if (targets != nullptr) {
-        std::unordered_map<const std::vector<int>*, size_t> pos_at;
-        auto positions = [&](const std::vector<int>* v) {
-            auto it = pos_at.find(v);
-            if (it == pos_at.end()) it = pos_at.emplace(v, meta.append(*v)).first;
-            return static_cast<int64_t>(it->second);
+        // (a list's dst, src and w in meta, once a list; -1: absent)
+        struct ListAt { int64_t dst = -1, src = -1, w = -1; int n = 0; };
+        std::unordered_map<const PartialTargetList*, ListAt> list_at;
+        auto lists = [&](const PartialTargetList* v) {
+            auto it = list_at.find(v);
+            if (it == list_at.end()) {
+                ListAt a;
+                a.n = static_cast<int>(v->dst.size());
+                a.dst = static_cast<int64_t>(meta.append(v->dst));
+                if (!v->src.empty()) a.src = static_cast<int64_t>(meta.append(v->src));
+                if (!v->w.empty()) a.w = static_cast<int64_t>(meta.append(v->w));
+                it = list_at.emplace(v, a).first;
+            }
+            return it->second;
         };
+        auto at = [](int64_t list, int i, size_t bytes) { return list < 0 ? list : list + static_cast<int64_t>(i) * static_cast<int64_t>(bytes); };
         for (size_t q = 0; q < pairs.size(); ++q) {
-            const int ni = pairs[q]->ni, nj = pairs[q]->nj;
-            const int64_t ro = positions(targets->rows[q]), co = positions(targets->cols[q]);
+            const int ni = pairs[q]->ni;
+            const ListAt ro = lists(targets->rows[q]), co = lists(targets->cols[q]);
             const S* G = reinterpret_cast<const S*>(d + g_off[q]);
-            for (int j0 = 0; j0 < nj; j0 += kScatterTile) {
-                for (int i0 = 0; i0 < ni; i0 += kScatterTile) {
+            for (int j0 = 0; j0 < co.n; j0 += kScatterTile) {
+                for (int i0 = 0; i0 < ro.n; i0 += kScatterTile) {
                     BlockCopyItemT<S> it{};
                     it.out = reinterpret_cast<S*>(targets->out + targets->base[q]);
-                    it.ors = 1;
-                    it.ocs = targets->ld[q];
-                    it.out_rows.offset = ro + static_cast<int64_t>(i0) * static_cast<int64_t>(sizeof(int));
-                    it.out_cols.offset = co + static_cast<int64_t>(j0) * static_cast<int64_t>(sizeof(int));
-                    it.src = G + i0 + static_cast<int64_t>(j0) * ni;
+                    it.ors = targets->ors[q];
+                    it.ocs = targets->ocs[q];
+                    it.out_rows.offset = at(ro.dst, i0, sizeof(int));
+                    it.out_cols.offset = at(co.dst, j0, sizeof(int));
+                    it.src = G;
                     it.rs = 1;
                     it.cs = ni;
-                    it.m = std::min(kScatterTile, ni - i0);
-                    it.n = std::min(kScatterTile, nj - j0);
-                    it.add = 1;
+                    // (an identity source list: the tile's own rows)
+                    if (ro.src >= 0) it.src_rows.offset = at(ro.src, i0, sizeof(int));
+                    else it.src_rows.base = i0;
+                    if (co.src >= 0) it.src_cols.offset = at(co.src, j0, sizeof(int));
+                    else it.src_cols.base = j0;
+                    it.row_w = at(ro.w, i0, sizeof(double));
+                    it.col_w = at(co.w, j0, sizeof(double));
+                    it.m = std::min(kScatterTile, ro.n - i0);
+                    it.n = std::min(kScatterTile, co.n - j0);
+                    it.add = targets->add;
                     tiles.push_back(it);
                 }
             }
@@ -1335,6 +1364,282 @@ void partial_device_pairs(PartialDeviceWork& work, const std::vector<const Parti
         o += n;
     }
     work.release(d);
+}
+
+// The two-stage pairs of shared chain blocks (partial.hpp,
+// partial_shared_pair) on the device.  A term: X = rec(xr, xc) (k1 x k2; raw:
+// the root block, leading dimension ld), A's rows arows (all when empty) of a
+// (lda rows), B's rows brows of b (ldb rows), both over their blocks'
+// columns.  A task: a pair's group of common keys; stage one over `use`, the
+// columns of the row block (left: Q = A(:, use)^T X, use x k2) or of the
+// column block (P = X B(:, use), k1 x use); stage two each key's entries,
+// from block columns a_cols (their places in `use`: a_use, left) and b_cols
+// (b_use, right) into out + base at positions a_pos x b_pos (leading
+// dimension ld).  The lists are int32 views of the blocks' keys.
+template<typename DataType>
+struct PartialSharedDeviceTerm {
+    const PartialDeviceRecord* rec = nullptr;
+    const DataType* raw = nullptr;
+    int64_t ld = 0;
+    std::vector<int64_t> xr, xc;
+    const DataType* a = nullptr;
+    int64_t lda = 0;
+    std::vector<int64_t> arows;
+    const DataType* b = nullptr;
+    int64_t ldb = 0;
+    std::vector<int64_t> brows;
+    int k1() const { return static_cast<int>(xr.size()); }
+    int k2() const { return static_cast<int>(xc.size()); }
+};
+template<typename DataType>
+struct PartialSharedDeviceTask {
+    const std::vector<PartialSharedDeviceTerm<DataType>>* terms = nullptr;
+    bool left = true;
+    std::vector<int> use;
+    struct Key {
+        int64_t base = 0, ld = 0;
+        const int* a_cols = nullptr;
+        const int* a_pos = nullptr;
+        const int* b_cols = nullptr;
+        const int* b_pos = nullptr;
+        int na = 0, nb = 0;
+        std::vector<int> places;  // a's places in use (left) or b's (right)
+    };
+    std::vector<Key> keys;
+};
+
+// Device bytes a task takes (X, the gathered stage-one operand, the stage-one product, each term's)
+template<typename DataType>
+size_t partial_shared_task_bytes(const PartialSharedDeviceTask<DataType>& t) {
+    const size_t D = sizeof(DataType), u = t.use.size();
+    size_t e = 0;
+    for (const auto& T : *t.terms) {
+        const size_t k1 = static_cast<size_t>(T.k1()), k2 = static_cast<size_t>(T.k2());
+        e += align_up(k1 * k2 * D) + align_up((t.left ? k1 : k2) * u * D) + align_up((t.left ? k2 : k1) * u * D);
+    }
+    return e;
+}
+
+// A group of tasks: stage one's gathers and GEMMs, then stage two's indexed
+// GEMMs adding into out (device, atomic).
+template<typename DataType>
+void partial_device_shared_pairs(PartialDeviceWork& work, const std::vector<const PartialSharedDeviceTask<DataType>*>& tasks,
+                                 DataType* out) {
+    using S = typename DeviceScalar<DataType>::type;
+    const size_t D = sizeof(DataType);
+    if (tasks.empty()) return;
+    // ---- the layout: per task and term, X, the gathered operand and the product
+    struct Place { size_t x = 0, op = 0, prod = 0; };
+    std::vector<std::vector<Place>> place(tasks.size());
+    size_t at = 0;
+    for (size_t q = 0; q < tasks.size(); ++q) {
+        const auto& t = *tasks[q];
+        const size_t u = t.use.size();
+        place[q].resize(t.terms->size());
+        for (size_t s = 0; s < t.terms->size(); ++s) {
+            const auto& T = (*t.terms)[s];
+            const size_t k1 = static_cast<size_t>(T.k1()), k2 = static_cast<size_t>(T.k2());
+            Place& pl = place[q][s];
+            pl.x = at;
+            at += align_up(k1 * k2 * D);
+            pl.op = at;
+            at += align_up((t.left ? k1 : k2) * u * D);
+            pl.prod = at;
+            at += align_up((t.left ? u * k2 : k1 * u) * D);
+        }
+    }
+    char* d = work.alloc(at);
+    // ---- the compressed records' chunks the group reads, into the store's scratch
+    PartialDeviceStore& st = work.store();
+    const int64_t E = static_cast<int64_t>(std::max<size_t>(1, kRecordChunkBytes / D));
+    std::unordered_map<const PartialDeviceRecord*, std::vector<int>> slots;
+    std::vector<const void*> srcs;
+    std::vector<void*> dsts;
+    const size_t pool_slots = st.scratch_bytes / static_cast<size_t>(E * static_cast<int64_t>(D));
+    for (const auto* t : tasks) {
+        for (const auto& T : *t->terms) {
+            if (T.rec == nullptr || !T.rec->compressed() || T.xr.empty() || T.xc.empty()) continue;
+            auto& sl = slots[T.rec];
+            if (sl.empty()) sl.assign(T.rec->chunk_off.size(), -1);
+            const auto mm = std::minmax_element(T.xr.begin(), T.xr.end());
+            for (int64_t c : T.xc) {
+                for (int64_t k = (*mm.first + c * T.ld) / E; k <= (*mm.second + c * T.ld) / E; ++k) {
+                    if (sl[static_cast<size_t>(k)] >= 0) continue;
+                    if (srcs.size() >= pool_slots) throw std::logic_error("GPU partial CB entries: a group's chunks exceed the scratch");
+                    sl[static_cast<size_t>(k)] = static_cast<int>(srcs.size());
+                    srcs.push_back(T.rec->dev + T.rec->chunk_off[static_cast<size_t>(k)]);
+                    dsts.push_back(st.scratch + srcs.size() * static_cast<size_t>(E) * D - static_cast<size_t>(E) * D);
+                }
+            }
+        }
+    }
+    // ---- the metadata
+    MetaBuilder& meta = work.meta();
+    std::unordered_map<const void*, size_t> list_at;  // (a term's lists, once)
+    auto list64 = [&](const std::vector<int64_t>& v) -> IndexList {
+        IndexList l;
+        if (v.empty()) return l;
+        auto it = list_at.find(&v);
+        if (it == list_at.end()) {
+            std::vector<int> ints(v.begin(), v.end());
+            it = list_at.emplace(&v, meta.append(ints)).first;
+        }
+        l.offset = static_cast<int64_t>(it->second);
+        return l;
+    };
+    auto list32 = [&](const int* v, int n) -> IndexList {
+        IndexList l;
+        l.offset = static_cast<int64_t>(meta.append(v, static_cast<size_t>(n)));
+        return l;
+    };
+    std::unordered_map<const PartialDeviceRecord*, size_t> slot_at;
+    for (const auto& [rec, sl] : slots) slot_at.emplace(rec, meta.append(sl));
+    std::vector<GatherItemT<S>> gathers;
+    std::vector<ChunkGatherItemT<S>> chunked;
+    std::vector<IndexedGemmItemT<S>> items;
+    int gm = 0, gn = 0, cm = 0, cn = 0, im = 0, in = 0;
+    VBatch<DataType> left_batch, right_batch;  // Q = Op^T X; P = X Op
+    for (size_t q = 0; q < tasks.size(); ++q) {
+        const auto& t = *tasks[q];
+        const int u = static_cast<int>(t.use.size());
+        const IndexList use = list32(t.use.data(), u);
+        for (size_t s = 0; s < t.terms->size(); ++s) {
+            const auto& T = (*t.terms)[s];
+            const Place& pl = place[q][s];
+            const int k1 = T.k1(), k2 = T.k2();
+            DataType* X = reinterpret_cast<DataType*>(d + pl.x);
+            if (T.rec != nullptr && T.rec->compressed()) {
+                ChunkGatherItemT<S> it{};
+                it.out = reinterpret_cast<S*>(X);
+                it.ld = k1;
+                it.m = k1;
+                it.n = k2;
+                it.pool = reinterpret_cast<const S*>(st.scratch);
+                it.slot.offset = static_cast<int64_t>(slot_at.at(T.rec));
+                it.chunk = E;
+                it.lda = T.ld;
+                it.rows = list64(T.xr);
+                it.cols = list64(T.xc);
+                chunked.push_back(it);
+                cm = std::max(cm, k1);
+                cn = std::max(cn, k2);
+            } else {
+                GatherItemT<S> it{};
+                it.out = reinterpret_cast<S*>(X);
+                it.ld = k1;
+                it.m = k1;
+                it.n = k2;
+                it.src = reinterpret_cast<const S*>(T.rec != nullptr ? reinterpret_cast<const DataType*>(T.rec->dev) : T.raw);
+                it.rs = 1;
+                it.cs = T.ld;
+                it.rows = list64(T.xr);
+                it.cols = list64(T.xc);
+                gathers.push_back(it);
+                gm = std::max(gm, k1);
+                gn = std::max(gn, k2);
+            }
+            // the stage-one operand: A(arows, use) (k1 x u) or B(brows, use) (k2 x u)
+            DataType* op = reinterpret_cast<DataType*>(d + pl.op);
+            const int kop = t.left ? k1 : k2;
+            {
+                GatherItemT<S> it{};
+                it.out = reinterpret_cast<S*>(op);
+                it.ld = kop;
+                it.m = kop;
+                it.n = u;
+                it.src = reinterpret_cast<const S*>(t.left ? T.a : T.b);
+                it.rs = 1;
+                it.cs = t.left ? T.lda : T.ldb;
+                it.rows = list64(t.left ? T.arows : T.brows);
+                it.cols = use;
+                gathers.push_back(it);
+                gm = std::max(gm, kop);
+                gn = std::max(gn, u);
+            }
+            DataType* prod = reinterpret_cast<DataType*>(d + pl.prod);
+            if (t.left) {
+                left_batch.entries.push_back({op, X, prod, static_cast<magma_int_t>(u), static_cast<magma_int_t>(k2),
+                                              static_cast<magma_int_t>(k1), static_cast<magma_int_t>(k1), static_cast<magma_int_t>(k1),
+                                              static_cast<magma_int_t>(u)});
+            } else {
+                right_batch.entries.push_back({X, op, prod, static_cast<magma_int_t>(k1), static_cast<magma_int_t>(u),
+                                               static_cast<magma_int_t>(k2), static_cast<magma_int_t>(k1), static_cast<magma_int_t>(k2),
+                                               static_cast<magma_int_t>(k1)});
+            }
+            // stage two: each key
+            for (const auto& K : t.keys) {
+                IndexedGemmItemT<S> it{};
+                it.out = reinterpret_cast<S*>(out + K.base);
+                it.ors = 1;
+                it.ocs = K.ld;
+                it.out_rows = list32(K.a_pos, K.na);
+                it.out_cols = list32(K.b_pos, K.nb);
+                if (t.left) {
+                    // L(i, x) = Q(places[i], x), R(x, j) = B(brows[x], b_cols[j])
+                    it.l = reinterpret_cast<const S*>(prod);
+                    it.lrs = 1;
+                    it.lxs = u;
+                    it.l_rows = list32(K.places.data(), K.na);
+                    it.r = reinterpret_cast<const S*>(T.b);
+                    it.rxs = 1;
+                    it.rcs = T.ldb;
+                    it.r_x = list64(T.brows);
+                    it.r_cols = list32(K.b_cols, K.nb);
+                    it.k = k2;
+                } else {
+                    // L(i, x) = A(arows[x], a_cols[i]), R(x, j) = P(x, places[j])
+                    it.l = reinterpret_cast<const S*>(T.a);
+                    it.lrs = T.lda;
+                    it.lxs = 1;
+                    it.l_rows = list32(K.a_cols, K.na);
+                    it.l_x = list64(T.arows);
+                    it.r = reinterpret_cast<const S*>(prod);
+                    it.rxs = 1;
+                    it.rcs = k1;
+                    it.r_cols = list32(K.places.data(), K.nb);
+                    it.k = k1;
+                }
+                it.m = K.na;
+                it.n = K.nb;
+                items.push_back(it);
+                im = std::max(im, K.na);
+                in = std::max(in, K.nb);
+            }
+        }
+    }
+    const size_t gathers_off = meta.append(gathers), chunked_off = meta.append(chunked), items_off = meta.append(items);
+    const size_t srcs_off = meta.append(srcs), dsts_off = meta.append(dsts);
+    left_batch.stage(meta);
+    right_batch.stage(meta);
+    char* md = work.upload_meta();
+    cudaStream_t stream = work.stream();
+    if (!srcs.empty()) {
+#ifdef H2_HAVE_NVCOMP
+        const void** d_srcs = reinterpret_cast<const void**>(md + srcs_off);
+        void** d_dsts = reinterpret_cast<void**>(md + dsts_off);
+        bitcompHandle_t plan{};
+        if (bitcompCreateBatchPlanFromCompressedData(&plan, d_srcs, srcs.size(), nullptr, stream) != BITCOMP_SUCCESS) {
+            throw std::runtime_error("GPU partial CB entries: a decompression plan");
+        }
+        bitcompSetStream(plan, stream);
+        const bitcompResult_t r = bitcompBatchUncompress(plan, d_srcs, d_dsts);
+        bitcompDestroyPlan(plan);
+        if (r != BITCOMP_SUCCESS) throw std::runtime_error("GPU partial CB entries: decompressing records failed");
+#else
+        (void)srcs_off;
+        (void)dsts_off;
+        throw std::logic_error("GPU partial CB entries: compressed records without a compressor");
+#endif
+    }
+    launch_gather(reinterpret_cast<const GatherItemT<S>*>(md + gathers_off), static_cast<int>(gathers.size()), gm, gn, md, stream);
+    launch_chunk_gather(reinterpret_cast<const ChunkGatherItemT<S>*>(md + chunked_off), static_cast<int>(chunked.size()), cm, cn,
+                        md, stream);
+    magma_queue_t queue = work.queue();
+    if (left_batch.count() > 0) left_batch.gemm(md, MagmaTrans, MagmaNoTrans, DataType(1), DataType(0), queue);
+    if (right_batch.count() > 0) right_batch.gemm(md, MagmaNoTrans, MagmaNoTrans, DataType(1), DataType(0), queue);
+    launch_indexed_gemm(reinterpret_cast<const IndexedGemmItemT<S>*>(md + items_off), static_cast<int>(items.size()), im, in, md,
+                        stream);
+    work.release(d);  // (the stream keeps a later user of the bytes behind the kernels)
 }
 
 // Bytes from the device to the host through the backend's pinned staging

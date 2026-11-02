@@ -502,6 +502,29 @@ struct DefaultInitAllocator : std::allocator<T> {
 };
 
 /**
+ * @brief A host buffer that resize(n) does not zero-fill, for values
+ * written in full before they are read.
+ */
+template<typename T>
+using HostBuffer = std::vector<T, DefaultInitAllocator<T>>;
+
+/**
+ * @brief Zero n values over the calling rank's threads (one thread when
+ * called from a parallel region).  A large buffer is a fresh mapping whose
+ * pages fault in as it is first written; one thread zeroed them at ~10 GB/s.
+ */
+template<typename T>
+void parallel_zero(T* p, size_t n) {
+    constexpr size_t kPiece = size_t{1} << 16;
+    const int64_t pieces = static_cast<int64_t>((n + kPiece - 1) / kPiece);
+#pragma omp parallel for schedule(static) if (pieces > 1 && !omp_in_parallel())
+    for (int64_t i = 0; i < pieces; ++i) {
+        const size_t a = static_cast<size_t>(i) * kPiece;
+        std::fill(p + a, p + std::min(n, a + kPiece), T{});
+    }
+}
+
+/**
  * @brief A dense column-major block of the partial factorization's F22
  * records (T22, X_RR, X_RS, X_SR, X_RN, X_NR; unstructured/partial.hpp).
  * Sizing it does not zero-fill it: the GPU path sizes a record and its
@@ -1714,6 +1737,7 @@ struct PartialRootFactor {
     bool cb_released = false;
     std::vector<int64_t> leaf_box;       ///< F22 index -> local leaf box (the CB entries; built on first use)
     std::vector<int64_t> leaf_slot;      ///< F22 index -> slot in that leaf box
+    std::vector<int64_t> leaf_morton;    ///< F22 index -> its leaf box's Morton index, every rank's (the CB sketches; built on first use)
 };
 
 template<typename CoordType, typename DataType = CoordType>
