@@ -20,6 +20,7 @@
 #include <functional>
 #include <mutex>
 #include <complex>
+#include <cmath>
 
 
 namespace ser {
@@ -77,6 +78,7 @@ namespace fmm {
 struct TransportTimers {
     double sizes = 0.0, serialize = 0.0, payload = 0.0, deserialize = 0.0, assisting = 0.0, install = 0.0;
     double presend = 0.0;   // a transport's start to its first message (BPACK_TRACE=skew)
+    double form_near = 0.0, apply = 0.0, slicing = 0.0;  // the host apply's steps (BPACK_TRACE=phase)
     double bytes_sent = 0.0, bytes_received = 0.0;
 };
 inline TransportTimers& transport_timers() {
@@ -5277,6 +5279,7 @@ void form_near_updates_from_generators(
     };
     std::vector<SourceView> sources(source_order.size());
     std::vector<FormUnit> units;
+    double unit_flops = 0.0;  // the units' gemms (m n k a unit)
     for (size_t s = 0; s < source_order.size(); ++s) {
         auto& view = sources[s];
         view.morton = source_order[s];
@@ -5314,6 +5317,9 @@ void form_near_updates_from_generators(
             if (counts[local_index] == 0) continue;
             if (level.find_local_box(local_morton) == nullptr) continue;
             units.push_back(FormUnit{s, local_index, -1});
+            unit_flops += static_cast<double>(counts[local_index]) *
+                          static_cast<double>(counts[local_index] + view.skeleton_count) *
+                          static_cast<double>(view.redundant_count);
             for (size_t neighbor_index = 0;
                  neighbor_index < neighbors.size(); ++neighbor_index) {
                 if (neighbor_index == local_index) continue;
@@ -5327,6 +5333,9 @@ void form_near_updates_from_generators(
                 if (neighbor_local && neighbor_morton < local_morton) continue;
                 units.push_back(FormUnit{
                     s, local_index, static_cast<int64_t>(neighbor_index)});
+                unit_flops += static_cast<double>(counts[neighbor_index]) *
+                              static_cast<double>(counts[local_index]) *
+                              static_cast<double>(view.redundant_count);
             }
         }
     }
@@ -5334,6 +5343,32 @@ void form_near_updates_from_generators(
     std::exception_ptr form_exception;
     std::mutex form_exception_mutex;
     std::atomic<bool> form_failed{false};
+    // The top levels bring a few large units a wave (160^3 level 2: 44-131
+    // gemms of up to 1700 x 1700 x 1450, 1.4 s a wave on half the threads):
+    // a unit's gemm larger than a third of a thread's share of the units'
+    // flops runs in column pieces of about that share (gemm_column_pieces,
+    // the same bits at multiples of 6).  Not narrower: every piece packs the
+    // whole op(a) again, and 48-column pieces spent 55% of the threads' time
+    // packing (zgemm_itcopy, op(a) from memory, 2026-11-01).
+    const int team = omp_get_max_threads();
+    const double piece_flops = unit_flops / (3.0 * static_cast<double>(std::max(team, 1)));
+    const bool pieces = team > 1;
+    auto gemm_nt = [piece_flops, pieces](const char* transa, int m, int n, int k, const DataType* a, int lda,
+                                         const DataType* b, int ldb, DataType beta, DataType* c, int ldc) {
+        // c(:, j0:j1) = op(a) b(j0:j1, :)^T + beta c(:, j0:j1)
+        auto product = [&](int64_t j0, int64_t j1) {
+            int columns = static_cast<int>(j1 - j0);
+            DataType alpha = DataType{1.0};
+            gemm_(transa, "T", &m, &columns, &k, &alpha, a, &lda, b + j0, &ldb, &beta, c + j0 * ldc, &ldc);
+        };
+        const double per_column = static_cast<double>(m) * static_cast<double>(k);
+        int64_t width = per_column > 0.0
+            ? static_cast<int64_t>(std::ceil(piece_flops / per_column / 6.0)) * 6
+            : static_cast<int64_t>(n);
+        width = std::max<int64_t>(width, H2_GEMM_PIECE);
+        if (pieces && width < n) gemm_column_pieces(n, product, width);
+        else product(0, n);
+    };
 
     // (entries through a collective callback: the units that asked for a
     // block not fetched yet form their updates again after a round; a unit
@@ -5343,7 +5378,7 @@ void form_near_updates_from_generators(
     run_entry_phase(kernel_entries(kernel, 0), std::move(form_items), [&](const std::vector<int64_t>& items) {
     std::vector<int64_t> abandoned;
     std::mutex abandoned_mutex;
-    omp_parallel_if(items.size() > 1, [&] {
+    omp_parallel_if(items.size() > 1 || (pieces && !items.empty()), [&] {
         #pragma omp for schedule(dynamic)
         for (int64_t item = 0; item < static_cast<int64_t>(items.size()); ++item) {
             const int64_t unit_index = items[static_cast<size_t>(item)];
@@ -5382,17 +5417,10 @@ void form_near_updates_from_generators(
                         block.cols = local_count;
                         block.data.resize(static_cast<size_t>(
                             local_count * local_count));
-                        int m = static_cast<int>(local_count);
-                        int n = static_cast<int>(local_count);
-                        int k = static_cast<int>(redundant_count);
-                        DataType alpha = DataType{1.0};
-                        DataType beta = DataType{0.0};
-                        int lda = static_cast<int>(temp2_ld);
-                        int ldb = static_cast<int>(temp2_ld);
-                        int ldc = static_cast<int>(local_count);
-                        gemm_("N", "T", &m, &n, &k, &alpha,
-                              local_temp2, &lda, local_original_x_nr, &ldb,
-                              &beta, block.data.data(), &ldc);
+                        gemm_nt("N", static_cast<int>(local_count), static_cast<int>(local_count),
+                                static_cast<int>(redundant_count), local_temp2, static_cast<int>(temp2_ld),
+                                local_original_x_nr, static_cast<int>(temp2_ld), DataType{0.0},
+                                block.data.data(), static_cast<int>(local_count));
                         output.deltas.emplace_back(
                             EdgeKey{local_morton, local_morton, EdgeKind::Diag},
                             std::move(block));
@@ -5463,18 +5491,10 @@ void form_near_updates_from_generators(
                                 block.data.data(), skeleton_count);
                         }
 
-                        int m = static_cast<int>(skeleton_count);
-                        int n = static_cast<int>(local_count);
-                        int k = static_cast<int>(redundant_count);
-                        DataType alpha = DataType{1.0};
-                        DataType beta = DataType{1.0};
-                        int lda = static_cast<int>(source->X_RS.lda);
-                        int ldb = static_cast<int>(temp2_ld);
-                        int ldc = static_cast<int>(skeleton_count);
-                        gemm_("T", "T", &m, &n, &k, &alpha,
-                              source->X_RS.data.data(), &lda,
-                              local_temp2, &ldb,
-                              &beta, block.data.data(), &ldc);
+                        gemm_nt("T", static_cast<int>(skeleton_count), static_cast<int>(local_count),
+                                static_cast<int>(redundant_count), source->X_RS.data.data(),
+                                static_cast<int>(source->X_RS.lda), local_temp2, static_cast<int>(temp2_ld),
+                                DataType{1.0}, block.data.data(), static_cast<int>(skeleton_count));
                         output.replaces.emplace_back(
                             ReplaceKey{local_morton, source_morton},
                             std::move(block));
@@ -5487,20 +5507,10 @@ void form_near_updates_from_generators(
                         temp2 + offsets[neighbor_index];
                     std::vector<DataType> pair_product(static_cast<size_t>(
                         neighbor_count * local_count));
-                    {
-                        int m = static_cast<int>(neighbor_count);
-                        int n = static_cast<int>(local_count);
-                        int k = static_cast<int>(redundant_count);
-                        DataType alpha = DataType{1.0};
-                        DataType beta = DataType{0.0};
-                        int lda = static_cast<int>(temp2_ld);
-                        int ldb = static_cast<int>(temp2_ld);
-                        int ldc = static_cast<int>(neighbor_count);
-                        gemm_("N", "T", &m, &n, &k, &alpha,
-                              neighbor_temp2, &lda,
-                              local_original_x_nr, &ldb,
-                              &beta, pair_product.data(), &ldc);
-                    }
+                    gemm_nt("N", static_cast<int>(neighbor_count), static_cast<int>(local_count),
+                            static_cast<int>(redundant_count), neighbor_temp2, static_cast<int>(temp2_ld),
+                            local_original_x_nr, static_cast<int>(temp2_ld), DataType{0.0},
+                            pair_product.data(), static_cast<int>(neighbor_count));
 
                     const int64_t lo =
                         std::min(local_morton, neighbor_morton);
@@ -6037,32 +6047,41 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
     }
 
     // Step 3: Post all payload receives, then send the serialized update payloads.
-    std::vector<std::vector<char>> recv_bufs(neighbor_ranks.size());
+    // (uninitialized: the receive writes every byte, and a zero fill was a
+    // second pass over 25 GB a rank at 160^3 level 2)
+    std::vector<std::unique_ptr<char[]>> recv_bufs(neighbor_ranks.size());
+    size_t recv_buffer_bytes = 0;
     for (size_t i = 0; i < neighbor_ranks.size(); ++i) {
         if (recv_sizes[i] > 0) {
-            recv_bufs[i].resize((size_t)recv_sizes[i]);
+            recv_bufs[i].reset(new char[(size_t)recv_sizes[i]]);
+            recv_buffer_bytes += (size_t)recv_sizes[i];
         }
     }
-
-    auto nested_char_vector_bytes = [](const std::vector<std::vector<char>>& buffers) {
-        size_t bytes = buffers.capacity() * sizeof(std::vector<char>);
-        for (const auto& buffer : buffers) {
-            bytes += buffer.capacity();
-        }
-        return bytes;
-    };
-    size_t recv_buffer_bytes = 0;
     if (memory_diagnostic) {
-        recv_buffer_bytes = nested_char_vector_bytes(recv_bufs);
         memory_diagnostic(
             "receive_buffers_ready", routed_bytes, recv_buffer_bytes);
     }
 
+    // Peers sent the same generators and nothing else (a top level: each
+    // rank's source to all its neighbours) share one serialized payload.
+    auto same_payload = [](const PendingFactorUpdates<DataType>& a, const PendingFactorUpdates<DataType>& b) {
+        if (!a.replace_blocks.empty() || !a.accumulated_deltas.empty() ||
+            !b.replace_blocks.empty() || !b.accumulated_deltas.empty() ||
+            a.generators.size() != b.generators.size()) {
+            return false;
+        }
+        for (const auto& [morton, generator] : a.generators) {
+            auto it = b.generators.find(morton);
+            if (it == b.generators.end() || it->second != generator) return false;
+        }
+        return true;
+    };
     std::vector<char> send_buffer; // reusable
+    const PendingFactorUpdates<DataType>* serialized = nullptr;  // send_buffer's payload
     comm_start = clock::now();
     for (size_t i = 0; i < neighbor_ranks.size(); ++i) {
         if (recv_sizes[i] > 0) {
-            int err = MPI_Irecv_large(recv_bufs[i].data(), (size_t)recv_sizes[i], MPI_CHAR,
+            int err = MPI_Irecv_large(recv_bufs[i].get(), (size_t)recv_sizes[i], MPI_CHAR,
                                       neighbor_ranks[i], 701, tree->comm, requests);
             if (err != MPI_SUCCESS) {
                 char errbuf[MPI_MAX_ERROR_STRING];
@@ -6086,12 +6105,17 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
                 "transport_and_apply_factor_updates_symmetric_onehop: missing payload for rank " +
                 std::to_string(peer));
         }
-        const auto t_serialize = clock::now();
-        send_buffer.resize((size_t)send_sizes[i]);
-        char* end_ptr = serialize(it->second, send_buffer.data());
-        timers.serialize += seconds_since(t_serialize);
-        if ((size_t)(end_ptr - send_buffer.data()) != (size_t)send_sizes[i]) {
-            throw std::runtime_error("serialize pending: byte mismatch");
+        if (serialized == nullptr || !same_payload(*serialized, it->second)) {
+            const auto t_serialize = clock::now();
+            send_buffer.resize((size_t)send_sizes[i]);
+            char* end_ptr = serialize(it->second, send_buffer.data());
+            timers.serialize += seconds_since(t_serialize);
+            if ((size_t)(end_ptr - send_buffer.data()) != (size_t)send_sizes[i]) {
+                throw std::runtime_error("serialize pending: byte mismatch");
+            }
+            serialized = &it->second;
+        } else if (send_buffer.size() != (size_t)send_sizes[i]) {
+            throw std::runtime_error("serialize pending: shared payload size mismatch");
         }
         int err = MPI_Send_large(send_buffer.data(), send_buffer.size(), MPI_CHAR,
                                  peer, 701, tree->comm);
@@ -6127,31 +6151,48 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
             payload_buffer_bytes);
     }
 
-    // Step 4: Merge incoming updates from all neighbors.
+    // Step 4: Merge incoming updates from all neighbors (the payloads unpacked
+    // a thread each, each buffer released once unpacked; merged in neighbour
+    // order as before).
     const auto t_deserialize = clock::now();
     PendingFactorUpdates<DataType> incoming_total;
     merge_pending(incoming_total, local_apply);
     size_t remaining_payloads = 0;
-    if (memory_diagnostic) {
-        for (uint64_t bytes : recv_sizes) {
-            if (bytes != 0) ++remaining_payloads;
-        }
-    }
+    std::vector<size_t> arrived;
     for (size_t i = 0; i < neighbor_ranks.size(); ++i) {
-        if (recv_sizes[i] == 0) continue;
-        PendingFactorUpdates<DataType> in;
-        deserialize(in, recv_bufs[i].data());
-        merge_pending(incoming_total, in);
+        if (recv_sizes[i] != 0) arrived.push_back(i);
+    }
+    remaining_payloads = arrived.size();
+    std::vector<PendingFactorUpdates<DataType>> ins(neighbor_ranks.size());
+    std::exception_ptr unpack_exception;
+    std::mutex unpack_exception_mutex;
+    omp_parallel_if(arrived.size() > 1, [&] {
+        #pragma omp for schedule(dynamic)
+        for (int64_t a = 0; a < static_cast<int64_t>(arrived.size()); ++a) {
+            const size_t i = arrived[static_cast<size_t>(a)];
+            try {
+                deserialize(ins[i], recv_bufs[i].get());
+                recv_bufs[i].reset();
+            } catch (...) {
+                std::lock_guard<std::mutex> lock(unpack_exception_mutex);
+                if (!unpack_exception) unpack_exception = std::current_exception();
+            }
+        }
+    });
+    if (unpack_exception) std::rethrow_exception(unpack_exception);
+    for (size_t i : arrived) {
+        merge_pending(incoming_total, ins[i]);
         if (memory_diagnostic) {
             --remaining_payloads;
             if (remaining_payloads == 0) {
                 memory_diagnostic(
                     "last_payload_merged",
                     routed_bytes + resident_bytes_pending(incoming_total) +
-                        resident_bytes_pending(in),
+                        resident_bytes_pending(ins[i]),
                     payload_buffer_bytes);
             }
         }
+        ins[i] = PendingFactorUpdates<DataType>{};
     }
     const size_t merged_pending_bytes = memory_diagnostic
         ? routed_bytes + resident_bytes_pending(incoming_total)
@@ -6214,8 +6255,11 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
         return communication_time;
     }
 
+    const auto t_install = clock::now();
     const std::vector<int64_t> installed_generators =
         install_remote_generators(lvl, incoming_total);
+    timers.install += seconds_since(t_install);
+    const auto t_form_near = clock::now();
     if (generator_near_enabled()) {
         if (kernel_symmetric(kernel, 0)) {
             form_near_updates_from_generators(
@@ -6241,12 +6285,16 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
         }
     }
 
+    timers.form_near += seconds_since(t_form_near);
+
     // Step 6: Apply the merged updates to local boxes.
+    const auto t_apply = clock::now();
     if (kernel_symmetric(kernel, 0)) {
         apply_updates_with_kernel_symmetric(tree, lvl, kernel, incoming_total, is_hermitian);
     } else {
         apply_updates_with_kernel_nonsymmetric(lvl, kernel, incoming_total);
     }
+    timers.apply += seconds_since(t_apply);
     if (memory_diagnostic) {
         memory_diagnostic(
             "post_apply", merged_pending_bytes, payload_buffer_bytes);

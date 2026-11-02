@@ -565,10 +565,10 @@ void hierarchical_factorization_parallel(
         static const bool phase_report = fmm::env::trace("phase");
         if (phase_report) {
             FMM_PHASE_RESET();
+            transport_timers() = TransportTimers{};
 #ifdef H2_HAVE_GPU
             gpu::owner_pass_stats() = gpu::OwnerPassStats{};
             gpu::eliminator_stats() = gpu::EliminatorStats{};
-            transport_timers() = TransportTimers{};
 #endif
         }
         if (!participates_in_transition) {
@@ -963,7 +963,10 @@ void hierarchical_factorization_parallel(
                                 transport_memory_diagnostic);
                     }
                     level_data_exchange += comm_duration_raw;
+                    const auto t_slicing = std::chrono::steady_clock::now();
                     update_neighbor_slicing_for_level(level, is_symmetric);
+                    transport_timers().slicing += std::chrono::duration<double>(
+                        std::chrono::steady_clock::now() - t_slicing).count();
                     if (memory_diagnostics.enabled()) {
                         memory_diagnostics.record(
                             tree, current_level, "color",
@@ -1475,7 +1478,10 @@ void hierarchical_factorization_parallel(
                             final_transport_memory_diagnostic);
                 }
                 level_data_exchange += final_comm_duration;
+                const auto t_slicing = std::chrono::steady_clock::now();
                 update_neighbor_slicing_for_level(level, is_symmetric);
+                transport_timers().slicing += std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - t_slicing).count();
             }
             if (memory_diagnostics.enabled()) {
                 memory_diagnostics.record(
@@ -1578,6 +1584,24 @@ void hierarchical_factorization_parallel(
                 MPI_Comm_rank(level_comm, &level_rank);
                 FMM_PHASE_REPORT(level_comm, 0, true, level_rank, current_level,
                                  omp_get_max_threads(), print_detail);
+                {
+                    // the exchange's steps (the transports' sum): this rank and the max over the ranks
+                    const auto& t = transport_timers();
+                    double v[11] = {t.sizes, t.payload, t.serialize, t.deserialize, t.assisting, t.install,
+                                    t.form_near, t.apply, t.slicing, t.bytes_sent / 1e9, t.bytes_received / 1e9};
+                    double vmax[11] = {0.0};
+                    MPI_Reduce(v, vmax, 11, MPI_DOUBLE, MPI_MAX, 0, level_comm);
+                    if (print_detail && level_rank == 0) {
+                        for (const double* x : {static_cast<const double*>(v), static_cast<const double*>(vmax)}) {
+                            std::printf("  [phase] level %d transport %s (s): sizes %.1f payload %.1f [serialize %.1f] "
+                                        "deserialize %.1f assisting %.1f install %.1f form-near %.1f apply %.1f "
+                                        "slicing %.1f | sent %.2f GB, received %.2f GB\n",
+                                        current_level, x == v ? "rank-root" : "max-ranks", x[0], x[1], x[2], x[3],
+                                        x[4], x[5], x[6], x[7], x[8], x[9], x[10]);
+                        }
+                        std::fflush(stdout);
+                    }
+                }
 #ifdef H2_HAVE_GPU
                 if (color_gpu_enabled() && print_detail && level_rank == 0 &&
                     !gpu_driver.report_level(current_level)) {
