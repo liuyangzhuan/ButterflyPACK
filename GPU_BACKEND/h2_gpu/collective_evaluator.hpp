@@ -197,11 +197,54 @@ void collective_sketches(Entries* entries, std::vector<Evaluator::SketchRequest>
         }
     }
     if (at.back() == 0) return;
+    std::vector<int> parts(requests.size(), 0);
+    for (const auto& kq : key_of) ++parts[kq.first];
+    if (entries->alone() && entries->has_sketch_device()) {
+        // One rank with a device sketch callback: each request's sketch
+        // added straight into its output, zeroed here, an orientation's keys
+        // in one call (a request's two parts in one orientation would share
+        // their output: the host's then).  Should an orientation decline, the
+        // host path below writes every output in full.
+        bool clash = false;
+        for (int t = 0; t < 2 && !clash; ++t) {
+            std::vector<int> seen(requests.size(), 0);
+            for (size_t k = 0; k < keys.size(); ++k) {
+                if (keys[k].transposed == (t == 1) && seen[key_of[k].first]++ > 0) clash = true;
+            }
+        }
+        if (!clash) {
+            for (const Evaluator::SketchRequest& r : requests) {
+                if (r.d <= 0 || r.cols.empty()) continue;
+                check_cuda(cudaMemset2DAsync(r.out, static_cast<size_t>(r.ldo) * sizeof(DataType), 0,
+                                             static_cast<size_t>(r.d) * sizeof(DataType), r.cols.size(), stream),
+                           "collective device sketches zero");
+            }
+            check_cuda(cudaStreamSynchronize(stream), "collective device sketches zero");  // (the callee's streams write next)
+            bool done = true;
+            for (int t = 0; t < 2 && done; ++t) {
+                std::vector<typename Entries::SketchKey> ks;
+                std::vector<void*> outs;
+                std::vector<int64_t> lds;
+                for (size_t k = 0; k < keys.size(); ++k) {
+                    if (keys[k].transposed != (t == 1)) continue;
+                    const Evaluator::SketchRequest& r = requests[key_of[k].first];
+                    ks.push_back(keys[k]);
+                    outs.push_back(r.out);
+                    lds.push_back(r.ldo);
+                }
+                const auto t_fetch = clock::now();
+                done = entries->fetch_sketches_device(ks, t == 1, outs.data(), lds.data(), stream);
+                fetching += std::chrono::duration<double>(clock::now() - t_fetch).count();
+            }
+            if (done) {
+                entries->count_delivery(std::chrono::duration<double>(clock::now() - t0).count() - fetching);
+                return;
+            }
+        }
+    }
     CollectiveImage img(at.back() * sizeof(DataType));
     DataType* const image = img.as<DataType>();
     parallel_zero(image, at.back());
-    std::vector<int> parts(requests.size(), 0);
-    for (const auto& kq : key_of) ++parts[kq.first];
     if (entries->alone()) {
         // One rank: each orientation's parts in one callback call, straight
         // into the image when they lie there back to back, one a request

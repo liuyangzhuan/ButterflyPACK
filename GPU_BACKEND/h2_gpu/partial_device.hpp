@@ -1644,6 +1644,71 @@ void partial_device_shared_pairs(PartialDeviceWork& work, const std::vector<cons
     work.release(d);  // (the stream keeps a later user of the bytes behind the kernels)
 }
 
+// A call's sketches added into the caller's device outputs instead of
+// downloaded (c_bpack_extractsketch_device): block k of y (at off[k], d[k] x
+// m[k] column major) into out[k] (leading dimension ld[k]), its column j
+// into column cols[col_off[k] + j], read from column src[col_off[k] + j]
+// when src is given (a point asked for at several positions has its sums at
+// its first), else from j.  The outputs of different blocks do not overlap.
+// Complete on return.
+template<typename DataType>
+void partial_add_into(PartialDeviceWork& work, const DataType* y, const std::vector<int64_t>& off,
+                      const std::vector<int64_t>& d, const std::vector<int64_t>& m, const std::vector<DataType*>& out,
+                      const std::vector<int64_t>& ld, const std::vector<int>& cols, const std::vector<int64_t>& col_off,
+                      const std::vector<int>& src) {
+    using S = typename DeviceScalar<DataType>::type;
+    constexpr int kTile = 64;
+    MetaBuilder& meta = work.meta();
+    const int64_t cols_at = static_cast<int64_t>(meta.append(cols));
+    const int64_t src_at = src.empty() ? -1 : static_cast<int64_t>(meta.append(src));
+    std::vector<BlockCopyItemT<S>> tiles;
+    for (size_t k = 0; k < out.size(); ++k) {
+        const int dk = static_cast<int>(d[k]), mk = static_cast<int>(m[k]);
+        for (int j0 = 0; j0 < mk; j0 += kTile) {
+            for (int i0 = 0; i0 < dk; i0 += kTile) {
+                const int64_t at = (col_off[k] + j0) * static_cast<int64_t>(sizeof(int));
+                BlockCopyItemT<S> it{};
+                it.out = reinterpret_cast<S*>(out[k]);
+                it.ors = 1;
+                it.ocs = ld[k];
+                it.out_rows.base = i0;
+                it.out_cols.offset = cols_at + at;
+                it.src = reinterpret_cast<const S*>(y + off[k]);
+                it.rs = 1;
+                it.cs = dk;
+                it.src_rows.base = i0;
+                if (src_at >= 0) it.src_cols.offset = src_at + at;
+                else it.src_cols.base = j0;
+                it.m = std::min(kTile, dk - i0);
+                it.n = std::min(kTile, mk - j0);
+                it.add = 1;
+                tiles.push_back(it);
+            }
+        }
+    }
+    if (tiles.empty()) return;
+    const size_t toff = meta.append(tiles);
+    char* md = work.upload_meta();
+    launch_block_copy(reinterpret_cast<const BlockCopyItemT<S>*>(md + toff), static_cast<int>(tiles.size()), kTile, kTile, md,
+                      work.stream());
+    work.sync();
+}
+
+// As partial_add_into, from host memory (the host path's blocks): uploaded
+// through the staging buffers first.
+template<typename DataType>
+void partial_add_host_into(const DataType* y, const std::vector<int64_t>& off, const std::vector<int64_t>& d,
+                           const std::vector<int64_t>& m, const std::vector<DataType*>& out, const std::vector<int64_t>& ld,
+                           const std::vector<int>& cols, const std::vector<int64_t>& col_off) {
+    PartialDeviceWork work;
+    const size_t bytes = static_cast<size_t>(off.empty() ? 0 : off.back()) * sizeof(DataType);
+    if (bytes == 0) return;
+    char* dy = work.alloc(bytes);
+    work.upload(dy, y, bytes);
+    partial_add_into(work, reinterpret_cast<const DataType*>(dy), off, d, m, out, ld, cols, col_off, std::vector<int>{});
+    work.release(dy);
+}
+
 // Bytes from the device to the host through the backend's pinned staging
 // buffers (the kept records' host copies)
 inline void partial_download(void* dst, const void* src, size_t bytes) {

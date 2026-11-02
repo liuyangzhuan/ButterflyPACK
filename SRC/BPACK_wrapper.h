@@ -157,6 +157,14 @@ void c_bpack_set_sketch_callback(F2Cptr* bmat, c_bpack_func_zmn_sketch C_FuncZmn
 // The transposed sketched blocks, for a nonsymmetric H2: request n asks for Y_n = Omega_n A(columns, rows)^T
 // (= Omega_n A^T(rows, columns)), the arguments as for the sketch callback (Omega_n over the rows).
 void c_bpack_set_sketch_transpose_callback(F2Cptr* bmat, c_bpack_func_zmn_sketch C_FuncZmnSketchT);
+// A sketch callback that adds on the device (GPU H2 with one rank, as a sequential front's): the requests of one
+// orientation call (transposed 0 or 1) as for the sketch callback, request n's Y_n (sketchdim[n] x colidx[n]) added
+// into dout[n] instead (device memory, column major with leading dimension ldo[n], zeroed by the caller) and no
+// alldat_loc, pgidx or pmaps (the caller's one rank owns every request).  done = 1 when it added every request (its
+// writes complete on return), 0 when it wrote nothing (the host callback is asked then).  stream: the caller's
+// cudaStream_t, for ordering.  Tried first when set; the host callbacks are still needed.
+typedef void (*c_bpack_func_zmn_sketch_device)(int* Nsketch, int* Nallrows, int* Nallcols, int64_t* Nallomega, int* allrows, int* allcols, int* rowidx, int* colidx, int* sketchdim, int* omegaidx, int* omega_row, int* omega_dest, double* omega_val, void** dout, int64_t* ldo, int* transposed, void* stream, int* done, C2Fptr C_QuantApp);
+void c_bpack_set_sketch_device_callback(F2Cptr* bmat, c_bpack_func_zmn_sketch_device C_FuncZmnSketchDevice);
 // The sketched blocks from a matrix on a subset of the caller's ranks (as c_bpack_extractelement_bridge): a
 // compression-only H2 (format 7) sketches them from its representation, a partial factorization (H2_partial) its
 // Schur complement's blocks as it computes them (1-based F22 indices, as for c_bpack_extractelement_bridge); other
@@ -164,6 +172,12 @@ void c_bpack_set_sketch_transpose_callback(F2Cptr* bmat, c_bpack_func_zmn_sketch
 void c_bpack_extractsketch_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree,F2Cptr* ptree_caller, int* Nsketch, int* Nallrows, int* Nallcols, int64_t* Nallomega, int64_t* Nalldat_loc, int* allrows, int* allcols, int* rowidx, int* colidx, int* sketchdim, int* omegaidx, int* omega_row, int* omega_dest, double* omega_val, C_DT* alldat_loc, int* pgidx, int* Npmap, int* pmaps);
 // The same for the transposed sketches, Y_n = Omega_n A(columns, rows)^T.
 void c_bpack_extractsketch_transpose_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree,F2Cptr* ptree_caller, int* Nsketch, int* Nallrows, int* Nallcols, int64_t* Nallomega, int64_t* Nalldat_loc, int* allrows, int* allcols, int* rowidx, int* colidx, int* sketchdim, int* omegaidx, int* omega_row, int* omega_dest, double* omega_val, C_DT* alldat_loc, int* pgidx, int* Npmap, int* pmaps);
+// A partial factorization's (H2_partial) sketched blocks for a one-rank caller, added on the device: the requests of
+// c_bpack_extractsketch_bridge (transposed 1: its transposed form), request n's Y_n (sketchdim[n] x colidx[n]) added
+// into dout[n] (device memory, leading dimension ldo[n]) with its column j into column dcols[c_n + j] (0-based; c_n
+// the earlier requests' colidx summed).  done = 1 when added (complete on return), 0 when this matrix cannot (another
+// format, more ranks, no GPU path; nothing written).  For a device sketch callback serving its children.
+void c_bpack_extractsketch_device(F2Cptr* bmat, F2Cptr* option, F2Cptr* ptree_caller, int* Nsketch, int* Nallrows, int* Nallcols, int64_t* Nallomega, int* allrows, int* allcols, int* rowidx, int* colidx, int* sketchdim, int* omegaidx, int* omega_row, int* omega_dest, double* omega_val, int* transposed, void** dout, int64_t* ldo, int* dcols, void* stream, int* done);
 void c_bpack_inv_mult_fortran(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* bmat,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);
 void c_bpack_inv_mult(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* bmat,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);
 /*
