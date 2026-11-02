@@ -3835,7 +3835,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
         int64_t entries = 0;        // sketched stored rows * sk
         int offset = 0;             // first column of W / row of P in the box's fill buffers
         int* ptr = nullptr;         // device lists (built on the device)
-        int* list = nullptr;
+        SketchEntry* list = nullptr;
         int* row_index = nullptr;   // source row of each sketched row
         int rows = 0;
         // a nonsymmetric matrix: this term fills the K(B, F)^T rows (W from
@@ -3863,7 +3863,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
         int* draws = nullptr;
         int* rows = nullptr;
         int* ptr = nullptr;
-        int* list = nullptr;
+        SketchEntry* list = nullptr;
         char* lists_block = nullptr;
         std::string trace;
         S* Y = nullptr;        // d x n
@@ -4402,21 +4402,21 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
     int max_row_blocks = 0;
     for (size_t bi = 0; bi < plans.size(); ++bi) {
         Plan& p = plans[bi];
-        const size_t I = sizeof(int);
-        if (p.total_rows > kEntryRowMask || p.d > kEntryDestMask) {
+        const size_t I = sizeof(int), E = sizeof(SketchEntry);
+        const size_t draws_n = static_cast<size_t>(p.total_rows) * p.sk;
+        if (p.total_rows > kEntryRowMask || p.d > kEntryDestMask || draws_n > static_cast<size_t>(std::numeric_limits<int>::max())) {
             throw std::runtime_error("LevelEliminator: sketch too large for the packed list entries");
         }
-        const size_t draws_n = static_cast<size_t>(p.total_rows) * p.sk;
         size_t bytes = 0;
         const size_t o_draws = bytes; bytes = align_up(bytes + draws_n * I);
         const size_t o_rows = bytes;  bytes = align_up(bytes + static_cast<size_t>(p.total_rows) * I);
         const size_t o_ptr = bytes;   bytes = align_up(bytes + (kSketchOwners + 1) * I);
-        const size_t o_list = bytes;  bytes = align_up(bytes + draws_n * I);
+        const size_t o_list = bytes;  bytes = align_up(bytes + draws_n * E);
         std::vector<size_t> o_src(p.sources.size());
         for (size_t j = 0; j < p.sources.size(); ++j) {
             o_src[j] = bytes;
             bytes = align_up(bytes + (kSketchOwners + 1) * I);
-            bytes = align_up(bytes + static_cast<size_t>(p.sources[j].entries) * I);
+            bytes = align_up(bytes + static_cast<size_t>(p.sources[j].entries) * E);
             bytes = align_up(bytes + static_cast<size_t>(p.sources[j].entries / p.sk) * I);  // row_index
         }
         char* block = heap_.alloc(bytes, ResidentKind::SketchLists);
@@ -4424,7 +4424,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
         p.draws = reinterpret_cast<int*>(block + o_draws);
         p.rows = reinterpret_cast<int*>(block + o_rows);
         p.ptr = reinterpret_cast<int*>(block + o_ptr);
-        p.list = reinterpret_cast<int*>(block + o_list);
+        p.list = reinterpret_cast<SketchEntry*>(block + o_list);
         SketchListsItem li;
         li.seed = static_cast<uint64_t>(wave[bi] + 1);
         li.d = p.d;
@@ -4444,8 +4444,8 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
             char* at = block + o_src[j];
             src.ptr = reinterpret_cast<int*>(at);
             at += align_up((kSketchOwners + 1) * I);
-            src.list = reinterpret_cast<int*>(at);
-            at += align_up(static_cast<size_t>(src.entries) * I);
+            src.list = reinterpret_cast<SketchEntry*>(at);
+            at += align_up(static_cast<size_t>(src.entries) * E);
             src.row_index = reinterpret_cast<int*>(at);
             src.rows = static_cast<int>(src.entries / p.sk);
             SourceListsItem si;

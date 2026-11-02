@@ -332,11 +332,12 @@ public:
         eval<T>(evals, d_evals, count, count, nullptr, points, stream);
         // the kernel rows of points 0 .. count - 1 at columns 0 .. count - 1,
         // one draw (row 0, destination 0, owner warp 0)
-        std::vector<int> lists(kSketchOwners + 2 + n, 1);
+        std::vector<int> lists(kSketchOwners + 1 + n, 1);
         lists[0] = 0;               // ptr: warp 0 owns entry 0, the others none
-        lists[kSketchOwners + 1] = 0;  // the entry: row 0, destination 0, +
-        for (size_t r = 0; r < n; ++r) lists[kSketchOwners + 2 + r] = static_cast<int>(r);
+        for (size_t r = 0; r < n; ++r) lists[kSketchOwners + 1 + r] = static_cast<int>(r);
         int* d_lists = upload(heap, lists, stream);
+        const std::vector<SketchEntry> entry(1, 0);  // the entry: row 0, destination 0, +
+        SketchEntry* d_entry = upload(heap, entry, stream);
         OrderedSketchItemT<T> s{};
         s.out = sketch;
         s.ldo = 1;
@@ -344,15 +345,16 @@ public:
         s.ncols = count;
         s.rows = count;
         s.ptr = d_lists;
-        s.entries = d_lists + kSketchOwners + 1;
+        s.entries = d_entry;
         s.scale = 1.0;
-        s.row_slots = d_lists + kSketchOwners + 2;
+        s.row_slots = d_lists + kSketchOwners + 1;
         s.col_base = 0;
         std::vector<OrderedSketchItemT<T>> sketches{s};
         OrderedSketchItemT<T>* d_sketches = upload(heap, sketches, stream);
         sketch_rows<T>(sketches, d_sketches, 1, count, points, stream);
         check_cuda(cudaStreamSynchronize(stream), "GPU evaluator warm-up");
-        for (void* p : {static_cast<void*>(d_sketches), static_cast<void*>(d_lists), static_cast<void*>(d_evals),
+        for (void* p : {static_cast<void*>(d_sketches), static_cast<void*>(d_lists), static_cast<void*>(d_entry),
+                        static_cast<void*>(d_evals),
                         static_cast<void*>(sketch), static_cast<void*>(block)}) {
             heap.free(p);
         }
@@ -442,12 +444,12 @@ private:
                        "collective sketch lists");
         }
         check_cuda(cudaStreamSynchronize(stream), "collective sketch lists");
-        std::vector<std::vector<int>> entries(asked.size());
+        std::vector<std::vector<SketchEntry>> entries(asked.size());
         for (size_t q = 0; q < asked.size(); ++q) {
             entries[q].resize(static_cast<size_t>(ptr[q][kSketchOwners] - ptr[q][0]));
             if (entries[q].empty()) continue;
             check_cuda(cudaMemcpyAsync(entries[q].data(), host_items[asked[q]].entries + ptr[q][0],
-                                       entries[q].size() * sizeof(int), cudaMemcpyDeviceToHost, stream),
+                                       entries[q].size() * sizeof(SketchEntry), cudaMemcpyDeviceToHost, stream),
                        "collective sketch draws");
         }
         check_cuda(cudaStreamSynchronize(stream), "collective sketch draws");
@@ -474,12 +476,12 @@ private:
                 at[static_cast<size_t>(row)] = static_cast<int>(part.size());
                 part.push_back(id);
             }
-            for (int e : entries[q]) {
-                const int row = e & kEntryRowMask;
+            for (SketchEntry e : entries[q]) {
+                const int row = static_cast<int>(e & kEntryRowMask);
                 const bool k = swapped(row);
                 (k ? r.korow : r.orow).push_back(at[static_cast<size_t>(row)]);
-                (k ? r.kodest : r.odest).push_back((e >> kEntryRowBits) & kEntryDestMask);
-                (k ? r.koval : r.oval).push_back((static_cast<unsigned>(e) & 0x80000000u) != 0 ? -s.scale : s.scale);
+                (k ? r.kodest : r.odest).push_back(static_cast<int>((e >> kEntryRowBits) & kEntryDestMask));
+                (k ? r.koval : r.oval).push_back(e < 0 ? -s.scale : s.scale);  // (the sign bit)
             }
         }
         sketch_fetch_(requests, stream);

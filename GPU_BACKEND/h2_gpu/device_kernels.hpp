@@ -251,7 +251,7 @@ struct SketchListsItem {
     int* draws;             // rows * sk
     int* rows_out;          // rows
     int* ptr;               // kSketchOwners + 1
-    int* entries;           // rows * sk
+    SketchEntry* entries;   // rows * sk
 };
 
 // One fill source of a box: destination lists of its stored rows.
@@ -260,7 +260,7 @@ struct SourceListsItem {
     int num_runs;           // <= kMaxSourceRuns
     int64_t runs_offset;    // RunDesc array in the metadata
     int* ptr;               // kSketchOwners + 1
-    int* entries;           // sum of the run counts * sk
+    SketchEntry* entries;   // sum of the run counts * sk
     int* row_index;         // sum of the run counts: source row of each sketched row
 };
 

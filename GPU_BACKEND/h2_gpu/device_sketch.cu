@@ -153,7 +153,7 @@ struct PartitionScratch {
 };
 
 template<typename Get>
-__device__ void block_partition(PartitionScratch& s, int total, int* ptr, int* entries, Get get) {
+__device__ void block_partition(PartitionScratch& s, int total, int* ptr, SketchEntry* entries, Get get) {
     const int lane = threadIdx.x & 31, warp = threadIdx.x >> 5;
     const unsigned below = (1u << lane) - 1u;
     const int chunk = ((total + kListWarps - 1) / kListWarps + 31) / 32 * 32;
@@ -162,7 +162,8 @@ __device__ void block_partition(PartitionScratch& s, int total, int* ptr, int* e
 #pragma unroll
     for (int b = 0; b < kSketchOwners; ++b) count[b] = 0;
     for (int f = f0; f < f1; f += 32) {
-        int owner = -1, value = 0;
+        int owner = -1;
+        SketchEntry value = 0;
         if (f + lane < f1) get(f + lane, owner, value);
 #pragma unroll
         for (int b = 0; b < kSketchOwners; ++b) count[b] += __popc(__ballot_sync(0xffffffffu, owner == b));
@@ -197,7 +198,8 @@ __device__ void block_partition(PartitionScratch& s, int total, int* ptr, int* e
 #pragma unroll
     for (int b = 0; b < kSketchOwners; ++b) at[b] = s.start[b] + s.base[warp][b];
     for (int f = f0; f < f1; f += 32) {
-        int owner = -1, value = 0;
+        int owner = -1;
+        SketchEntry value = 0;
         if (f + lane < f1) get(f + lane, owner, value);
 #pragma unroll
         for (int b = 0; b < kSketchOwners; ++b) {
@@ -208,20 +210,21 @@ __device__ void block_partition(PartitionScratch& s, int total, int* ptr, int* e
     }
 }
 
-__device__ __forceinline__ int pack_entry(int row, int dest, int draw) {
-    return static_cast<int>(static_cast<unsigned>(row) | (static_cast<unsigned>(dest) << kEntryRowBits) |
-                            (static_cast<unsigned>(draw) & 0x80000000u));
+__device__ __forceinline__ SketchEntry pack_entry(int row, int dest, int draw) {
+    return static_cast<SketchEntry>(static_cast<unsigned long long>(static_cast<unsigned>(row)) |
+                                    (static_cast<unsigned long long>(static_cast<unsigned>(dest)) << kEntryRowBits) |
+                                    (static_cast<unsigned long long>(static_cast<unsigned>(draw) & 0x80000000u) << 32));
 }
 
 // Kernel-row lists: the box's draws in (row, draw) order, partitioned by
 // owner warp (destination mod kSketchOwners).  (rows * sk fits an int: the
-// host bounds the rows by kEntryRowMask.)
+// host bounds it.)
 __global__ void __launch_bounds__(kListThreads) sketch_row_lists_kernel(const SketchListsItem* items) {
     __shared__ PartitionScratch scratch;
     const SketchListsItem item = items[blockIdx.x];
     const int sk = item.sk;
     const int* draws = item.draws;
-    block_partition(scratch, item.rows * sk, item.ptr, item.entries, [&](int q, int& owner, int& value) {
+    block_partition(scratch, item.rows * sk, item.ptr, item.entries, [&](int q, int& owner, SketchEntry& value) {
         const int draw = draws[q];
         const int dest = draw & 0x7fffffff;
         owner = dest % kSketchOwners;
@@ -262,7 +265,7 @@ __global__ void __launch_bounds__(kListThreads) sketch_source_lists_kernel(const
     }
     // a thread's inputs come in order, so the run search restarts rarely
     int cur = 0;
-    block_partition(scratch, run_start[num_runs], item.ptr, item.entries, [&](int f, int& owner, int& value) {
+    block_partition(scratch, run_start[num_runs], item.ptr, item.entries, [&](int f, int& owner, SketchEntry& value) {
         if (f < run_start[cur]) cur = 0;
         while (f >= run_start[cur + 1]) ++cur;
         const int local = f - run_start[cur];

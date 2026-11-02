@@ -439,7 +439,8 @@ std::vector<int64_t> compress_level_ids(ParallelTree<CoordType, DataType>* tree,
         p.sk = shape.sk;
         p.direct = shape.direct;
         p.scale = 1.0 / std::sqrt(static_cast<double>(p.sk));
-        if (p.rows > kEntryRowMask || p.d > kEntryDestMask) {
+        if (p.rows > kEntryRowMask || p.d > kEntryDestMask ||
+            static_cast<size_t>(p.rows) * p.sk > static_cast<size_t>(std::numeric_limits<int>::max())) {
             host_boxes.push_back(p.box);  // too large for the packed list entries
             continue;
         }
@@ -453,7 +454,7 @@ std::vector<int64_t> compress_level_ids(ParallelTree<CoordType, DataType>* tree,
     auto lists_bytes = [&](const Plan& p) {
         const size_t draws = static_cast<size_t>(p.rows) * p.sk;
         return align_up(draws * I) + align_up(static_cast<size_t>(p.rows) * I) + align_up((kSketchOwners + 1) * I) +
-               align_up(draws * I);
+               align_up(draws * sizeof(SketchEntry));
     };
     // adaptive ID rows (H2_ID_proxy 2): each sketch heads a taller block that
     // the selected far rows join, and the ID runs in a copy of it
@@ -514,7 +515,7 @@ std::vector<int64_t> compress_level_ids(ParallelTree<CoordType, DataType>* tree,
             int* d_draws = reinterpret_cast<int*>(at);    at += align_up(draws * I);
             int* d_rows = reinterpret_cast<int*>(at);     at += align_up(static_cast<size_t>(p.rows) * I);
             int* d_ptr = reinterpret_cast<int*>(at);      at += align_up((kSketchOwners + 1) * I);
-            int* d_list = reinterpret_cast<int*>(at);
+            SketchEntry* d_list = reinterpret_cast<SketchEntry*>(at);
             SketchListsItem& li = list_items[static_cast<size_t>(i)];
             li.seed = static_cast<uint64_t>(box.morton_index + 1);
             li.d = p.d;
