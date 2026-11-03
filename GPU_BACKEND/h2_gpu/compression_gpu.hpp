@@ -593,9 +593,13 @@ std::vector<int64_t> compress_level_ids(ParallelTree<CoordType, DataType>* tree,
         stats.bytes_up += static_cast<double>(meta.size());
         launch_sketch_lists(reinterpret_cast<const SketchListsItem*>(md + off_list_items), count, max_blocks, nullptr, 0,
                             md, stream);
-        // (the row slots are the sketch lists' output: read on the device)
+        // (the row slots are the sketch lists' output: read on the device;
+        // the boxes' row blocks, for an evaluator that asks a ring box at a
+        // time)
+        std::vector<std::vector<RowBlockDesc>> row_blocks(static_cast<size_t>(count));
+        for (int i = 0; i < count; ++i) row_blocks[static_cast<size_t>(i)] = plans[c0 + static_cast<size_t>(i)].blocks;
         evaluator.sketch_rows<S>(row_items, reinterpret_cast<const OrderedSketchItemT<S>*>(md + off_rows), max_d, max_n,
-                                 points.table(), stream);
+                                 points.table(), stream, &row_blocks);
         std::vector<char> h_id(id_bytes);
         if (adaptive) {
             // rounds until every box has its rows and its final ID

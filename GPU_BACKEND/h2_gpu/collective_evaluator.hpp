@@ -25,6 +25,7 @@
 #include <chrono>
 #include <memory>
 #include <stdexcept>
+#include <unordered_map>
 #include <vector>
 
 namespace fmm {
@@ -92,6 +93,44 @@ inline size_t image_items_at(size_t value_bytes) {
     return (value_bytes + a - 1) / a * a;
 }
 
+// One rank: the places of a batch's blocks in its image, in order, except
+// that a block asked for again (the same rows and columns, in order) lies
+// where its first copy does and is fetched once (Evaluator::sketch_rows'
+// ring blocks; several ranks drop such a request in CollectiveEntries'
+// rounds).  repeat[b]: block b is such a copy.  Returns the image's entries.
+inline size_t share_repeated_blocks(const bpack_gpu_block_batch* batch, std::vector<size_t>& pos,
+                                    std::vector<char>& repeat) {
+    std::unordered_map<uint64_t, std::vector<int>> seen;
+    size_t total = 0;
+    for (int b = 0; b < batch->count; ++b) {
+        const bpack_gpu_block& blk = batch->blocks[b];
+        pos[static_cast<size_t>(b)] = total;
+        if (blk.m <= 0 || blk.n <= 0) continue;
+        uint64_t h = 1469598103934665603ULL ^ (static_cast<uint64_t>(blk.m) * 1000003ULL + static_cast<uint64_t>(blk.n));
+        for (int i = 0; i < blk.m; ++i) h = (h ^ static_cast<uint64_t>(blk.row_ids_host[i])) * 1099511628211ULL;
+        h = (h ^ 0x9e3779b97f4a7c15ULL) * 1099511628211ULL;
+        for (int j = 0; j < blk.n; ++j) h = (h ^ static_cast<uint64_t>(blk.col_ids_host[j])) * 1099511628211ULL;
+        std::vector<int>& firsts = seen[h];
+        int same = -1;
+        for (int c : firsts) {
+            const bpack_gpu_block& o = batch->blocks[c];
+            if (o.m == blk.m && o.n == blk.n && std::equal(blk.row_ids_host, blk.row_ids_host + blk.m, o.row_ids_host) &&
+                std::equal(blk.col_ids_host, blk.col_ids_host + blk.n, o.col_ids_host)) {
+                same = c;
+                break;
+            }
+        }
+        if (same >= 0) {
+            pos[static_cast<size_t>(b)] = pos[static_cast<size_t>(same)];
+            repeat[static_cast<size_t>(b)] = 1;
+            continue;
+        }
+        firsts.push_back(b);
+        total += static_cast<size_t>(blk.m) * static_cast<size_t>(blk.n);
+    }
+    return total;
+}
+
 template<typename DataType, typename Entries>
 void collective_block_evaluator(const bpack_gpu_block_batch* batch, void* user) {
     Entries* entries = static_cast<Entries*>(user);
@@ -132,18 +171,23 @@ void collective_block_evaluator(const bpack_gpu_block_batch* batch, void* user) 
         }
     }
     // the blocks packed column by column, those not fetched yet fetched now
-    // (one rank: all of them, straight into the image, zeroed for the
-    // callback); the copies' items after them
-    const size_t items_at = image_items_at(at.back() * sizeof(DataType));
+    // (one rank: all of them but repeats, straight into the image, zeroed for
+    // the callback); the copies' items after them
+    std::vector<size_t> pos(at.begin(), at.end() - 1);
+    std::vector<char> repeat(static_cast<size_t>(count), 0);
+    const size_t total = entries->alone() ? share_repeated_blocks(batch, pos, repeat) : at.back();
+    const size_t items_at = image_items_at(total * sizeof(DataType));
     CollectiveImage img(items_at + static_cast<size_t>(count) * sizeof(ImageCopyItem));
     DataType* const image = img.as<DataType>();
     if (entries->alone()) {
-        parallel_zero(image, at.back());
+        parallel_zero(image, total);
         std::vector<typename Entries::BlockRef> refs;
         refs.reserve(static_cast<size_t>(count));
         for (int b = 0; b < count; ++b) {
             const bpack_gpu_block& blk = batch->blocks[b];
-            if (blk.m > 0 && blk.n > 0) refs.push_back({blk.row_ids_host, blk.m, blk.col_ids_host, blk.n});
+            if (blk.m > 0 && blk.n > 0 && !repeat[static_cast<size_t>(b)]) {
+                refs.push_back({blk.row_ids_host, blk.m, blk.col_ids_host, blk.n});
+            }
         }
         const auto t_fetch = clock::now();
         entries->fetch_blocks_direct(refs, image);
@@ -181,7 +225,7 @@ void collective_block_evaluator(const bpack_gpu_block_batch* batch, void* user) 
     for (int b = 0; b < count; ++b) {
         const bpack_gpu_block& blk = batch->blocks[b];
         if (blk.m <= 0 || blk.n <= 0) continue;
-        items[nitems++] = {d_image + at[static_cast<size_t>(b)] * sizeof(DataType), blk.out, blk.ld, blk.m, blk.n};
+        items[nitems++] = {d_image + pos[static_cast<size_t>(b)] * sizeof(DataType), blk.out, blk.ld, blk.m, blk.n};
         max_entries = std::max(max_entries, static_cast<int64_t>(blk.m) * blk.n);
     }
     img.upload(d_image, items_at + static_cast<size_t>(nitems) * sizeof(ImageCopyItem), stream);

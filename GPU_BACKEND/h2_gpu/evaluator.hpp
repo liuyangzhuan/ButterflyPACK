@@ -171,10 +171,19 @@ public:
     }
 
     // The ordered sketch of kernel rows (OrderedSketchItemT, value(row, c) =
-    // K(point col_base + c, point row_slots[row])).
+    // K(point col_base + c, point row_slots[row])).  row_blocks (optional):
+    // each item's rows as the runs its sketch lists were built from; entries
+    // through a collective callback are then asked for a run at a time, as
+    // the host's ID asks for them, so that a block two items share is asked
+    // for twice in the same form and fetched once (a nonsymmetric ID's ring:
+    // box B's K(B, F) rows are box F's transposed K(F, B)^T rows).  Asked
+    // for whole, every ring entry was fetched twice: 37% of the entries a
+    // STRUMPACK four-block front's compression-only F22s fetched (Poisson
+    // 400^3, 64 GPUs).
     template<typename T>
     void sketch_rows(const std::vector<OrderedSketchItemT<T>>& host_items, const OrderedSketchItemT<T>* items,
-                     int max_d, int max_cols, const PointTable& points, cudaStream_t stream) const {
+                     int max_d, int max_cols, const PointTable& points, cudaStream_t stream,
+                     const std::vector<std::vector<RowBlockDesc>>* row_blocks = nullptr) const {
         if (host_items.empty() || max_d <= 0 || max_cols <= 0) return;
         check_type<T>();
         if (form_ == Form::entry) {
@@ -248,36 +257,61 @@ public:
                 T* block = reinterpret_cast<T*>(scratch + at);
                 at += align_up(static_cast<size_t>(std::max(s.ncols, 0)) * std::max(s.rows, 0) * sizeof(T));
                 if (s.ncols > 0 && s.rows > 0) {
+                    const std::vector<RowBlockDesc>* runs =
+                        collective_ && row_blocks != nullptr ? &(*row_blocks)[k] : nullptr;
                     for (const Segment& g : segments_of(s)) {
                         const int len = g.r1 - g.r0;
-                        EvalItemT<T> e;
-                        if (!g.swapped) {
-                            // block(c, row) = K(point col_base + c, point row_slots[row])
-                            e.out = block + static_cast<size_t>(g.r0) * s.ncols;
-                            e.ld = s.ncols;
-                            e.m = s.ncols;
-                            e.n = len;
-                            e.rows = IndexList{-1, s.col_base, nullptr};
-                            e.cols = IndexList{-1, 0, s.row_slots + g.r0};
-                        } else {
-                            // tmp(r, c) = K(point row_slots[r0 + r], point col_base + c), then
-                            // block(c, r0 + r) = tmp(r, c)
-                            T* tmp = reinterpret_cast<T*>(scratch + at);
+                        // tmp(r, c) = K(point row_slots[r0 + r], point col_base + c), then
+                        // block(c, r0 + r) = tmp(r, c)
+                        T* tmp = nullptr;
+                        if (g.swapped) {
+                            tmp = reinterpret_cast<T*>(scratch + at);
                             at += align_up(static_cast<size_t>(len) * s.ncols * sizeof(T));
-                            e.out = tmp;
-                            e.ld = len;
-                            e.m = len;
-                            e.n = s.ncols;
-                            e.rows = IndexList{-1, 0, s.row_slots + g.r0};
-                            e.cols = IndexList{-1, s.col_base, nullptr};
                             transposes.push_back(TransposeItemT<T>{tmp, len, block + static_cast<size_t>(g.r0) * s.ncols,
                                                                    s.ncols, len, s.ncols});
                             max_tm = std::max(max_tm, len);
                             max_tn = std::max(max_tn, s.ncols);
                         }
-                        evals.push_back(e);
-                        max_m = std::max(max_m, e.m);
-                        max_n = std::max(max_n, e.n);
+                        // rows r0 .. r1 - 1 of the segment, the points `rows`
+                        auto add = [&](int r0, int r1, IndexList rows) {
+                            EvalItemT<T> e;
+                            if (!g.swapped) {
+                                // block(c, row) = K(point col_base + c, point row_slots[row])
+                                e.out = block + static_cast<size_t>(r0) * s.ncols;
+                                e.ld = s.ncols;
+                                e.m = s.ncols;
+                                e.n = r1 - r0;
+                                e.rows = IndexList{-1, s.col_base, nullptr};
+                                e.cols = rows;
+                            } else {
+                                e.out = tmp + (r0 - g.r0);
+                                e.ld = len;
+                                e.m = r1 - r0;
+                                e.n = s.ncols;
+                                e.rows = rows;
+                                e.cols = IndexList{-1, s.col_base, nullptr};
+                            }
+                            evals.push_back(e);
+                            max_m = std::max(max_m, e.m);
+                            max_n = std::max(max_n, e.n);
+                        };
+                        if (runs == nullptr) {
+                            add(g.r0, g.r1, IndexList{-1, 0, s.row_slots + g.r0});
+                            continue;
+                        }
+                        int covered = 0;
+                        for (const RowBlockDesc& rb : *runs) {
+                            const int r0 = std::max(g.r0, rb.row_base), r1 = std::min(g.r1, rb.row_base + rb.count);
+                            if (r1 <= r0) continue;
+                            const int off = r0 - rb.row_base;
+                            add(r0, r1, rb.list != nullptr ? IndexList{-1, rb.slot_base, rb.list + off}
+                                                           : IndexList{-1, rb.slot_base + off, nullptr});
+                            covered += r1 - r0;
+                        }
+                        if (covered != len) {
+                            if (scratch != nullptr) heap.free(scratch);
+                            throw std::logic_error("Evaluator::sketch_rows: the row runs do not cover an item's rows");
+                        }
                     }
                 }
                 s.src = block;
