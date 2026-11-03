@@ -589,7 +589,7 @@ public:
         std::fill(origin_entries_, origin_entries_ + static_cast<int>(EntryOrigin::count), 0.0);
         std::fill(dup_blocks_, dup_blocks_ + static_cast<int>(EntryOrigin::count), 0.0);
         std::fill(dup_entries_, dup_entries_ + static_cast<int>(EntryOrigin::count), 0.0);
-        extraction_profile() = ExtractionProfile{};
+        reset_extraction_profile();
     }
     int64_t fetched_blocks() const { return fetched_blocks_; }
     double fetched_entries() const { return fetched_entries_; }

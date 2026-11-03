@@ -25,4 +25,24 @@ inline ExtractionProfile& extraction_profile() {
     return profile;
 }
 
+// What the resets (CollectiveEntries::reset_counts, at every factorization)
+// took out of extraction_profile(): with it, the process's totals since the
+// start (c_bpack_get_extraction_profile).
+inline ExtractionProfile& extraction_profile_reset() {
+    static ExtractionProfile profile;
+    return profile;
+}
+
+// extraction_profile() zeroed, its values kept in extraction_profile_reset().
+inline void reset_extraction_profile() {
+    ExtractionProfile& p = extraction_profile();
+    ExtractionProfile& r = extraction_profile_reset();
+    for (int s = 0; s < ExtractionProfile::kSteps; ++s) r.seconds[s] += p.seconds[s];
+    r.route_mpi += p.route_mpi;
+    r.entries_computed += p.entries_computed;
+    r.bytes_routed += p.bytes_routed;
+    r.calls += p.calls;
+    p = ExtractionProfile{};
+}
+
 }  // namespace fmm
