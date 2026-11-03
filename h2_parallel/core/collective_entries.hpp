@@ -40,6 +40,7 @@
 #include <mpi.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -694,20 +695,77 @@ private:
         }
         return nullptr;
     }
-    // Every rank's list, stacked by rank (the same on every rank).
+    // Every rank's list, stacked by rank (the same on every rank), each
+    // rank's length known everywhere (lengths: from the lists gathered
+    // before it).
     template<typename T>
-    std::vector<T> gatherv(const std::vector<T>& local, MPI_Datatype type) {
-        int n = checked(static_cast<int64_t>(local.size()), "a request list");
+    std::vector<T> gatherv(const std::vector<T>& local, MPI_Datatype type, const std::vector<int64_t>& lengths) {
         std::vector<int> ns(static_cast<size_t>(size_)), displs(static_cast<size_t>(size_));
-        MPI_Allgather(&n, 1, MPI_INT, ns.data(), 1, MPI_INT, comm_);
         int64_t total = 0;
         for (int p = 0; p < size_; ++p) {
+            ns[static_cast<size_t>(p)] = checked(lengths[static_cast<size_t>(p)], "a request list");
             displs[static_cast<size_t>(p)] = checked(total, "the request lists");
-            total += ns[static_cast<size_t>(p)];
+            total += lengths[static_cast<size_t>(p)];
         }
         std::vector<T> all(static_cast<size_t>(total));
-        MPI_Allgatherv(local.data(), n, type, all.data(), ns.data(), displs.data(), type, comm_);
+        MPI_Allgatherv(local.data(), checked(static_cast<int64_t>(local.size()), "a request list"), type, all.data(),
+                       ns.data(), displs.data(), type, comm_);
         return all;
+    }
+
+    // A sketch request's Omega on the wire.  Every rank receives every
+    // rank's requests, and Omega's entries as (row, destination, value) were
+    // 89% of the bytes the rounds gathered (Poisson 400^3, 64 ranks, the
+    // distributed fronts), although both paths draw +-one scale a request.
+    // An entry is two varints: its row's step from the previous entry's
+    // (zigzag), and 2 x its destination (zigzag) + its value's sign; values
+    // that are not +-one scale follow as doubles.  About 3 bytes an entry
+    // instead of 16, read back to the same lists in the same order.
+    static void put_varint(std::vector<unsigned char>& out, uint64_t v) {
+        for (; v >= 0x80; v >>= 7) out.push_back(static_cast<unsigned char>(v | 0x80));
+        out.push_back(static_cast<unsigned char>(v));
+    }
+    static uint64_t get_varint(const unsigned char*& p) {
+        uint64_t v = 0;
+        for (int shift = 0;; shift += 7) {
+            const unsigned char c = *p++;
+            v |= static_cast<uint64_t>(c & 0x7f) << shift;
+            if (c < 0x80) return v;
+        }
+    }
+    static uint64_t zigzag(int64_t v) { return (static_cast<uint64_t>(v) << 1) ^ static_cast<uint64_t>(v >> 63); }
+    static int64_t unzigzag(uint64_t v) { return static_cast<int64_t>(v >> 1) ^ -static_cast<int64_t>(v & 1); }
+    // s's Omega appended to out; whether its values are +-scale (scale:
+    // the first one's magnitude)
+    static bool put_omega(const Sketch& s, std::vector<unsigned char>& out, double& scale) {
+        scale = s.oval.empty() ? 0.0 : std::fabs(s.oval.front());
+        bool uniform = true;
+        for (double v : s.oval) uniform = uniform && std::fabs(v) == scale;
+        int64_t prev = 0;
+        for (size_t e = 0; e < s.orow.size(); ++e) {
+            put_varint(out, zigzag(static_cast<int64_t>(s.orow[e]) - prev));
+            prev = s.orow[e];
+            put_varint(out, zigzag(s.odest[e]) << 1 | (std::signbit(s.oval[e]) ? 1 : 0));
+        }
+        if (!uniform) {
+            const unsigned char* v = reinterpret_cast<const unsigned char*>(s.oval.data());
+            out.insert(out.end(), v, v + s.oval.size() * sizeof(double));
+        }
+        return uniform;
+    }
+    // a request's nnz entries of Omega from p, 1-based as the callbacks take
+    // them
+    static void get_omega(const unsigned char* p, int64_t nnz, bool uniform, double scale, int* row, int* dest,
+                          double* val) {
+        int64_t prev = 0;
+        for (int64_t e = 0; e < nnz; ++e) {
+            prev += unzigzag(get_varint(p));
+            const uint64_t d = get_varint(p);
+            row[e] = static_cast<int>(prev + 1);
+            dest[e] = static_cast<int>(unzigzag(d >> 1) + 1);
+            val[e] = (d & 1) != 0 ? -scale : scale;
+        }
+        if (!uniform) std::memcpy(val, p, static_cast<size_t>(nnz) * sizeof(double));
     }
 
     static uint64_t hash(const int64_t* x, int64_t nx, const int64_t* y, int64_t ny) {
@@ -871,37 +929,35 @@ private:
     }
     void fetch_blocks(const std::vector<int>& counts) {
         const double t_gather = MPI_Wtime();
-        std::vector<int> my_sizes;  // rows, cols per block
-        std::vector<int> my_ids;    // 1-based rows then columns per block
+        // rows, cols per block, then the 1-based rows and the columns, each
+        // gathered straight into the callback's list (a rank's lengths from
+        // its sizes)
+        std::vector<int> my_sizes, my_rows, my_cols;
         for (const Block& b : pending_) {
             my_sizes.push_back(checked(static_cast<int64_t>(b.rows.size()), "a block's rows"));
             my_sizes.push_back(checked(static_cast<int64_t>(b.cols.size()), "a block's columns"));
-            for (int64_t r : b.rows) my_ids.push_back(checked(r + 1, "an index"));
-            for (int64_t c : b.cols) my_ids.push_back(checked(c + 1, "an index"));
+            for (int64_t r : b.rows) my_rows.push_back(checked(r + 1, "an index"));
+            for (int64_t c : b.cols) my_cols.push_back(checked(c + 1, "an index"));
         }
-        const std::vector<int> sizes = gatherv(my_sizes, MPI_INT);
-        const std::vector<int> ids = gatherv(my_ids, MPI_INT);
+        std::vector<int64_t> nsizes(static_cast<size_t>(size_)), nrows(static_cast<size_t>(size_)),
+            ncols(static_cast<size_t>(size_));
+        for (int p = 0; p < size_; ++p) nsizes[static_cast<size_t>(p)] = 2 * int64_t{counts[static_cast<size_t>(p)]};
+        const std::vector<int> sizes = gatherv(my_sizes, MPI_INT, nsizes);
         int ninter = 0;
         for (int c : counts) ninter += c;
         std::vector<int> rowidx(static_cast<size_t>(ninter)), colidx(static_cast<size_t>(ninter)),
-            pgidx(static_cast<size_t>(ninter)), allrows, allcols;
-        {
-            int n = 0;
-            size_t at = 0;
-            for (int p = 0; p < size_; ++p) {
-                for (int b = 0; b < counts[static_cast<size_t>(p)]; ++b, ++n) {
-                    rowidx[static_cast<size_t>(n)] = sizes[static_cast<size_t>(2 * n)];
-                    colidx[static_cast<size_t>(n)] = sizes[static_cast<size_t>(2 * n + 1)];
-                    pgidx[static_cast<size_t>(n)] = p;
-                    allrows.insert(allrows.end(), ids.begin() + static_cast<std::ptrdiff_t>(at),
-                                   ids.begin() + static_cast<std::ptrdiff_t>(at + rowidx[static_cast<size_t>(n)]));
-                    at += static_cast<size_t>(rowidx[static_cast<size_t>(n)]);
-                    allcols.insert(allcols.end(), ids.begin() + static_cast<std::ptrdiff_t>(at),
-                                   ids.begin() + static_cast<std::ptrdiff_t>(at + colidx[static_cast<size_t>(n)]));
-                    at += static_cast<size_t>(colidx[static_cast<size_t>(n)]);
-                }
+            pgidx(static_cast<size_t>(ninter));
+        for (int p = 0, n = 0; p < size_; ++p) {
+            for (int b = 0; b < counts[static_cast<size_t>(p)]; ++b, ++n) {
+                rowidx[static_cast<size_t>(n)] = sizes[static_cast<size_t>(2 * n)];
+                colidx[static_cast<size_t>(n)] = sizes[static_cast<size_t>(2 * n + 1)];
+                pgidx[static_cast<size_t>(n)] = p;
+                nrows[static_cast<size_t>(p)] += rowidx[static_cast<size_t>(n)];
+                ncols[static_cast<size_t>(p)] += colidx[static_cast<size_t>(n)];
             }
         }
+        std::vector<int> allrows = gatherv(my_rows, MPI_INT, nrows);
+        std::vector<int> allcols = gatherv(my_cols, MPI_INT, ncols);
         std::vector<int> pmaps(static_cast<size_t>(3 * size_));
         for (int p = 0; p < size_; ++p) {
             pmaps[static_cast<size_t>(p)] = 1;
@@ -957,51 +1013,78 @@ private:
         for (Sketch& s : pending_sketches_) {
             if (s.transposed == transposed) mine.push_back(&s);
         }
-        std::vector<int> my_sizes;  // rows, cols, d, nnz per request
-        std::vector<int> my_ids;    // 1-based rows then columns per request
-        std::vector<int> my_omega;  // 1-based (row, destination) per entry
-        std::vector<double> my_values;
+        // per request rows, cols, d, nnz, the bytes of its Omega, whether its
+        // values are +-one scale and that scale's bits; then the 1-based rows,
+        // the columns and the Omegas (put_omega, padded to whole words a
+        // rank), each rank's lengths from its heads
+        constexpr size_t kHead = 7;
+        std::vector<int64_t> my_heads;
+        std::vector<int> my_rows, my_cols;
+        std::vector<unsigned char> my_omega;
         for (const Sketch* sp : mine) {
             const Sketch& s = *sp;
-            my_sizes.insert(my_sizes.end(), {checked(static_cast<int64_t>(s.rows.size()), "a sketch's rows"),
+            const size_t start = my_omega.size();
+            double scale = 0.0;
+            const bool uniform = put_omega(s, my_omega, scale);
+            int64_t scale_bits = 0;
+            std::memcpy(&scale_bits, &scale, sizeof(scale_bits));
+            my_heads.insert(my_heads.end(), {checked(static_cast<int64_t>(s.rows.size()), "a sketch's rows"),
                                              checked(static_cast<int64_t>(s.cols.size()), "a sketch's columns"), s.d,
-                                             checked(static_cast<int64_t>(s.orow.size()), "a sketch's entries")});
-            for (int64_t r : s.rows) my_ids.push_back(checked(r + 1, "an index"));
-            for (int64_t c : s.cols) my_ids.push_back(checked(c + 1, "an index"));
-            for (size_t e = 0; e < s.orow.size(); ++e) my_omega.insert(my_omega.end(), {s.orow[e] + 1, s.odest[e] + 1});
-            my_values.insert(my_values.end(), s.oval.begin(), s.oval.end());
+                                             checked(static_cast<int64_t>(s.orow.size()), "a sketch's entries"),
+                                             static_cast<int64_t>(my_omega.size() - start), uniform ? 1 : 0,
+                                             scale_bits});
+            for (int64_t r : s.rows) my_rows.push_back(checked(r + 1, "an index"));
+            for (int64_t c : s.cols) my_cols.push_back(checked(c + 1, "an index"));
         }
-        const std::vector<int> sizes = gatherv(my_sizes, MPI_INT);
-        const std::vector<int> ids = gatherv(my_ids, MPI_INT);
-        const std::vector<int> omega = gatherv(my_omega, MPI_INT);
-        const std::vector<double> omega_val = gatherv(my_values, MPI_DOUBLE);
+        std::vector<uint64_t> my_words((my_omega.size() + sizeof(uint64_t) - 1) / sizeof(uint64_t), 0);
+        if (!my_omega.empty()) std::memcpy(my_words.data(), my_omega.data(), my_omega.size());
+        std::vector<int64_t> nheads(static_cast<size_t>(size_)), nrows(static_cast<size_t>(size_)),
+            ncols(static_cast<size_t>(size_)), nwords(static_cast<size_t>(size_));
+        for (int p = 0; p < size_; ++p) nheads[static_cast<size_t>(p)] = kHead * counts[static_cast<size_t>(p)];
+        const std::vector<int64_t> heads = gatherv(my_heads, MPI_INT64_T, nheads);
         int nsketch = 0;
         for (int c : counts) nsketch += c;
         std::vector<int> rowidx(static_cast<size_t>(nsketch)), colidx(static_cast<size_t>(nsketch)),
-            dims(static_cast<size_t>(nsketch)), omegaidx(static_cast<size_t>(nsketch)), pgidx(static_cast<size_t>(nsketch)),
-            allrows, allcols, omega_row(omega_val.size()), omega_dest(omega_val.size());
-        {
-            int n = 0;
-            size_t at = 0;
-            for (int p = 0; p < size_; ++p) {
-                for (int b = 0; b < counts[static_cast<size_t>(p)]; ++b, ++n) {
-                    const size_t q = static_cast<size_t>(n);
-                    rowidx[q] = sizes[4 * q];
-                    colidx[q] = sizes[4 * q + 1];
-                    dims[q] = sizes[4 * q + 2];
-                    omegaidx[q] = sizes[4 * q + 3];
-                    pgidx[q] = p;
-                    allrows.insert(allrows.end(), ids.begin() + static_cast<std::ptrdiff_t>(at),
-                                   ids.begin() + static_cast<std::ptrdiff_t>(at + rowidx[q]));
-                    at += static_cast<size_t>(rowidx[q]);
-                    allcols.insert(allcols.end(), ids.begin() + static_cast<std::ptrdiff_t>(at),
-                                   ids.begin() + static_cast<std::ptrdiff_t>(at + colidx[q]));
-                    at += static_cast<size_t>(colidx[q]);
-                }
+            dims(static_cast<size_t>(nsketch)), omegaidx(static_cast<size_t>(nsketch)), pgidx(static_cast<size_t>(nsketch));
+        std::vector<int64_t> entry_at(static_cast<size_t>(nsketch) + 1, 0), byte_at(static_cast<size_t>(nsketch));
+        int64_t word_at = 0;  // (a rank's first word)
+        for (int p = 0, n = 0; p < size_; ++p) {
+            int64_t bytes = 0;
+            for (int b = 0; b < counts[static_cast<size_t>(p)]; ++b, ++n) {
+                const size_t q = static_cast<size_t>(n);
+                const int64_t* h = heads.data() + kHead * q;
+                rowidx[q] = static_cast<int>(h[0]);
+                colidx[q] = static_cast<int>(h[1]);
+                dims[q] = static_cast<int>(h[2]);
+                omegaidx[q] = static_cast<int>(h[3]);
+                pgidx[q] = p;
+                nrows[static_cast<size_t>(p)] += h[0];
+                ncols[static_cast<size_t>(p)] += h[1];
+                entry_at[q + 1] = entry_at[q] + h[3];
+                byte_at[q] = word_at * static_cast<int64_t>(sizeof(uint64_t)) + bytes;
+                bytes += h[4];
             }
-            for (size_t e = 0; e < omega_val.size(); ++e) {
-                omega_row[e] = omega[2 * e];
-                omega_dest[e] = omega[2 * e + 1];
+            nwords[static_cast<size_t>(p)] = (bytes + static_cast<int64_t>(sizeof(uint64_t)) - 1) /
+                                             static_cast<int64_t>(sizeof(uint64_t));
+            word_at += nwords[static_cast<size_t>(p)];
+        }
+        std::vector<int> allrows = gatherv(my_rows, MPI_INT, nrows);
+        std::vector<int> allcols = gatherv(my_cols, MPI_INT, ncols);
+        const std::vector<uint64_t> words = gatherv(my_words, MPI_UINT64_T, nwords);
+        const size_t nomega = static_cast<size_t>(entry_at.back());
+        std::vector<int> omega_row(nomega), omega_dest(nomega);
+        std::vector<double> omega_val(nomega);
+        {
+            const unsigned char* bytes = reinterpret_cast<const unsigned char*>(words.data());
+#pragma omp parallel for schedule(dynamic, 1) if (nsketch > 1 && !omp_in_parallel())
+            for (int n = 0; n < nsketch; ++n) {
+                const size_t q = static_cast<size_t>(n);
+                const int64_t* h = heads.data() + kHead * q;
+                double scale = 0.0;
+                std::memcpy(&scale, &h[6], sizeof(scale));
+                const size_t e = static_cast<size_t>(entry_at[q]);
+                get_omega(bytes + byte_at[q], h[3], h[5] != 0, scale, omega_row.data() + e, omega_dest.data() + e,
+                          omega_val.data() + e);
             }
         }
         std::vector<int> pmaps(static_cast<size_t>(3 * size_));
@@ -1017,13 +1100,12 @@ private:
         const RoundValues<Sketch, SketchValuesTag> values(mine, nloc, len);
         int nallrows = checked(static_cast<int64_t>(allrows.size()), "the rows"),
             nallcols = checked(static_cast<int64_t>(allcols.size()), "the columns"), npmap = size_;
-        int64_t nallomega = static_cast<int64_t>(omega_val.size());
+        int64_t nallomega = static_cast<int64_t>(nomega);
         const double t_callback = MPI_Wtime();
         gather_seconds_ += t_callback - t_gather;
         callback(&nsketch, &nallrows, &nallcols, &nallomega, &nloc, allrows.data(), allcols.data(),
                          rowidx.data(), colidx.data(), dims.data(), omegaidx.data(), omega_row.data(), omega_dest.data(),
-                         const_cast<double*>(omega_val.data()), values.data, pgidx.data(), &npmap, pmaps.data(),
-                         quant_);
+                         omega_val.data(), values.data, pgidx.data(), &npmap, pmaps.data(), quant_);
         const double t_store = MPI_Wtime();
         callback_seconds_ += t_store - t_callback;
         // (the requests with destinations there, the others stored)

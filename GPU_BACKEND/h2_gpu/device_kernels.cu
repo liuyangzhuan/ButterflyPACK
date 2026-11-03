@@ -494,5 +494,42 @@ void launch_copy_bytes(void* dst, const void* src, size_t bytes, cudaStream_t st
     check_launch("copy_bytes_kernel");
 }
 
+namespace {
+
+struct Word16 {  // (a 16-byte element, 8-byte aligned)
+    uint64_t lo, hi;
+};
+
+// (an item a grid column; its entries in order over the column's blocks)
+template<typename W>
+__global__ void image_copy_kernel(const ImageCopyItem* items) {
+    const ImageCopyItem it = items[blockIdx.x];
+    const W* src = static_cast<const W*>(it.src);
+    W* dst = static_cast<W*>(it.dst);
+    const int64_t total = static_cast<int64_t>(it.m) * it.n;
+    for (int64_t e = static_cast<int64_t>(blockIdx.y) * blockDim.x + threadIdx.x; e < total;
+         e += static_cast<int64_t>(gridDim.y) * blockDim.x) {
+        const int64_t j = e / it.m;
+        dst[e - j * it.m + j * it.ld] = src[e];
+    }
+}
+
+}  // namespace
+
+void launch_image_copy(const ImageCopyItem* items, int count, int64_t max_entries, int elem_bytes,
+                       cudaStream_t stream) {
+    if (count <= 0 || max_entries <= 0) return;
+    constexpr int kThreads = 256;
+    const dim3 grid(static_cast<unsigned>(count),
+                    static_cast<unsigned>(std::min<int64_t>((max_entries + kThreads - 1) / kThreads, 64)));
+    switch (elem_bytes) {
+    case 4: image_copy_kernel<uint32_t><<<grid, kThreads, 0, stream>>>(items); break;
+    case 8: image_copy_kernel<uint64_t><<<grid, kThreads, 0, stream>>>(items); break;
+    case 16: image_copy_kernel<Word16><<<grid, kThreads, 0, stream>>>(items); break;
+    default: throw std::invalid_argument("launch_image_copy: elements of 4, 8 or 16 bytes");
+    }
+    check_launch("image_copy_kernel");
+}
+
 }  // namespace gpu
 }  // namespace fmm

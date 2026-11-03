@@ -420,6 +420,20 @@ void launch_transpose(const TransposeItemT<T>* items, int count, int max_m, int 
 // stores.  Used to write small results straight into mapped pinned host
 // memory, so they do not queue behind bulk copies on the copy engine.
 void launch_copy_bytes(void* dst, const void* src, size_t bytes, cudaStream_t stream);
+// The blocks of a packed image to their places: item b's m x n block, column
+// major and contiguous at src, to dst (leading dimension ld), elements of
+// elem_bytes (4, 8 or 16); max_entries: the largest m x n.  One launch for a
+// batch (collective_evaluator.hpp; a cudaMemcpy2DAsync a block was 3 us of
+// host time each).
+struct ImageCopyItem {
+    const void* src;
+    void* dst;
+    int64_t ld;
+    int m;
+    int n;
+};
+void launch_image_copy(const ImageCopyItem* items, int count, int64_t max_entries, int elem_bytes,
+                       cudaStream_t stream);
 
 }  // namespace gpu
 }  // namespace fmm

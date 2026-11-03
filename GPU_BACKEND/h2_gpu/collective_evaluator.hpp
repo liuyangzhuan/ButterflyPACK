@@ -86,6 +86,12 @@ private:
     HostBuffer<char> heap_;
 };
 
+// A batch image's copy items, after its values (aligned for the items)
+inline size_t image_items_at(size_t value_bytes) {
+    constexpr size_t a = alignof(ImageCopyItem) > 16 ? alignof(ImageCopyItem) : 16;
+    return (value_bytes + a - 1) / a * a;
+}
+
 template<typename DataType, typename Entries>
 void collective_block_evaluator(const bpack_gpu_block_batch* batch, void* user) {
     Entries* entries = static_cast<Entries*>(user);
@@ -127,8 +133,9 @@ void collective_block_evaluator(const bpack_gpu_block_batch* batch, void* user) 
     }
     // the blocks packed column by column, those not fetched yet fetched now
     // (one rank: all of them, straight into the image, zeroed for the
-    // callback)
-    CollectiveImage img(at.back() * sizeof(DataType));
+    // callback); the copies' items after them
+    const size_t items_at = image_items_at(at.back() * sizeof(DataType));
+    CollectiveImage img(items_at + static_cast<size_t>(count) * sizeof(ImageCopyItem));
     DataType* const image = img.as<DataType>();
     if (entries->alone()) {
         parallel_zero(image, at.back());
@@ -165,19 +172,21 @@ void collective_block_evaluator(const bpack_gpu_block_batch* batch, void* user) 
         }
     }
     // one upload, then into the blocks on the batch's stream
-    const size_t bytes = at.back() * sizeof(DataType);
+    const size_t bytes = items_at + static_cast<size_t>(count) * sizeof(ImageCopyItem);
     char* d_image = static_cast<char*>(batch->allocate(batch->allocator, bytes));
     if (d_image == nullptr) throw std::runtime_error("collective GPU evaluator: no device memory for a batch");
-    img.upload(d_image, bytes, stream);
+    ImageCopyItem* const items = reinterpret_cast<ImageCopyItem*>(img.as<char>() + items_at);
+    int nitems = 0;
+    int64_t max_entries = 0;
     for (int b = 0; b < count; ++b) {
         const bpack_gpu_block& blk = batch->blocks[b];
         if (blk.m <= 0 || blk.n <= 0) continue;
-        const size_t col = static_cast<size_t>(blk.m) * sizeof(DataType);
-        check_cuda(cudaMemcpy2DAsync(blk.out, static_cast<size_t>(blk.ld) * sizeof(DataType),
-                                     d_image + at[static_cast<size_t>(b)] * sizeof(DataType), col, col,
-                                     static_cast<size_t>(blk.n), cudaMemcpyDeviceToDevice, stream),
-                   "collective GPU evaluator copy");
+        items[nitems++] = {d_image + at[static_cast<size_t>(b)] * sizeof(DataType), blk.out, blk.ld, blk.m, blk.n};
+        max_entries = std::max(max_entries, static_cast<int64_t>(blk.m) * blk.n);
     }
+    img.upload(d_image, items_at + static_cast<size_t>(nitems) * sizeof(ImageCopyItem), stream);
+    launch_image_copy(reinterpret_cast<const ImageCopyItem*>(d_image + items_at), nitems, max_entries,
+                      static_cast<int>(sizeof(DataType)), stream);
     batch->release(batch->allocator, d_image);  // (later launches are ordered after the copies)
     entries->count_delivery(std::chrono::duration<double>(clock::now() - t0).count() - fetching);
 }
@@ -262,7 +271,8 @@ void collective_sketches(Entries* entries, std::vector<Evaluator::SketchRequest>
             }
         }
     }
-    CollectiveImage img(at.back() * sizeof(DataType));
+    const size_t items_at = image_items_at(at.back() * sizeof(DataType));
+    CollectiveImage img(items_at + requests.size() * sizeof(ImageCopyItem));
     DataType* const image = img.as<DataType>();
     parallel_zero(image, at.back());
     if (entries->alone()) {
@@ -362,17 +372,20 @@ void collective_sketches(Entries* entries, std::vector<Evaluator::SketchRequest>
         }
     }
     DeviceHeap& heap = DeviceHeap::instance();
-    char* d_image = heap.alloc(at.back() * sizeof(DataType));
-    img.upload(d_image, at.back() * sizeof(DataType), stream);
+    char* d_image = heap.alloc(items_at + requests.size() * sizeof(ImageCopyItem));
+    ImageCopyItem* const items = reinterpret_cast<ImageCopyItem*>(img.as<char>() + items_at);
+    int nitems = 0;
+    int64_t max_entries = 0;
     for (size_t q = 0; q < requests.size(); ++q) {
         const Evaluator::SketchRequest& r = requests[q];
         if (r.d <= 0 || r.cols.empty()) continue;
-        const size_t col = static_cast<size_t>(r.d) * sizeof(DataType);
-        check_cuda(cudaMemcpy2DAsync(r.out, static_cast<size_t>(r.ldo) * sizeof(DataType),
-                                     d_image + at[q] * sizeof(DataType), col, col, r.cols.size(),
-                                     cudaMemcpyDeviceToDevice, stream),
-                   "collective GPU sketches copy");
+        const int n = static_cast<int>(r.cols.size());
+        items[nitems++] = {d_image + at[q] * sizeof(DataType), r.out, r.ldo, r.d, n};
+        max_entries = std::max(max_entries, static_cast<int64_t>(r.d) * n);
     }
+    img.upload(d_image, items_at + static_cast<size_t>(nitems) * sizeof(ImageCopyItem), stream);
+    launch_image_copy(reinterpret_cast<const ImageCopyItem*>(d_image + items_at), nitems, max_entries,
+                      static_cast<int>(sizeof(DataType)), stream);
     heap.free(d_image);  // (later launches are ordered after the copies)
     entries->count_delivery(std::chrono::duration<double>(clock::now() - t0).count() - fetching);
 }
