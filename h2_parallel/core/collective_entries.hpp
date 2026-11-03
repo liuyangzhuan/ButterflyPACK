@@ -246,10 +246,20 @@ public:
         return true;
     }
     // Records the request for the next round.  Thread safe.
-    void record_sketch(const SketchKey& k) {
+    void record_sketch(const SketchKey& k) { record_sketch_to(k, nullptr); }
+    // As record_sketch, the round writing Y (d x ny, column major, leading
+    // dimension d) into dst instead of keeping it, so it is never looked up;
+    // dst must stay valid until the round.  Thread safe.
+    void record_sketch_into(const SketchKey& k, DataType* dst) { record_sketch_to(k, dst); }
+    void record_sketch_to(const SketchKey& k, DataType* dst) {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (find_sketch(k, pending_sketch_index_, pending_sketches_) != nullptr) return;
+        if (Sketch* p = const_cast<Sketch*>(find_sketch(k, pending_sketch_index_, pending_sketches_))) {
+            add_destination(*p, dst);
+            return;
+        }
         Sketch s;
+        s.dst = dst;
+        s.keep = dst == nullptr;
         s.rows.assign(k.x, k.x + k.nx);
         s.cols.assign(k.y, k.y + k.ny);
         s.d = k.d;
@@ -402,20 +412,33 @@ public:
     }
 
     // Records the block for the next round.  Thread safe.
-    void record(const int64_t* x, int64_t nx, const int64_t* y, int64_t ny) {
+    void record(const int64_t* x, int64_t nx, const int64_t* y, int64_t ny) { record_to(x, nx, y, ny, nullptr); }
+    // As record, the round writing the block (nx x ny, column major, leading
+    // dimension nx) into dst instead of keeping it, so it is never looked up;
+    // dst must stay valid until the round.  The device path's batches read
+    // their blocks so: the fetched values went from a fresh callback buffer
+    // into the store and from there into the batch's image (Poisson 400^3,
+    // 64 ranks, STRUMPACK on the GPU: 53.3 -> 52.4 s).  Thread safe.
+    void record_into(const int64_t* x, int64_t nx, const int64_t* y, int64_t ny, DataType* dst) {
+        record_to(x, nx, y, ny, dst);
+    }
+    void record_to(const int64_t* x, int64_t nx, const int64_t* y, int64_t ny, DataType* dst) {
         std::lock_guard<std::mutex> lock(mutex_);
         const uint64_t h = hash(x, nx, y, ny);
         auto range = pending_index_.equal_range(h);
         for (auto it = range.first; it != range.second; ++it) {
-            const Block& b = pending_[it->second];
+            Block& b = pending_[it->second];
             if (same(b, x, nx, y, ny)) {
                 const size_t o = static_cast<size_t>(entry_origin());
                 dup_blocks_[o] += 1.0;
                 dup_entries_[o] += static_cast<double>(nx) * static_cast<double>(ny);
+                add_destination(b, dst);
                 return;
             }
         }
         Block b;
+        b.dst = dst;
+        b.keep = dst == nullptr;
         b.rows.assign(x, x + nx);
         b.cols.assign(y, y + ny);
         const size_t o = static_cast<size_t>(entry_origin());
@@ -571,9 +594,15 @@ public:
     double fetched_entries() const { return fetched_entries_; }
 
 private:
+    // A pending request's destinations (record_into): dst and, for the same
+    // request recorded again, extra; keep: also recorded without one, so its
+    // values are stored for lookups too.
     struct Block {
         std::vector<int64_t> rows, cols;
         std::vector<DataType> values;
+        DataType* dst = nullptr;
+        std::vector<DataType*> extra;
+        bool keep = true;
     };
     struct Sketch {
         std::vector<int64_t> rows, cols;
@@ -582,6 +611,59 @@ private:
         std::vector<double> oval;
         bool transposed = false;
         std::vector<DataType> values;
+        DataType* dst = nullptr;
+        std::vector<DataType*> extra;
+        bool keep = true;
+    };
+    template<typename Request>
+    static void add_destination(Request& r, DataType* dst) {
+        if (dst == nullptr) {
+            r.keep = true;
+        } else if (r.dst == nullptr) {
+            r.dst = dst;
+        } else {
+            r.extra.push_back(dst);
+        }
+    }
+    // The callback's buffer for a round's values (kept over the rounds: a
+    // fresh one a round faulted its pages in again), or, when every request
+    // of this rank's has a destination and these lie back to back in its
+    // order, the first of them, so that the callback writes them in place.
+    // Zeroed either way, as the callback expects.
+    template<typename Request, typename Tag>
+    struct RoundValues {
+        RoundValues(const std::vector<Request*>& mine, int64_t nloc, int64_t (*len)(const Request&))
+            : in_place(direct(mine, nloc, len)),
+              buffer(in_place ? 0 : static_cast<size_t>(std::max<int64_t>(nloc, 1))),
+              data(in_place ? reinterpret_cast<CallbackValue*>(mine.front()->dst) : buffer.data()) {
+            parallel_zero(data, static_cast<size_t>(in_place ? nloc : std::max<int64_t>(nloc, 1)));
+        }
+        static bool direct(const std::vector<Request*>& mine, int64_t nloc, int64_t (*len)(const Request&)) {
+            if (nloc <= 0) return false;
+            const DataType* next = nullptr;
+            for (const Request* r : mine) {
+                if (r->dst == nullptr || r->keep || (next != nullptr && r->dst != next)) return false;
+                next = r->dst + len(*r);
+            }
+            return true;
+        }
+        // the requests' values to their destinations (in place: to their
+        // duplicates' only), a request a thread
+        void deliver(const std::vector<Request*>& mine, int64_t (*len)(const Request&)) const {
+            std::vector<int64_t> at(mine.size() + 1, 0);
+            for (size_t k = 0; k < mine.size(); ++k) at[k + 1] = at[k] + len(*mine[k]);
+#pragma omp parallel for schedule(dynamic, 1) if (mine.size() > 1 && !omp_in_parallel())
+            for (size_t k = 0; k < mine.size(); ++k) {
+                const Request& r = *mine[k];
+                const DataType* v = reinterpret_cast<const DataType*>(data) + at[k];
+                const int64_t n = len(r);
+                if (r.dst != nullptr && !in_place) std::copy(v, v + n, r.dst);
+                for (DataType* e : r.extra) std::copy(v, v + n, e);
+            }
+        }
+        const bool in_place;
+        KeptBuffer<CallbackValue, Tag> buffer;
+        CallbackValue* const data;
     };
     static uint64_t sketch_hash(const SketchKey& k) {
         uint64_t h = hash(k.x, k.nx, k.y, k.ny) ^ (static_cast<uint64_t>(k.d) * 0x9e3779b97f4a7c15ULL) ^
@@ -828,24 +910,33 @@ private:
         }
         int64_t nloc = 0;
         for (const Block& b : pending_) nloc += static_cast<int64_t>(b.rows.size() * b.cols.size());
-        HostBuffer<CallbackValue> values(static_cast<size_t>(std::max<int64_t>(nloc, 1)));
-        parallel_zero(values.data(), values.size());  // (the callback is handed zeros, as from Fortran)
+        std::vector<Block*> mine;
+        mine.reserve(pending_.size());
+        for (Block& b : pending_) mine.push_back(&b);
+        auto len = [](const Block& b) { return static_cast<int64_t>(b.rows.size() * b.cols.size()); };
+        struct BlockValuesTag;
+        const RoundValues<Block, BlockValuesTag> values(mine, nloc, len);
         int nallrows = checked(static_cast<int64_t>(allrows.size()), "the rows"),
             nallcols = checked(static_cast<int64_t>(allcols.size()), "the columns"), npmap = size_;
         const double t_callback = MPI_Wtime();
         gather_seconds_ += t_callback - t_gather;
-        callback_(&ninter, &nallrows, &nallcols, &nloc, allrows.data(), allcols.data(), values.data(), rowidx.data(),
+        callback_(&ninter, &nallrows, &nallcols, &nloc, allrows.data(), allcols.data(), values.data, rowidx.data(),
                   colidx.data(), pgidx.data(), &npmap, pmaps.data(), quant_);
         const double t_store = MPI_Wtime();
         callback_seconds_ += t_store - t_callback;
+        // (the blocks with destinations there, the others stored)
+        values.deliver(mine, len);
         int64_t at = 0;
         for (Block& b : pending_) {
-            const int64_t n = static_cast<int64_t>(b.rows.size() * b.cols.size());
-            const DataType* v = reinterpret_cast<const DataType*>(values.data()) + at;
-            b.values.assign(v, v + n);
+            const int64_t n = len(b);
+            const DataType* v = reinterpret_cast<const DataType*>(values.data) + at;
             at += n;
             fetched_entries_ += static_cast<double>(n);
             ++fetched_blocks_;
+            if (!b.keep) continue;
+            b.values.assign(v, v + n);
+            b.dst = nullptr;
+            b.extra.clear();
             index_.emplace(hash(b.rows.data(), static_cast<int64_t>(b.rows.size()), b.cols.data(),
                                 static_cast<int64_t>(b.cols.size())),
                            blocks_.size());
@@ -921,8 +1012,9 @@ private:
         }
         int64_t nloc = 0;
         for (const Sketch* s : mine) nloc += static_cast<int64_t>(s->d) * static_cast<int64_t>(s->cols.size());
-        HostBuffer<CallbackValue> values(static_cast<size_t>(std::max<int64_t>(nloc, 1)));
-        parallel_zero(values.data(), values.size());  // (the callback is handed zeros, as from Fortran)
+        auto len = [](const Sketch& s) { return static_cast<int64_t>(s.d) * static_cast<int64_t>(s.cols.size()); };
+        struct SketchValuesTag;
+        const RoundValues<Sketch, SketchValuesTag> values(mine, nloc, len);
         int nallrows = checked(static_cast<int64_t>(allrows.size()), "the rows"),
             nallcols = checked(static_cast<int64_t>(allcols.size()), "the columns"), npmap = size_;
         int64_t nallomega = static_cast<int64_t>(omega_val.size());
@@ -930,21 +1022,26 @@ private:
         gather_seconds_ += t_callback - t_gather;
         callback(&nsketch, &nallrows, &nallcols, &nallomega, &nloc, allrows.data(), allcols.data(),
                          rowidx.data(), colidx.data(), dims.data(), omegaidx.data(), omega_row.data(), omega_dest.data(),
-                         const_cast<double*>(omega_val.data()), values.data(), pgidx.data(), &npmap, pmaps.data(),
+                         const_cast<double*>(omega_val.data()), values.data, pgidx.data(), &npmap, pmaps.data(),
                          quant_);
         const double t_store = MPI_Wtime();
         callback_seconds_ += t_store - t_callback;
+        // (the requests with destinations there, the others stored)
+        values.deliver(mine, len);
         int64_t at = 0;
         for (Sketch* sp : mine) {
             Sketch& s = *sp;
-            const int64_t n = static_cast<int64_t>(s.d) * static_cast<int64_t>(s.cols.size());
-            const DataType* v = reinterpret_cast<const DataType*>(values.data()) + at;
-            s.values.assign(v, v + n);
+            const int64_t n = len(s);
+            const DataType* v = reinterpret_cast<const DataType*>(values.data) + at;
             at += n;
             fetched_entries_ += static_cast<double>(n);
             sketch_requests_ += 1.0;
             sketch_values_ += static_cast<double>(n);
             sketch_covered_ += static_cast<double>(s.rows.size()) * static_cast<double>(s.cols.size());
+            if (!s.keep) continue;
+            s.values.assign(v, v + n);
+            s.dst = nullptr;
+            s.extra.clear();
             const SketchKey k{s.rows.data(), static_cast<int64_t>(s.rows.size()), s.cols.data(),
                               static_cast<int64_t>(s.cols.size()), s.d, static_cast<int64_t>(s.orow.size()),
                               s.orow.data(), s.odest.data(), s.oval.data(), s.transposed};

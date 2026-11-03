@@ -142,27 +142,22 @@ void collective_block_evaluator(const bpack_gpu_block_batch* batch, void* user) 
         entries->fetch_blocks_direct(refs, image);
         fetching = std::chrono::duration<double>(clock::now() - t_fetch).count();
     } else {
-        std::vector<int> missing;
+        // a block fetched already read from the store; the others recorded
+        // with their places in the image, which the round writes
+        bool missing = false;
         for (int b = 0; b < count; ++b) {
             const bpack_gpu_block& blk = batch->blocks[b];
             if (blk.m <= 0 || blk.n <= 0) continue;
-            if (!entries->lookup(blk.row_ids_host, blk.m, blk.col_ids_host, blk.n,
-                                 image + at[static_cast<size_t>(b)], blk.m)) {
-                entries->record(blk.row_ids_host, blk.m, blk.col_ids_host, blk.n);
-                missing.push_back(b);
+            DataType* slot = image + at[static_cast<size_t>(b)];
+            if (!entries->lookup(blk.row_ids_host, blk.m, blk.col_ids_host, blk.n, slot, blk.m)) {
+                entries->record_into(blk.row_ids_host, blk.m, blk.col_ids_host, blk.n, slot);
+                missing = true;
             }
         }
-        if (!missing.empty()) {
+        if (missing) {
             const auto t_fetch = clock::now();
             entries->fetch_now();
             fetching = std::chrono::duration<double>(clock::now() - t_fetch).count();
-            for (int b : missing) {
-                const bpack_gpu_block& blk = batch->blocks[b];
-                if (!entries->lookup(blk.row_ids_host, blk.m, blk.col_ids_host, blk.n,
-                                     image + at[static_cast<size_t>(b)], blk.m)) {
-                    throw std::logic_error("collective GPU evaluator: a block its round did not fetch");
-                }
-            }
         }
         for (int b = 0; b < count; ++b) {
             const bpack_gpu_block& blk = batch->blocks[b];
@@ -327,17 +322,29 @@ void collective_sketches(Entries* entries, std::vector<Evaluator::SketchRequest>
             }
         }
     } else {
+        // a request's first part straight into its slot (by its lookup, or
+        // by the round, which writes it there); a second part into a buffer
+        // of its own, added in after
         std::vector<HostBuffer<DataType>> part(keys.size());  // (each written in full by its lookup)
         std::vector<size_t> missing;
+        bool fetch = false;
         for (size_t k = 0; k < keys.size(); ++k) {
             const size_t q = key_of[k].first;
+            if (k == 0 || key_of[k - 1].first != q) {
+                DataType* slot = image + at[q];
+                if (!entries->lookup_sketch(keys[k], slot, requests[q].d)) {
+                    entries->record_sketch_into(keys[k], slot);
+                    fetch = true;
+                }
+                continue;
+            }
             part[k].resize(static_cast<size_t>(requests[q].d) * requests[q].cols.size());
             if (!entries->lookup_sketch(keys[k], part[k].data(), requests[q].d)) {
                 entries->record_sketch(keys[k]);
                 missing.push_back(k);
             }
         }
-        if (!missing.empty()) {
+        if (fetch || !missing.empty()) {
             const auto t_fetch = clock::now();
             entries->fetch_now();
             fetching = std::chrono::duration<double>(clock::now() - t_fetch).count();
@@ -348,14 +355,10 @@ void collective_sketches(Entries* entries, std::vector<Evaluator::SketchRequest>
             }
         }
         for (const auto& k : keys) entries->release_sketch(k);
-        // (a request of one part: its values as they came)
         for (size_t k = 0; k < keys.size(); ++k) {
+            if (part[k].empty()) continue;
             DataType* y = image + at[key_of[k].first];
-            if (parts[key_of[k].first] == 1) {
-                std::copy(part[k].begin(), part[k].end(), y);
-            } else {
-                for (size_t i = 0; i < part[k].size(); ++i) y[i] += part[k][i];
-            }
+            for (size_t i = 0; i < part[k].size(); ++i) y[i] += part[k][i];
         }
     }
     DeviceHeap& heap = DeviceHeap::instance();
