@@ -642,6 +642,31 @@ void exchange_level(ExchangePlan& plan, const VecLevel<DataType>& src, VecLevel<
     }
 }
 
+bool reduce_shares_device(MPI_Comm comm, const double* send, const int64_t* count, double* recv, cudaStream_t stream) {
+#ifdef BPACK_HAVE_NCCL
+    // (nccl_comm_of is collective and gives every rank the same answer)
+    ncclComm_t nc = nccl_comm_of(comm);
+    if (nc == nullptr) return false;
+    int nproc = 1;
+    MPI_Comm_size(comm, &nproc);
+    // (recv is read only on a share's own rank, but must be device memory on all)
+    check_nccl(ncclGroupStart(), "reduce shares");
+    int64_t at = 0;
+    for (int p = 0; p < nproc; ++p) {
+        if (count[p] > 0) {
+            check_nccl(ncclReduce(send + at, recv, static_cast<size_t>(count[p]), ncclDouble, ncclSum, p, nc, stream),
+                       "reduce shares");
+        }
+        at += count[p];
+    }
+    check_nccl(ncclGroupEnd(), "reduce shares");
+    return true;
+#else
+    (void)comm, (void)send, (void)count, (void)recv, (void)stream;
+    return false;
+#endif
+}
+
 // the double and the double complex libraries
 #define BF_EXCHANGE_INSTANTIATE(T)                                                                                    \
     template void group_level<T>(const GroupPlan&, T*, int64_t, cudaStream_t);                                        \

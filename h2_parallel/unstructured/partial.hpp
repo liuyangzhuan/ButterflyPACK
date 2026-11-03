@@ -43,6 +43,7 @@
 #include "core/solver.hpp"
 #ifdef H2_HAVE_GPU
 #include "h2_gpu/partial_device.hpp"
+#include "bf_gpu/bf_exchange.hpp"
 #endif
 
 #include <mpi.h>
@@ -1919,6 +1920,21 @@ struct PartialDeviceTargets {
     std::vector<int> cols, rows;
     bool download = false;
 };
+// A call on several ranks whose blocks lie in the order of the ranks their
+// sums land on (extract_partial_blocks), count[p] elements of out for rank p
+// of the tree's communicator after the earlier ranks': the device path sums
+// them over the ranks on the device (bf::gpu::reduce_shares_device) and
+// downloads this rank's share into landed, instead of downloading all of out
+// for MPI_Reduce_scatter (Poisson 400^3, 64 ranks: the host's sum and the
+// download were 5.5 s of the critical rank's 52).  done: it did, and out
+// holds nothing (but for the device check); else out is as without it.
+template<typename DataType>
+struct PartialDeviceSum {
+    const int* count = nullptr;
+    DataType* landed = nullptr;
+    bool done = false;
+    double seconds = 0.0;  // the sum and its share's download
+};
 inline PartialOutLayout partial_out_layout(int64_t ninter, const int64_t* nrows, const int64_t* ncols, const PartialSketch* sk) {
     PartialOutLayout o;
     o.ooff.assign(static_cast<size_t>(ninter) + 1, 0);
@@ -2161,10 +2177,13 @@ PartialBlockKeys partial_block_keys(const PartialSharedSide<DataType>& side, con
 template<typename DataType>
 void partial_copy_duplicates(int64_t ninter, const int64_t* rows, const int64_t* nrows, const int64_t* cols,
                              const int64_t* ncols, const std::vector<int64_t>& roff, const std::vector<int64_t>& coff,
-                             const std::vector<int64_t>& ooff, DataType* out) {
+                             const std::vector<int64_t>& ooff, DataType* out, int64_t k0 = 0, int64_t k1 = -1,
+                             int64_t at = 0) {
+    // (blocks k0 to k1, block k at out + ooff[k] - at: a share of the call's)
+    if (k1 < 0) k1 = ninter;
 #pragma omp parallel for schedule(dynamic, 1)
-    for (int64_t k = 0; k < ninter; ++k) {
-        DataType* ok = out + ooff[static_cast<size_t>(k)];
+    for (int64_t k = k0; k < k1; ++k) {
+        DataType* ok = out + (ooff[static_cast<size_t>(k)] - at);
         const int64_t ld = nrows[k];
         std::unordered_map<int64_t, int64_t> first;
         std::vector<std::pair<int64_t, int64_t>> rd, cd;  // (position, the point's first)
@@ -2939,7 +2958,8 @@ void partial_schur_blocks_device(fmm::ParallelTree<CoordType, DataType>& tree, i
                                  const int64_t* nrows, const int64_t* cols, const int64_t* ncols, DataType* out,
                                  const std::vector<int64_t>& roff, const std::vector<int64_t>& coff,
                                  const PartialOutLayout& layout, const PartialSketch* sketch,
-                                 const PartialDeviceTargets<DataType>* targets = nullptr) {
+                                 const PartialDeviceTargets<DataType>* targets = nullptr,
+                                 PartialDeviceSum<DataType>* dsum = nullptr) {
     namespace gpu = fmm::gpu;
     using S = typename fmm::gpu::DeviceScalar<DataType>::type;
     using Chain = PartialDeviceChain<DataType>;
@@ -4424,16 +4444,16 @@ void partial_schur_blocks_device(fmm::ParallelTree<CoordType, DataType>& tree, i
         }
         if (trace) tq[3] += MPI_Wtime() - t;
     }
-    if (out_dev != nullptr && (targets == nullptr || targets->download)) {
-        const double t = trace ? MPI_Wtime() : 0.0;
-        work.download(out, out_dev, out_bytes);
-        if (shared) partial_copy_duplicates(ninter, rows, nrows, cols, ncols, roff, coff, ooff, out);
+    // the host's fixes after a download, for blocks k0 to k1 at y + ooff[k] - at: a repeated point's
+    // sums are at its first position (the device adds there only)
+    auto fix_repeats = [&](DataType* y, int64_t k0, int64_t k1, int64_t at) {
+        if (shared) partial_copy_duplicates(ninter, rows, nrows, cols, ncols, roff, coff, ooff, y, k0, k1, at);
         if (!shared && repeats) {
             // a point asked for at several positions of a sketch's unsketched side: its sums are at
             // the first (the sketch's columns)
 #pragma omp parallel for schedule(dynamic, 1)
-            for (int64_t k = 0; k < ninter; ++k) {
-                DataType* ok = out + ooff[static_cast<size_t>(k)];
+            for (int64_t k = k0; k < k1; ++k) {
+                DataType* ok = y + (ooff[static_cast<size_t>(k)] - at);
                 const int64_t d = sketch->dims[k];
                 const bool by_rows = sketch->side == 1;
                 const int64_t n = by_rows ? nrows[k] : ncols[k];
@@ -4445,6 +4465,41 @@ void partial_schur_blocks_device(fmm::ParallelTree<CoordType, DataType>& tree, i
                 }
             }
         }
+    };
+    // (PartialDeviceSum: the same way on every rank - out_dev is not on all
+    // when the call outgrows a rank's budget - and only this rank's blocks fixed)
+    if (dsum != nullptr && nranks > 1) {
+        int ok = out_dev != nullptr ? 1 : 0;
+        MPI_Allreduce(MPI_IN_PLACE, &ok, 1, MPI_INT, MPI_MIN, tree.comm);
+        if (ok != 0) {
+            const double t = MPI_Wtime();
+            constexpr int64_t kWords = static_cast<int64_t>(D / sizeof(double));
+            std::vector<int64_t> words(static_cast<size_t>(nranks));
+            int64_t at = 0;
+            for (int p = 0; p < nranks; ++p) {
+                words[static_cast<size_t>(p)] = int64_t{dsum->count[p]} * kWords;
+                if (p < me) at += dsum->count[p];
+            }
+            const int64_t mine = dsum->count[me];
+            char* share = work.alloc(static_cast<size_t>(mine) * D);
+            if (bf::gpu::reduce_shares_device(tree.comm, reinterpret_cast<const double*>(out_dev), words.data(),
+                                              reinterpret_cast<double*>(share), stream)) {
+                work.download(dsum->landed, share, static_cast<size_t>(mine) * D);
+                // (this rank's blocks: those starting in its share; a share holds whole blocks)
+                const auto first = ooff.begin(), last = ooff.begin() + ninter;
+                fix_repeats(dsum->landed, std::lower_bound(first, last, at) - first,
+                            std::lower_bound(first, last, at + mine) - first, at);
+                dsum->done = true;
+            }
+            work.release(share);
+            dsum->seconds = MPI_Wtime() - t;
+        }
+    }
+    if (out_dev != nullptr && (targets == nullptr || targets->download) &&
+        (dsum == nullptr || !dsum->done || gpu::device_solve_check())) {
+        const double t = trace ? MPI_Wtime() : 0.0;
+        work.download(out, out_dev, out_bytes);
+        fix_repeats(out, 0, ninter, 0);
         if (trace) tq[3] += MPI_Wtime() - t;
     }
     if (trace) {
@@ -4493,7 +4548,8 @@ template<typename CoordType, typename DataType>
 void partial_schur_blocks(fmm::ParallelTree<CoordType, DataType>& tree, int64_t ninter, const int64_t* rows,
                           const int64_t* nrows, const int64_t* cols, const int64_t* ncols, DataType* out,
                           bool replicate, int extract_mode = 0, const PartialSketch* sketch = nullptr,
-                          const PartialDeviceTargets<DataType>* targets = nullptr) {
+                          const PartialDeviceTargets<DataType>* targets = nullptr,
+                          PartialDeviceSum<DataType>* dsum = nullptr) {
 #ifdef H2_HAVE_GPU
     fmm::gpu::OperatorCall operator_call(&tree);  // (it may run inside another operator's build)
 #endif
@@ -4553,7 +4609,8 @@ void partial_schur_blocks(fmm::ParallelTree<CoordType, DataType>& tree, int64_t 
                 checked_targets.download = true;
             }
             partial_schur_blocks_device(tree, ninter, rows, nrows, cols, ncols, out, roff, coff, layout, sketch,
-                                        targets != nullptr && check ? &checked_targets : targets);
+                                        targets != nullptr && check ? &checked_targets : targets,
+                                        replicate ? nullptr : dsum);
             if (check) {
                 const double t1 = MPI_Wtime();
                 std::vector<DataType> host(static_cast<size_t>(ooff.back()));
@@ -5363,11 +5420,25 @@ void extract_partial_blocks(fmm::ParallelTree<CoordType, DataType>* tree, MPI_Co
                 }
             }
         }
+        // each block's sum on its landing rank: counts[p] elements land on source rank p
+        std::vector<int> counts(alone ? 0 : static_cast<size_t>(ssize), 0);
+        for (size_t q = 0; q < order.size() && !alone; ++q) {
+            const int64_t c = counts[static_cast<size_t>(lands[order[q]])] + len[q];
+            if (c > INT_MAX) throw std::runtime_error("extract_partial_blocks: a source rank's blocks over 2^31 entries");
+            counts[static_cast<size_t>(lands[order[q]])] = static_cast<int>(c);
+        }
+        struct LandedTag;
+        fmm::KeptBuffer<DataType, LandedTag> landed(alone ? 0 : static_cast<size_t>(std::max(counts[static_cast<size_t>(srank)], 1)));
+        // (on the device when the device path has the sums there; PartialDeviceSum)
+        PartialDeviceSum<DataType> dsum;
+        dsum.count = counts.data();
+        dsum.landed = landed.data();
         double xm = xtrace ? MPI_Wtime() : 0.0;
         partial_schur_blocks(*tree, ninter, rows.data(), nr.data(), cols.data(), nc.data(), sums, false, extract_mode,
-                             sketch != nullptr ? &sk_ordered : nullptr, targets != nullptr ? &ordered : nullptr);
+                             sketch != nullptr ? &sk_ordered : nullptr, targets != nullptr ? &ordered : nullptr,
+                             !alone && ssize > 1 ? &dsum : nullptr);
         if (xtrace && targets == nullptr) {
-            xt[1] = MPI_Wtime() - xm;
+            xt[1] = MPI_Wtime() - xm - dsum.seconds;
             xent = static_cast<double>(boff.back());
             // the points' share between the blocks: each block's distinct points, summed, against the call's
             auto shared = [&](const std::vector<int64_t>& idx, const std::vector<int64_t>& cnt, double* out2) {
@@ -5382,27 +5453,46 @@ void extract_partial_blocks(fmm::ParallelTree<CoordType, DataType>* tree, MPI_Co
             };
             shared(rows, nr, xshare);
             shared(cols, nc, xshare + 2);
-            for (int64_t i = 0; i < boff.back(); ++i) xnz += sums[i] != DataType(0) ? 1.0 : 0.0;
+            // (the contributions are on the host only without the device's sum)
+            if (dsum.done) {
+                xnz = std::nan("");
+            } else {
+                for (int64_t i = 0; i < boff.back(); ++i) xnz += sums[i] != DataType(0) ? 1.0 : 0.0;
+            }
             xm = MPI_Wtime();
         }
         if (!alone) {
             // ---- each block's sum on its landing rank
-            std::vector<int> counts(static_cast<size_t>(ssize), 0);
-            for (size_t q = 0; q < order.size(); ++q) {
-                const int64_t c = counts[static_cast<size_t>(lands[order[q]])] + len[q];
-                if (c > INT_MAX) throw std::runtime_error("extract_partial_blocks: a source rank's blocks over 2^31 entries");
-                counts[static_cast<size_t>(lands[order[q]])] = static_cast<int>(c);
-            }
-            struct LandedTag;
-            fmm::KeptBuffer<DataType, LandedTag> landed(static_cast<size_t>(std::max(counts[static_cast<size_t>(srank)], 1)));
-            if (ssize > 1) {
+            if (dsum.done) {
+#ifdef H2_HAVE_GPU
+                // BPACK_CHECK=solve: against the host's sum of the contributions (the device path downloaded them)
+                if (fmm::gpu::device_solve_check()) {
+                    std::vector<DataType> host(static_cast<size_t>(std::max(counts[static_cast<size_t>(srank)], 1)));
+                    MPI_Reduce_scatter(part.data(), host.data(), counts.data(), partial_mpi_type<DataType>(), MPI_SUM,
+                                       tree->comm);
+                    double d[2] = {0.0, 0.0};
+                    for (int i = 0; i < counts[static_cast<size_t>(srank)]; ++i) {
+                        d[0] += std::norm(landed.data()[i] - host[static_cast<size_t>(i)]);
+                        d[1] += std::norm(host[static_cast<size_t>(i)]);
+                    }
+                    MPI_Allreduce(MPI_IN_PLACE, d, 2, MPI_DOUBLE, MPI_SUM, tree->comm);
+                    if (srank == 0) {
+                        std::printf("GPU partial CB %s sum check: |device - host| / |host| = %.3e (%d sources, "
+                                    "%lld entries a source)\n",
+                                    sketch != nullptr ? "sketches" : "entries", d[1] > 0.0 ? std::sqrt(d[0] / d[1]) : 0.0,
+                                    ssize, static_cast<long long>(boff.back()));
+                        std::fflush(stdout);
+                    }
+                }
+#endif
+            } else if (ssize > 1) {
                 MPI_Reduce_scatter(part.data(), landed.data(), counts.data(), partial_mpi_type<DataType>(), MPI_SUM, tree->comm);
             } else {
                 std::copy(part.data(), part.data() + counts[0], landed.data());
             }
             if (xtrace) {
                 const double now = MPI_Wtime();
-                xt[2] = now - xm;
+                xt[2] = now - xm + dsum.seconds;
                 xm = now;
             }
             // ---- on to the owners (their own: copied)

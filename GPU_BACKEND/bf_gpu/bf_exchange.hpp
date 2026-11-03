@@ -164,6 +164,16 @@ template<typename T>
 void alltoallv_device(MPI_Comm comm, const T* send, const int64_t* scount, T* recv, const int64_t* rcount,
                       cudaStream_t stream);
 
+// A sum over the group whose shares land on their ranks (MPI_Reduce_scatter
+// on the device): send holds this rank's contributions to every share, rank
+// p's count[p] doubles after the earlier ranks', and recv (count[me]
+// doubles) gets this rank's share summed over the ranks.  Through NCCL on
+// the stream, one ncclReduce a share, so the counts may differ; false, and
+// nothing done, when the group has no NCCL communicator (no NCCL, a group
+// across nodes without its network plugin, two ranks on one GPU): the
+// caller then sums on the host.  The same answer on every rank.  Collective.
+bool reduce_shares_device(MPI_Comm comm, const double* send, const int64_t* count, double* recv, cudaStream_t stream);
+
 // The sum or the broadcast of n elements at data, on the device, ordered on
 // the stream.
 template<typename T>
