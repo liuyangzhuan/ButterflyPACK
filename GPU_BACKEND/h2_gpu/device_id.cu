@@ -1243,7 +1243,15 @@ int coop_blocks_per_box(int count, int max_n) {
 template<typename T, int kThreads>
 void launch_qrcp_with(const QrcpItemT<T>* items, int count, size_t shared, double tol, double abs_tol,
                       cudaStream_t stream) {
-    if (shared > 48 * 1024) {
+    // The 48 KB default covers the kernel's static shared memory too (s_tau,
+    // s_beta: 16 or 32 bytes): 49144 dynamic bytes (max_n 2438) failed to
+    // launch with "invalid argument" without the attribute.
+    static const size_t static_bytes = [] {
+        cudaFuncAttributes attr{};
+        return cudaFuncGetAttributes(&attr, qrcp_kernel<T, kThreads>) == cudaSuccess ? attr.sharedSizeBytes
+                                                                                      : size_t{64};
+    }();
+    if (shared + static_bytes > 48 * 1024) {
         const cudaError_t attr = cudaFuncSetAttribute(qrcp_kernel<T, kThreads>,
                                                       cudaFuncAttributeMaxDynamicSharedMemorySize,
                                                       static_cast<int>(shared));
@@ -1287,14 +1295,24 @@ void launch_qrcp(const QrcpItemT<T>* items, int count, int max_n, double tol, do
     }
     const size_t shared = static_cast<size_t>(2 * max_n + kMaxWarps) * sizeof(double) +
                           static_cast<size_t>(kMaxWarps + max_n) * sizeof(int);
-    if (count < 216 && !batch_independent) {
+    // an error an earlier, unchecked call left would otherwise be reported as this launch's
+    const cudaError_t pending = cudaGetLastError();
+    if (pending != cudaSuccess) {
+        throw std::runtime_error(std::string("launch_qrcp: a CUDA error was pending from an earlier call: ") +
+                                 cudaGetErrorString(pending));
+    }
+    const int threads = count < 216 && !batch_independent ? 1024 : 256;
+    if (threads == 1024) {
         launch_qrcp_with<T, 1024>(items, count, shared, tol, abs_tol, stream);
     } else {
         launch_qrcp_with<T, 256>(items, count, shared, tol, abs_tol, stream);
     }
     const cudaError_t status = cudaGetLastError();
     if (status != cudaSuccess) {
-        throw std::runtime_error(std::string("CUDA launch failed in qrcp_kernel: ") + cudaGetErrorString(status));
+        throw std::runtime_error(std::string("CUDA launch failed in qrcp_kernel: ") + cudaGetErrorString(status) +
+                                 " (boxes " + std::to_string(count) + ", max_n " + std::to_string(max_n) +
+                                 ", threads " + std::to_string(threads) + ", shared " + std::to_string(shared) +
+                                 " bytes)");
     }
 }
 
