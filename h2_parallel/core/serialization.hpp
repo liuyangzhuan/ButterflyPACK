@@ -5099,7 +5099,21 @@ void emit_lazy_generators(
                     box->X_NR.rows * box->X_NR.cols) {
                 throw std::runtime_error(
                     "emit_lazy_generators: incomplete state for source " +
-                    std::to_string(morton));
+                    std::to_string(morton) + " (wave " + std::to_string(wave) +
+                    "): X_NR " + std::to_string(box->X_NR.rows) + "x" +
+                    std::to_string(box->X_NR.cols) + " lda " +
+                    std::to_string(box->X_NR.lda) + " data " +
+                    std::to_string(box->X_NR.data.size()) + ", X_RR_full " +
+                    (box->X_RR_full.is_allocated()
+                         ? std::to_string(box->X_RR_full.rows) + "x" +
+                               std::to_string(box->X_RR_full.cols)
+                         : std::string("unallocated")) +
+                    ", neighbor counts " +
+                    std::to_string(box->deferred_xnn_neighbor_point_counts.size()) +
+                    " of one_hop " + std::to_string(box->one_hop.size()) +
+                    ", temp2 " + std::to_string(box->deferred_xnn_temp2.size()) +
+                    ", skeleton " + std::to_string(box->skeleton_indices.size()) +
+                    " of " + std::to_string(box->num_points) + " points");
             }
 
             generator->r = redundant_count;

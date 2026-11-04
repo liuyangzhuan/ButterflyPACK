@@ -10450,6 +10450,20 @@ void compute_and_modify(
     int64_t r = box->redundant_indices.size();
     
     if (r == 0) {
+        // No redundant set, so none of what this function builds for one: a
+        // box rerun after its first pass was abandoned (an entry not fetched
+        // yet, H2EntryMiss at entry_checkpoint) still holds that pass's, whose
+        // ID, on placeholder entries, found a lower rank.  Left in place, the
+        // box reads as one with fill (emit_lazy_generators: incomplete state;
+        // seen with METIS orderings in STRUMPACK, whose small boxes come out
+        // full rank on the rerun).
+        box->X_RR = MatrixStorage<DataType>{};
+        box->X_RR_pivots.clear();
+        box->X_SR = MatrixStorage<DataType>{};
+        box->X_RS = MatrixStorage<DataType>{};
+        box->X_RR_full = MatrixStorage<DataType>{};
+        box->X_NR = MatrixStorage<DataType>{};
+        box->X_RN = MatrixStorage<DataType>{};
         if (store) {
             // A full-rank box has no X_NR rows, but owner payloads still carry
             // one row-count entry per one-hop slot.
