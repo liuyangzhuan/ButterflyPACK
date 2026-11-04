@@ -2393,8 +2393,11 @@ contains
          call assert(ho_bf1%levels(level_c)%BP(ii)%Lplus == 1, 'HODLR GPU construction requires LRlevel=0')
          blks(b)%p => ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)
          call assert(blks(b)%p%level_butterfly == 0, 'HODLR GPU construction: a block is not low rank')
-         call BPACK_require(IOwnPgrp(ptree, fgno) .and. &
-                            ho_bf1%levels(level_c)%BP_inverse((ii + 1)/2)%pgno == fgno, &
+         ! (one group, or one-rank groups: a one-rank group's two children are numbered apart, NumberingPtree,
+         ! when nproc is not a power of 2; they are this rank, and the prefetch has nothing to fetch for them)
+         pgno = ho_bf1%levels(level_c)%BP_inverse((ii + 1)/2)%pgno
+         call BPACK_require(IOwnPgrp(ptree, fgno) .and. IOwnPgrp(ptree, pgno) .and. &
+                            (pgno == fgno .or. (ptree%pgrp(pgno)%nproc == 1 .and. ptree%pgrp(fgno)%nproc == 1)), &
                             'HODLR GPU construction: the blocks of a rank in diagonal blocks of different groups')
       enddo
       call HODLR_gpu_addend_prefetch(ho_bf1%gpu, ker, blks, nb, option, ptree, fgno, nu0, nv0)
