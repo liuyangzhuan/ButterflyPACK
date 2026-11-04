@@ -2051,8 +2051,17 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
             }
         }
         MPI_Allreduce(MPI_IN_PLACE, &compressed, 1, MPI_INT, MPI_MAX, tree->comm);
-        const size_t segment = std::min<size_t>(size_t{2} << 30,
-                                                std::max<size_t>(size_t{256} << 20, static_cast<size_t>(budget / 8)));
+        // A box wider than that segment sets it, the widest over the ranks (a
+        // box's factors are decompressed into one buffer; build_solve_xnr_waves
+        // threw for it: a level-3 box of 2.56 GB at tol 1e-10 on one rank, on
+        // a 67 GB budget).  The plan below counts the larger scratch against
+        // the budget like any other, so a card that cannot hold it streams or
+        // solves on the host instead.
+        unsigned long long widest_all = widest_box;
+        MPI_Allreduce(MPI_IN_PLACE, &widest_all, 1, MPI_UNSIGNED_LONG_LONG, MPI_MAX, tree->comm);
+        const size_t segment = std::max<size_t>(
+            std::min<size_t>(size_t{2} << 30, std::max<size_t>(size_t{256} << 20, static_cast<size_t>(budget / 8))),
+            compressed ? align_up(static_cast<size_t>(widest_all)) : 0);
         const SharedXnrScratch& shared_now = shared_xnr_scratch();
         const bool own_scratch = compressed && shared_now.ptr != nullptr && widest_box > shared_now.segment;
         double scratch = compressed && (shared_now.ptr == nullptr || own_scratch)
