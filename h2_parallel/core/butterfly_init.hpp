@@ -808,11 +808,19 @@ ProgramOptions with_occupancy_depth(const ProgramOptions& options, const CoordTy
 // (Poisson 100^3 on 64 ranks with leaf 64: the 8-rank fronts, 64 leaf boxes,
 // and then the four-block 16-rank fronts, no layout over 3 levels).  A deeper
 // tree is a smaller leaf where it is needed and nowhere else: a usable layout
-// keeps its depth.  Bounded as occupancy_num_levels is (the Morton bits,
-// kOccupancyBoxesPerPoint leaf boxes a point); past that the depth stays and
-// create_uniform_tree warns or throws as before.  The weights are the same on
-// every rank (summed or broadcast), so every rank takes the same depth.
-// Collective; rank 0 reports.
+// keeps its depth.  Bounded by the Morton bits, and by the larger of
+// occupancy_num_levels's bound (kOccupancyBoxesPerPoint leaf boxes a point)
+// and the depth to which the planner sees empty regions exactly: a leaf
+// region is whole boxes one level above the leaf (where the count grows, a
+// parent region is split in whole boxes of its level), and the weights hold
+// the points per box of region_weight_level, so a leaf one level below it is
+// decided on true counts.  The second bound is the one an irregular separator
+// on many ranks needs: Poisson 100^3 on 64 ranks, ParMETIS, a four-block F11
+// of 4805 points on 33 ranks had empty regions at 4 and 5 levels, and the
+// first bound stopped at 5.  Past both the depth stays and create_uniform_tree
+// warns or throws as before.  The weights are the same on every rank (summed
+// or broadcast), so every rank takes the same depth.  Collective; rank 0
+// reports.
 template<typename CoordType>
 ProgramOptions with_region_depth(const ProgramOptions& options, const CoordType* points, int64_t count,
                                  const CoordType bounds[6], MPI_Comm comm, bool distributed) {
@@ -838,11 +846,11 @@ ProgramOptions with_region_depth(const ProgramOptions& options, const CoordType*
   const int max_leaf = options.dimension == 3 ? 20 : 30;  // (the Morton codes' bits)
   for (int levels = options.num_levels + 1;; ++levels) {
     const int leaf = levels - 1;
-    if (leaf > max_leaf ||
+    const bool past_points =
         std::ldexp(1.0, options.dimension * leaf) >
-            static_cast<double>(fmm::kOccupancyBoxesPerPoint) * static_cast<double>(options.N)) {
-      break;
-    }
+        static_cast<double>(fmm::kOccupancyBoxesPerPoint) * static_cast<double>(options.N);
+    const bool past_exact = fmm::region_weight_level(options.dimension, levels, size) < leaf - 1;
+    if (leaf > max_leaf || (past_points && past_exact)) break;
     if (!unusable(levels)) {
       out.num_levels = levels;
       break;
