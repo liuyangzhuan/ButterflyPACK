@@ -1454,6 +1454,12 @@ public:
                             static_cast<long long>(e.mat_batches), e.mat_seconds,
                             static_cast<long long>(e.mat_left), static_cast<long long>(e.mat_prefetched));
             }
+            if (e.ub_blocks > 0) {
+                std::printf("  [gpu] level %d uploaded blocks packed to the host (over half the hold limit): %.2f -> %.2f GB "
+                            "(%.1fx) over %lld blocks in %lld chunks\n", level.level, e.ub_raw_bytes / 1e9,
+                            e.ub_stored_bytes / 1e9, e.ub_stored_bytes > 0.0 ? e.ub_raw_bytes / e.ub_stored_bytes : 1.0,
+                            static_cast<long long>(e.ub_blocks), static_cast<long long>(e.ub_chunks));
+            }
             if (e.pb_blocks > 0) {
                 std::printf("  [gpu] level %d parent blocks compress: %.2f -> %.2f GB (%.1fx) over %lld blocks", level.level,
                         e.pb_raw_bytes / 1e9, e.pb_stored_bytes / 1e9,

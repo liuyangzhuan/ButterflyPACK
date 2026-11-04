@@ -328,6 +328,12 @@ struct EliminatorStats {
     int64_t pb_blocks = 0;
     int64_t pb_packed_short = 0;  // a block whose packed copy did not fit
     int64_t pb_host_short = 0;    // a group of parent blocks left raw for want of host room
+    // the blocks of a level uploaded from the host that went packed into its
+    // host region instead of onto the card (begin(), above half the hold limit)
+    double ub_raw_bytes = 0.0;
+    double ub_stored_bytes = 0.0;
+    int64_t ub_blocks = 0;
+    int64_t ub_chunks = 0;
     double pb_check_err = 0.0;
     double pb_check_tol = 0.0;
     double lsch_union_max_wave = 0.0;
@@ -3468,13 +3474,17 @@ void LevelEliminator<CoordType, DataType, KernelType>::begin() {
         bool a_sn = false;                                    // (nonsymmetric: its A_SN view)
         DeviceMatrix* dst = nullptr;
         size_t offset = 0;                                    // in elements
+        bool schur_slot = false;                              // its key: a box's Schur block (Morton) ...
+        uint64_t key = 0;                                     // ... or a near block (edge key)
     };
     std::vector<Placement> placements;
     size_t image_elems = 0;
+    // (the device block is allocated with its chunk below, or never: a chunk
+    // that would take the heap past its hold limit is packed instead)
     auto place = [&](Placement p, int rows, int cols) {
         p.dst->rows = rows;
         p.dst->cols = cols;
-        p.dst->ptr = heap_.alloc_resident<S>(static_cast<size_t>(rows) * cols * sizeof(S), ResidentKind::Uploaded);
+        p.dst->ptr = nullptr;
         p.offset = image_elems;
         image_elems += align_up(static_cast<size_t>(rows) * cols, 32);
         placements.push_back(p);
@@ -3492,6 +3502,8 @@ void LevelEliminator<CoordType, DataType, KernelType>::begin() {
             Placement p;
             p.schur = &box.schur_complement;
             p.dst = &st.schur;
+            p.schur_slot = true;
+            p.key = static_cast<uint64_t>(box.morton_index);
             place(p, st.n, st.n);
         }
         if (nonsym_) {
@@ -3516,6 +3528,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::begin() {
                 p.block = &block;
                 p.a_sn = a_sn;
                 p.dst = &edges_[key];
+                p.key = key;
                 place(p, static_cast<int>(view_rows), static_cast<int>(view_cols));
             };
             for (const auto& entry : box.near_field_interaction_map) {
@@ -3548,6 +3561,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::begin() {
             p.block = &block;
             p.transpose = box.morton_index > other;  // physical rows = the higher Morton box
             p.dst = &edges_[key];
+            p.key = key;
             if (p.transpose) place(p, st.n, other_n); else place(p, other_n, st.n);
         }
     }
@@ -3579,6 +3593,105 @@ void LevelEliminator<CoordType, DataType, KernelType>::begin() {
         std::unique_ptr<DataType[]> image_owner(new DataType[max_chunk_elems]);
         DataType* h_image = image_owner.get();
         S* d_image = heap_.alloc<S>(max_chunk_elems * sizeof(S));
+#ifdef H2_HAVE_NVCOMP
+        // Placements [i0, i1) of the chunk now in d_image, compressed in
+        // groups into runs of the level's host region and entered packed
+        // (live, as an adopted parent run); what does not pack - no room on
+        // the host, a block the compressor leaves raw, a failed compression -
+        // goes to `raw`.  Lossy at the near store's own tolerance, as every
+        // packed near block is.
+        auto& pack_stats = eliminator_stats();
+        auto pack_uploaded = [&](size_t i0, size_t i1, size_t base, std::vector<size_t>& raw) {
+            std::vector<size_t> group;
+            size_t group_raw = 0;
+            auto flush = [&]() {
+                if (group.empty()) return;
+                std::vector<const S*> srcs;
+                std::vector<size_t> elems;
+                for (const size_t i : group) {
+                    const Placement& p = placements[i];
+                    srcs.push_back(d_image + (p.offset - base));
+                    elems.push_back(static_cast<size_t>(p.dst->rows) * static_cast<size_t>(p.dst->cols));
+                }
+                std::vector<CompressedXnr> comp;
+                if (!fill_compressor_.compress(srcs, elems, tolerance_ * kXnrToleranceFraction, comp, stream)) {
+                    raw.insert(raw.end(), group.begin(), group.end());
+                    fill_compressor_.release();
+                    group.clear();
+                    group_raw = 0;
+                    return;
+                }
+                size_t group_packed = 0;
+                for (const auto& c : comp) group_packed += c.bytes;
+                const bool host_room = group_packed == 0 ||
+                                       host_room_bytes() + static_cast<double>(pinned_chunk_pool().idle()) >
+                                           kHostReserveBytes + static_cast<double>(group_packed);
+                if (!host_room) ++pack_stats.pb_host_short;
+                char* owned = group_packed > 0 && host_room ? near_host_arena(level_index_).alloc(group_packed) : nullptr;
+                if (owned != nullptr) packed_owned_.push_back(owned);
+                const auto& cks = fill_compressor_.chunks();
+                const char* staging = fill_compressor_.staging();
+                std::vector<CopySpan> spans;
+                int64_t max_words = 0;
+                size_t owned_at = 0;
+                for (size_t j = 0; j < group.size(); ++j) {
+                    const Placement& p = placements[group[j]];
+                    if (owned == nullptr || comp[j].bytes == 0) {
+                        raw.push_back(group[j]);
+                        continue;
+                    }
+                    PackedBlock pb;
+                    pb.packed = owned + owned_at;
+                    pb.owner = owned;
+                    pb.live = true;
+                    pb.bytes = comp[j].bytes;
+                    pb.chunk0 = static_cast<uint32_t>(packed_strides_.size());
+                    pb.nchunks = static_cast<uint32_t>(comp[j].nchunks);
+                    pb.rows = p.dst->rows;
+                    pb.cols = p.dst->cols;
+                    size_t off = 0;
+                    for (size_t c = 0; c < comp[j].nchunks; ++c) {
+                        const auto& ck = cks[comp[j].chunk0 + c];
+                        spans.push_back(CopySpan{staging + ck.offset, pb.packed + off, static_cast<int64_t>(ck.stride / 4)});
+                        max_words = std::max(max_words, static_cast<int64_t>(ck.stride / 4));
+                        packed_strides_.push_back(static_cast<uint32_t>(ck.stride));
+                        off += ck.stride;
+                    }
+                    owned_at += comp[j].bytes;
+                    if (p.schur_slot) packed_schur_[static_cast<int64_t>(p.key)] = pb; else packed_edges_[p.key] = pb;
+                    ++packed_live_[owned];
+                    pack_stats.ub_raw_bytes += static_cast<double>(elems[j] * sizeof(S));
+                    pack_stats.ub_stored_bytes += static_cast<double>(comp[j].bytes);
+                    ++pack_stats.ub_blocks;
+                }
+                if (!spans.empty()) {
+                    const size_t list_bytes = spans.size() * sizeof(CopySpan);
+                    if (list_bytes > fill_meta_device_.capacity()) {
+                        check_cuda(cudaStreamSynchronize(stream), "uploaded blocks packed");
+                        fill_meta_device_.reserve(list_bytes);
+                    }
+                    auto* d_items = static_cast<CopySpan*>(fill_meta_device_.reserve(list_bytes));
+                    check_cuda(cudaMemcpyAsync(d_items, spans.data(), list_bytes, cudaMemcpyHostToDevice, stream),
+                               "uploaded blocks packed");
+                    launch_copy_spans(d_items, static_cast<int>(spans.size()), max_words, stream);
+                }
+                // the staging and the span list are reused by the next group
+                check_cuda(cudaStreamSynchronize(stream), "uploaded blocks packed");
+                fill_compressor_.release();
+                group.clear();
+                group_raw = 0;
+            };
+            for (size_t i = i0; i < i1; ++i) {
+                const Placement& p = placements[i];
+                const size_t bytes = static_cast<size_t>(p.dst->rows) * static_cast<size_t>(p.dst->cols) * sizeof(S);
+                if (!group.empty() && group_raw + bytes > kFillStagingBudget) flush();
+                group.push_back(i);
+                group_raw += bytes;
+            }
+            flush();
+            ++pack_stats.ub_chunks;
+        };
+#endif
         for (size_t c = 0; c + 1 < chunk_first.size(); ++c) {
             const size_t i0 = chunk_first[c], i1 = chunk_first[c + 1];
             const size_t base = placements[i0].offset;
@@ -3603,9 +3716,37 @@ void LevelEliminator<CoordType, DataType, KernelType>::begin() {
             }
             check_cuda(cudaMemcpyAsync(d_image, h_image, elems * sizeof(S), cudaMemcpyHostToDevice, stream),
                        "upload blocks");
+            // The chunk's blocks raw on the card, as before - or, when that
+            // would take the heap past half its hold limit (H2_compress_factors),
+            // packed from the staging straight into the level's host region,
+            // like the parent blocks a device transition hands over: each
+            // wave then materializes what it reads (materialize_adopted).  A
+            // single-rank level 3 above an 8-rank level 4 uploaded 38-70 GB
+            // of blocks onto an 80 GB card and ran out of device memory
+            // (GPTune's 400K space-time GP).  Half: nothing reclaims a raw
+            // uploaded block before the wave that reads it, while the level's
+            // own stores and exchanges grow beside them; uploaded up to the
+            // full limit (13.5 of 15.1 GB), a level 3 then needed 9 GB of
+            // exchange buffers and ran out.  Below half nothing changes.
+            std::vector<size_t> raw;
+            raw.reserve(i1 - i0);
+#ifdef H2_HAVE_NVCOMP
+            if (compress_factors_ >= 1 && heap_.used() + elems * sizeof(S) > hold_limit() / 2) {
+                pack_uploaded(i0, i1, base, raw);
+            } else {
+                for (size_t i = i0; i < i1; ++i) raw.push_back(i);
+            }
+#else
+            for (size_t i = i0; i < i1; ++i) raw.push_back(i);
+#endif
+            for (const size_t i : raw) {
+                const Placement& p = placements[i];
+                p.dst->ptr = heap_.alloc_resident<S>(static_cast<size_t>(p.dst->rows) * p.dst->cols * sizeof(S),
+                                                     ResidentKind::Uploaded);
+            }
             std::vector<GatherItem> copies;
             int max_m = 0, max_n = 0;
-            for (size_t i = i0; i < i1; ++i) {
+            for (const size_t i : raw) {
                 const Placement& p = placements[i];
                 copies.push_back(GatherItem{p.dst->ptr, p.dst->rows, p.dst->rows, p.dst->cols,
                                             d_image + (p.offset - base), 1, p.dst->rows, IndexList{}, IndexList{}});
@@ -6057,7 +6198,17 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             const auto it = win_of.find(&m);
             if (it != win_of.end()) return reinterpret_cast<const S*>(fill_window + it->second.second);
             const size_t bytes = align_up(static_cast<size_t>(m.rows) * m.cols * sizeof(S));
-            if (bytes > fill_window_bytes) return nullptr;      // cannot be windowed; left to the guards
+            if (bytes > fill_window_bytes) {
+                // larger than the window (halved on a tight heap): put back
+                // on its own, as without a window.  Returning null here left
+                // it to the guards, which throw for a packed block: a level 2
+                // Schur block of 4800 x 4800 behind a level whose parents were
+                // packed under pressure (single-rank upper levels, 2026-11-04)
+                std::vector<AdoptedBlock> one{AdoptedBlock{schur, key, &m}};
+                materialize_adopted(one, stream, MatOwnerJoin);
+                ++stats.fw_fallbacks;
+                return m.ptr;
+            }
             if (win_at + bytes > fill_window_bytes) {
                 win_passes.emplace_back();
                 win_at = 0;
