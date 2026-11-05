@@ -329,6 +329,8 @@ struct EliminatorStats {
     int64_t pb_packed_short = 0;  // a block whose packed copy did not fit
     int64_t pb_host_short = 0;    // a group of parent blocks left raw for want of host room
     int64_t tr_buffer_pieced = 0;  // transition chunks whose G;P buffers went in pieces (no free block that large)
+    int64_t tr_parents_in_passes = 0;  // parents whose packed fill sources took more than a chunk's budget ...
+    int64_t tr_source_passes = 0;      // ... and the passes after their first, over ranges of those sources
     // the blocks of a level uploaded from the host that went packed into its
     // host region instead of onto the card (begin(), above half the hold limit)
     double ub_raw_bytes = 0.0;
@@ -13244,6 +13246,65 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
         return last;
     };
 
+#ifdef H2_HAVE_NVCOMP
+    // H2_compress_factors: the fill sources of parent p a chunk would put back
+    // whole from the packed store (not resident, not put back or restored
+    // yet), each once, with their bytes, by Morton.  The walk of the chunk's
+    // plan below, without its side effects.
+    const bool scan_put_backs = compress_factors_ >= 1;
+    std::vector<const SourceCandidate*> scan_sources;
+    std::vector<std::pair<int64_t, size_t>> scan_put;
+    auto put_backs_of = [&](size_t p, std::vector<std::pair<int64_t, size_t>>& out) {
+        out.clear();
+        std::unordered_set<int64_t> seen;
+        for (const Pair& pr : pairs_of[p]) {
+            const Parent& pa = parent(pr.pm);
+            const Parent& qa = parent(pr.qm);
+            for (int ci = 0; ci < nc; ++ci) {
+                const int64_t im = pa.child[static_cast<size_t>(ci)];
+                for (int cj = 0; cj < nc; ++cj) {
+                    const int64_t jm = qa.child[static_cast<size_t>(cj)];
+                    if (im == jm || empty_child(im) || empty_child(jm)) continue;
+                    if (state_of(im).skeleton.empty() || state_of(jm).skeleton.empty()) continue;
+                    int64_t ci3[3], cj3[3];
+                    lazy_far_decode_coords(dim, im, ci3);
+                    lazy_far_decode_coords(dim, jm, cj3);
+                    int64_t chebyshev = 0;
+                    bool reaches_two = false;
+                    for (int d = 0; d < dim; ++d) {
+                        const int64_t dist = std::abs(ci3[d] - cj3[d]);
+                        chebyshev = std::max(chebyshev, dist);
+                        reaches_two = reaches_two || dist == 2;
+                    }
+                    if (chebyshev != 2 || !reaches_two) continue;
+                    sources_of(im, jm, cj3, scan_sources);
+                    for (const SourceCandidate* src : scan_sources) {
+                        const BoxState& es = *src->state;
+                        if (es.r == 0 || !seen.insert(src->morton).second) continue;
+                        if (es.temp2t != nullptr || restored.count(src->morton) != 0) continue;
+                        if (packed_of(es) == nullptr || es.ntot <= 0) continue;
+                        out.emplace_back(src->morton, (nonsym_ ? 2 : 1) * static_cast<size_t>(es.ntot) *
+                                                          static_cast<size_t>(es.r) * sizeof(S));
+                    }
+                }
+            }
+        }
+        std::sort(out.begin(), out.end());
+    };
+#endif
+    // A parent whose fill sources would put back more than a chunk's budget
+    // from the packed store goes alone, in passes over Morton ranges of its
+    // sources.  GPTune's 900K Matern-3/2 GP on 16 ranks: one level-2
+    // parent's level-3 sources (skeletons of 1253) put back 35.6 GB whole in
+    // one chunk - the first parent is always taken - and its G;P buffers had
+    // no room.  A source lies in one range, so its put-back is freed with its
+    // pass.  The first pass initializes the parent blocks, each pass
+    // subtracts the fills of its sources, and the blocks are packed after the
+    // last.  A target sums its sources pass by pass, in its own order within
+    // one: unchanged on CA levels (their lists are by Morton), the order of
+    // the passes otherwise (Color lists go by wave first).
+    std::vector<int64_t> pass_cuts;   // pass q takes the sources in [cut[q - 1], cut[q])
+    size_t pass = 0;
     size_t p0 = 0;
     std::vector<const SourceCandidate*> sources;
     std::vector<int64_t> positions;
@@ -13264,6 +13325,32 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
         // chunk budget for G, P and restored fill sources (the free space is
         // fragmented by the level's blocks)
         const size_t budget = std::min({size_t{2} << 30, (heap_.capacity() - heap_.used()) / 4, heap_.largest_free() / 2});
+#ifdef H2_HAVE_NVCOMP
+        if (pass == 0 && scan_put_backs) {   // (the passes of an oversized parent: cut at its first)
+            pass_cuts.clear();
+            put_backs_of(p0, scan_put);
+            size_t total = 0;
+            for (const auto& mb : scan_put) total += mb.second;
+            if (total > budget) {
+                // half the budget a pass: its G;P buffers grow with its sources
+                size_t acc = 0;
+                for (const auto& [m, b] : scan_put) {
+                    if (acc > 0 && acc + b > budget / 2) {
+                        pass_cuts.push_back(m);
+                        acc = 0;
+                    }
+                    acc += b;
+                }
+                if (!pass_cuts.empty()) ++stats.tr_parents_in_passes;
+            }
+        }
+#endif
+        const bool in_passes = !pass_cuts.empty();
+        const bool first_pass = pass == 0;
+        const bool last_pass = pass == pass_cuts.size();
+        const int64_t src_lo = first_pass ? std::numeric_limits<int64_t>::min() : pass_cuts[pass - 1];
+        const int64_t src_hi = last_pass ? std::numeric_limits<int64_t>::max() : pass_cuts[pass];
+        auto in_pass = [&](int64_t m) { return m >= src_lo && m < src_hi; };
         size_t buffer_bytes = 0;
         // A fill source: its resident temp2^T and X_RR_full, or its restored
         // G columns (restored in an earlier chunk, or in this one: offsets in
@@ -13586,9 +13673,24 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
         // ... and which key it is under, so the compressed form can be stored
         struct ChunkRef { bool schur; int64_t morton; uint64_t key; const DeviceMatrix* m; };
         std::vector<ChunkRef> chunk_refs;
+        // another parent while the chunk is under its budget - with what that
+        // parent would put back from the packed store, which its own plan
+        // allocates before the check could stop it
+        auto room_for = [&](size_t p) {
+            size_t bytes = buffer_bytes + 2 * restore_bytes + packed_restore_bytes + xrr_rebuild_bytes + chunk_block_bytes;
+            if (bytes >= budget) return false;
+#ifdef H2_HAVE_NVCOMP
+            if (scan_put_backs) {
+                put_backs_of(p, scan_put);
+                for (const auto& mb : scan_put) bytes += mb.second;
+            }
+#else
+            (void)p;
+#endif
+            return bytes < budget;
+        };
         size_t p1 = p0;
-        while (p1 < np && (p1 == p0 || buffer_bytes + 2 * restore_bytes + packed_restore_bytes + xrr_rebuild_bytes +
-                                              chunk_block_bytes < budget)) {
+        while (p1 < np && (p1 == p0 || (!in_passes && room_for(p1)))) {
             const size_t p = p1++;
             for (const Pair& pr : pairs_of[p]) {
                 DeviceMatrix& M = *pr.block;
@@ -13625,13 +13727,16 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
                         const int kr = static_cast<int>(rs.skeleton.size()), ks = static_cast<int>(ss.skeleton.size());
                         if (kr == 0 || ks == 0) continue;  // (an empty block)
                         S* target = M.ptr + row0 + static_cast<size_t>(col0) * M.rows;
+                        // (the blocks' values: in the first pass only)
                         auto eval = [&] {
+                            if (!first_pass) return;
                             evals.push_back(EvalItem{target, M.rows, kr, ks, current_slots_in(rs, meta, wave_stamp_),
                                                      current_slots_in(ss, meta, wave_stamp_)});
                             max_eval_m = std::max(max_eval_m, kr);
                             max_eval_n = std::max(max_eval_n, ks);
                         };
                         auto gather = [&](const S* src, int64_t rsd, int64_t csd) {
+                            if (!first_pass) return;
                             gathers.push_back(GatherItem{target, M.rows, kr, ks, src, rsd, csd, IndexList{}, IndexList{}});
                             max_gather_m = std::max(max_gather_m, kr);
                             max_gather_n = std::max(max_gather_n, ks);
@@ -13712,7 +13817,7 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
                             size_t t = 0;
                             for (const SourceCandidate* src : sources) {
                                 const BoxState& es = *src->state;
-                                if (es.r == 0) continue;
+                                if (es.r == 0 || !in_pass(src->morton)) continue;
                                 if (fills.size() <= t) fills.resize(t + 1);
                                 fills[t].push_back(FillTask{g_for(*src, Rm, r3), p_for(*src, Sm, s3), target, M.rows, kr,
                                                             ks, es.r, true});
@@ -13732,6 +13837,7 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
                         for (const SourceCandidate* src : sources) {
                             const BoxState& es = *src->state;
                             if (es.r == 0) continue;  // no Schur contribution
+                            if (!in_pass(src->morton)) continue;  // (another pass's)
                             if (fills.size() <= t) fills.resize(t + 1);
                             fills[t].push_back(FillTask{g_for(*src, gi, gi3), p_for(*src, pj, pj3), target, M.rows, kr, ks,
                                                         es.r, Rm == gi});
@@ -13911,7 +14017,7 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
         for (auto& b : fill_j) b.stage(meta);
         for (auto& b : fill_i) b.stage(meta);
         stats.tr_plan += std::chrono::duration<double>(clock::now() - t_plan).count();
-        {
+        if (first_pass) {   // (a later pass of the same parent revisits its blocks by design)
             size_t bytes = 0;
             for (const auto& [ptr, b] : chunk_blocks) {
                 bytes += b;
@@ -13960,8 +14066,9 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
         // into contiguous ranges, 0 revisits measured), so a chunk's blocks
         // are final here.  The raw blocks stay for now - the next level still
         // reads them - so this must not change any result.
-        ++stats.tr_pack_chunks;
-        if (compress_factors_ >= 1 && pack_parents_ && !chunk_refs.empty() && under_pressure()) {
+        // (a parent in passes: its blocks are final after the last)
+        if (last_pass) ++stats.tr_pack_chunks;
+        if (last_pass && compress_factors_ >= 1 && pack_parents_ && !chunk_refs.empty() && under_pressure()) {
             ++stats.tr_pack_chunks_packed;
             check_cuda(cudaStreamSynchronize(stream), "parent blocks");  // written by the launches above
             std::vector<const S*> srcs;
@@ -14085,9 +14192,10 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
         heap_.free(d_raw);
         for (char* b : xrr_exp_blocks) heap_.free(b);  // (the chunk's P products read them; the next chunk rebuilds its own)
         xrr_exp_blocks.clear();
-        // restored sources whose last reader was in this chunk or before
+        // restored sources whose last reader was in this chunk or before (a
+        // pass before the last: its put-backs only, which no later pass reads)
         for (auto it = restored.begin(); it != restored.end();) {
-            if (it->second.last_parent < p1) {
+            if (it->second.last_parent < p1 && (last_pass || it->second.gall == nullptr)) {
                 heap_.free(it->second.block);
                 if (it->second.xrr_block != nullptr) heap_.free(it->second.xrr_block);
                 it = restored.erase(it);
@@ -14116,7 +14224,14 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
                         tr_rss_gb(), static_cast<double>(pinned_chunk_pool().pinned()) / 1e9, tr_rank());
             std::fflush(stdout);
         }
-        p0 = p1;
+        if (last_pass) {
+            p0 = p1;
+            pass = 0;
+            pass_cuts.clear();
+        } else {
+            ++pass;   // the same parent, its next sources
+            ++stats.tr_source_passes;
+        }
     }
     for (auto& kv : restored) {
         heap_.free(kv.second.block);

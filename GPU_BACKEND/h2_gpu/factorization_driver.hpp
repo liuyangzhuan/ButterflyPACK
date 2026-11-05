@@ -1237,6 +1237,12 @@ public:
                 std::printf("  [gpu] level %d transition: G;P buffers of %lld chunks in pieces (no free block that large)\n",
                             level.level, static_cast<long long>(e.tr_buffer_pieced));
             }
+            if (e.tr_parents_in_passes > 0) {
+                std::printf("  [gpu] level %d transition: %lld parents in %lld passes over their fill sources (put back "
+                            "from the packed store beyond the chunk budget)\n",
+                            level.level, static_cast<long long>(e.tr_parents_in_passes),
+                            static_cast<long long>(e.tr_parents_in_passes + e.tr_source_passes));
+            }
             if (e.ghost_lu_bytes > 0) {
                 std::printf("  [gpu] level %d ghosts' LU held to the level's end (H2_CA_solve home): %.2f GB\n",
                             level.level, e.ghost_lu_bytes / 1e9);
