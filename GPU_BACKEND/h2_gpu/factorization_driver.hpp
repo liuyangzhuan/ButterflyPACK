@@ -485,6 +485,7 @@ public:
                                        /*ca=*/false, /*owner=*/false, opt_.compress_factors);
         level_index_ = lvl;
         decide_solve_keep(lvl, level_comm, false);
+        count_node_level_ranks(level_comm);
         if (wave_trace_enabled()) trace_.start_end();
         if (announce) {
             std::cout << "  GPU box path: "
@@ -543,6 +544,7 @@ public:
         }
         level_index_ = lvl;
         decide_solve_keep(lvl, level_comm, false);  // (the factors kept here are this rank's boxes')
+        count_node_level_ranks(level_comm);
         if (wave_trace_enabled()) trace_.start_end();
         if (announce) {
             std::cout << "  GPU owner level: "
@@ -614,6 +616,7 @@ public:
         }
         level_index_ = lvl;
         decide_solve_keep(lvl, level_comm, true);
+        count_node_level_ranks(level_comm);
         if (level_) {   // (every rank of the level: fits was decided together)
             int pack = level_->shared_packing_expected() ? 1 : 0;
             MPI_Allreduce(MPI_IN_PLACE, &pack, 1, MPI_INT, MPI_MAX, level_comm);
@@ -695,6 +698,22 @@ public:
         }
         MPI_Allreduce(MPI_IN_PLACE, &ok, 1, MPI_INT, MPI_MIN, level_comm);
         if (level_) level_->set_solve_keep(ok != 0, budget, kept_expected_);
+    }
+    // The level's ranks on each node (collective over level_comm, at the
+    // level's start): they share the node's free host memory, which sets the
+    // fill store's step (decide_fill_precision).  A rank not active at the
+    // level holds its memory but does not grow it.
+    void count_node_level_ranks(MPI_Comm level_comm) {
+        int n = 1;
+        if (level_comm != MPI_COMM_NULL) {
+            int rank = 0;
+            MPI_Comm_rank(level_comm, &rank);
+            MPI_Comm node = MPI_COMM_NULL;
+            MPI_Comm_split_type(level_comm, MPI_COMM_TYPE_SHARED, rank, MPI_INFO_NULL, &node);
+            MPI_Comm_size(node, &n);
+            MPI_Comm_free(&node);
+        }
+        if (level_) level_->set_node_level_ranks(n);
     }
     // After the host's post-elimination assisting gather: the assisting
     // boxes' skeletons, for the device transition.

@@ -550,6 +550,9 @@ public:
         (void)budget;
         (void)expected_kept;
     }
+    // The level's ranks on this rank's node, which share its free host
+    // memory (decide_fill_precision); counted at the level's start.
+    virtual void set_node_level_ranks(int /*n*/) {}
     // The bytes this level's solve factors take (kept or not: the next
     // level's keep estimate), and why its keep failed during the waves (0:
     // it did not; 1: the factors outgrew the budget; 2: no free range of the
@@ -818,6 +821,7 @@ public:
         skip_xnr_ = keep_solve_ && !ca_replica_check_enabled() &&
                     (device_exchange_ || ca_ || level_.num_active_processes == 1);
     }
+    void set_node_level_ranks(int n) override { node_level_ranks_ = std::max(1, n); }
     void restore_host_copies() override { rescue_skipped_xnr(); }
     double level_factor_bytes() const override { return factor_bytes_; }
     double level_kept_bytes() const override { return kept_.bytes; }
@@ -2905,6 +2909,7 @@ private:
     bool packed_restore_ = false;
     int level_index_ = 0;
     double fill_frac_ = 0.2;   // the fill store's quantization step as a fraction of tol_comp (decide_fill_precision)
+    int node_level_ranks_ = 1;  // the level's ranks on this node (set_node_level_ranks)
     // Replicated CA levels with compression (2026-10-11): a near block that
     // exists on more than one rank - both its boxes are ghosts here or held
     // by another rank (its ghosts or assisting boxes) - is held packed after
@@ -3012,11 +3017,20 @@ private:
     // pack, when the keep rule's estimate is in the hold limit and the level's
     // working set is on the card: the store's bound at the fine step (27 n^2
     // an n-point box, over kFillFineRatio) must fit in half the room under the
-    // hold limit.  The leaf never: its own skeletons do not depend on its fill
-    // store (0.06% measured) and its store is the largest.  What the rule
-    // protects is the host: under pressure the store goes to the host, and
-    // at 768^3 on 64 ranks the level above the leaf packed fine put 6 GB a rank
-    // more there and the node ran out (the level's bound 110 GB, the room 10).
+    // hold limit, or in half of this rank's part of the node's free host
+    // memory (its share among the level's ranks on the node, less the
+    // reserve), where the store goes under pressure.  The leaf never: its own
+    // skeletons do not depend on its fill store (0.06% measured) and its store
+    // is the largest.  What the rule protects is the host: at 768^3 on 64
+    // ranks the level above the leaf packed fine put 6 GB a rank more there
+    // and the node ran out (the level's bound 110 GB, the room 10).  The
+    // device room alone (until 2026-11-05) sent every rank of level 3 of the
+    // 900K Matern and RBF GPs on 8 ranks to the coarse step - the level
+    // starts on the blocks of the host-routed reduction, its rooms 0-18 GB
+    // against bounds of 8-12 - and the error of the coarse step went into the
+    // next boxes' sketches: level 3's average skeleton 1323-1874, against
+    // 853-1033 at the fine step with the uploaded blocks packed at it, and
+    // the device out of memory at two of the three.
     void decide_fill_precision() {
         if (fill_frac_decided_) return;
         fill_frac_decided_ = true;
@@ -3034,14 +3048,18 @@ private:
         const size_t limit = hold_limit();
         const size_t used = heap_.used();
         const double room = limit > used ? static_cast<double>(limit - used) : 0.0;
-        const bool fine = !leaf && bound / kFillFineRatio < room / 2.0;
+        const double host = std::max(0.0, host_room_bytes() + static_cast<double>(pinned_chunk_pool().idle()) -
+                                              kHostReserveBytes) / node_level_ranks_;
+        const double need = bound / kFillFineRatio;
+        const bool fine = !leaf && (need < room / 2.0 || need < host / 2.0);
         if (fine) fill_frac_ = kFillToleranceFraction;
         int rk = 0;
         MPI_Comm_rank(MPI_COMM_WORLD, &rk);
-        if (rk == 0) {
-            std::printf("  [gpu] level %d fill store: packed at %.2g of tol_comp (%s; bound %.1f GB at the fine step, room %.1f GB under the hold limit)\n",
-                        level_index_, fill_frac_, leaf ? "the leaf" : fine ? "fits" : "does not fit",
-                        bound / kFillFineRatio / 1e9, room / 1e9);
+        if (rk == 0 || (!leaf && !fine)) {   // (a rank that falls back says so)
+            std::printf("  [gpu] level %d rank %d fill store: packed at %.2g of tol_comp (%s; bound %.1f GB at the fine step, "
+                        "room %.1f GB under the hold limit, host %.1f GB of %d rank%s)\n",
+                        level_index_, rk, fill_frac_, leaf ? "the leaf" : fine ? "fits" : "does not fit", need / 1e9,
+                        room / 1e9, host / 1e9, node_level_ranks_, node_level_ranks_ == 1 ? "" : "s");
             std::fflush(stdout);
         }
     }
@@ -3613,8 +3631,11 @@ void LevelEliminator<CoordType, DataType, KernelType>::begin() {
         // groups into runs of the level's host region and entered packed
         // (live, as an adopted parent run); what does not pack - no room on
         // the host, a block the compressor leaves raw, a failed compression -
-        // goes to `raw`.  Lossy at the near store's own tolerance, as every
-        // packed near block is.
+        // goes to `raw`.  Lossy at the fine fill store's step (2026-11-05):
+        // these are the level's starting blocks, every sketch of the level
+        // reads them, and at the kept X_NR's step their error went into the
+        // skeletons (the 900K Matern GP on 8 ranks: level 3's average
+        // skeleton 1323 -> 1262, with the fine fill store 1046 -> 917).
         auto& pack_stats = eliminator_stats();
         auto pack_uploaded = [&](size_t i0, size_t i1, size_t base, std::vector<size_t>& raw) {
             std::vector<size_t> group;
@@ -3629,7 +3650,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::begin() {
                     elems.push_back(static_cast<size_t>(p.dst->rows) * static_cast<size_t>(p.dst->cols));
                 }
                 std::vector<CompressedXnr> comp;
-                if (!fill_compressor_.compress(srcs, elems, tolerance_ * kXnrToleranceFraction, comp, stream)) {
+                if (!fill_compressor_.compress(srcs, elems, tolerance_ * kFillToleranceFraction, comp, stream)) {
                     raw.insert(raw.end(), group.begin(), group.end());
                     fill_compressor_.release();
                     group.clear();
