@@ -1162,12 +1162,30 @@ public:
                 }
                 MPI_Allreduce(MPI_IN_PLACE, to_owner.data(), tsize, MPI_DOUBLE, MPI_SUM, transition_comm);
                 int fits = 1;
+                const char* why = "on the device";
                 const DeviceHeap& heap = DeviceHeap::instance();
                 const double incoming = to_owner[static_cast<size_t>(trank)];
                 if (receiver && heap.initialized()) {
                     const double room = static_cast<double>(heap.capacity()) - static_cast<double>(heap.used());
                     const double margin = std::max(2.0e9, 0.1 * static_cast<double>(heap.capacity()));
-                    if (incoming + margin > room) fits = 0;
+                    if (incoming + margin > room) {
+                        fits = 0;
+                        why = "through the host (no room)";
+                    }
+                    // H2_compress_factors: the merged blocks stay raw on the
+                    // card through the next level, which no packing reaches,
+                    // while blocks the host reduction hands over are packed
+                    // beyond half the hold limit when the level uploads them
+                    // (begin()).  So the device takes them only within that
+                    // half.  GPTune's 900K RBF GP on 16 ranks (16 -> 4 into
+                    // level 3): rank 5 merged 40.85 GB into its own 14.03 GB,
+                    // and the level's first wave found 17.9 GB free in 107
+                    // ranges, the largest 2.4 GB.
+                    if (opt_.compress_factors >= 1 && g_hold_limit_bytes > 0 && fits != 0 &&
+                        static_cast<double>(heap.used()) + incoming > 0.5 * static_cast<double>(g_hold_limit_bytes)) {
+                        fits = 0;
+                        why = "through the host (over half the hold limit: packed when uploaded)";
+                    }
                 }
                 if (sender && my_bytes > 1.0e9) {
                     std::printf("  [gpu] level %d rank %d reduction: sends %.2f GB in %d blocks to rank %d, largest %d x %d\n",
@@ -1178,7 +1196,7 @@ public:
                                 level.level, rank, incoming / 1e9, my_bytes / 1e9,
                                 heap.initialized() ? static_cast<double>(heap.used()) / 1e9 : 0.0,
                                 heap.initialized() ? static_cast<double>(heap.capacity()) / 1e9 : 0.0,
-                                fits ? "on the device" : "through the host (no room)");
+                                why);
                 }
                 std::fflush(stdout);
                 if (!fits) ok = 0;
