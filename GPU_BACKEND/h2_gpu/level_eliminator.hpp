@@ -328,6 +328,7 @@ struct EliminatorStats {
     int64_t pb_blocks = 0;
     int64_t pb_packed_short = 0;  // a block whose packed copy did not fit
     int64_t pb_host_short = 0;    // a group of parent blocks left raw for want of host room
+    int64_t tr_buffer_pieced = 0;  // transition chunks whose G;P buffers went in pieces (no free block that large)
     // the blocks of a level uploaded from the host that went packed into its
     // host region instead of onto the card (begin(), above half the hold limit)
     double ub_raw_bytes = 0.0;
@@ -13829,9 +13830,43 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
             stats.tr_restore += std::chrono::duration<double>(clock::now() - t_restore).count();
         }
 
-        // buffers of G and P for the chunk
-        char* d_buffers = heap_.alloc(std::max<size_t>(buffer_bytes, 1), ResidentKind::TrBuffers);
-        auto at = [&](size_t off) { return reinterpret_cast<S*>(d_buffers + off); };
+        // buffers of G and P for the chunk: one block, or - when the heap has
+        // no free block that large - pieces of at most kPiece cut between
+        // items (each G or P item one s.r x k panel, a few MB), addressed by
+        // offset.  A chunk takes one parent at least, and one level-3 parent
+        // of a 900K GP needed 9.63 GB with 12.4 GB free in blocks of 9.53 GB
+        // at most and the rest in pieces under 0.5 GB (1 GB pieces left 3.9 GB
+        // of it unused).
+        std::vector<size_t> seg_start;   // offsets where the pieces begin
+        std::vector<char*> seg_ptr;
+        if (char* one = heap_.try_alloc(std::max<size_t>(buffer_bytes, 1), ResidentKind::TrBuffers)) {
+            seg_start.push_back(0);
+            seg_ptr.push_back(one);
+        } else {
+            constexpr size_t kPiece = size_t{64} << 20;
+            std::vector<std::pair<size_t, size_t>> items;   // (offset, bytes)
+            for (const GPending& g : g_pending) items.emplace_back(g.offset, static_cast<size_t>(g.r) * g.k * D);
+            for (const PPending& pp : p_pending) items.emplace_back(pp.offset, static_cast<size_t>(pp.r) * pp.k * D);
+            std::sort(items.begin(), items.end());
+            size_t start = 0;
+            for (const auto& [off, bytes] : items) {
+                if (off > start && off + bytes - start > kPiece) {
+                    seg_start.push_back(start);
+                    start = off;
+                }
+            }
+            seg_start.push_back(start);
+            for (size_t q = 0; q < seg_start.size(); ++q) {
+                const size_t end = q + 1 < seg_start.size() ? seg_start[q + 1] : buffer_bytes;
+                seg_ptr.push_back(heap_.alloc(std::max<size_t>(end - seg_start[q], 1), ResidentKind::TrBuffers));
+            }
+            ++stats.tr_buffer_pieced;
+        }
+        auto at = [&](size_t off) {
+            const size_t q = static_cast<size_t>(std::upper_bound(seg_start.begin(), seg_start.end(), off) -
+                                                 seg_start.begin()) - 1;
+            return reinterpret_cast<S*>(seg_ptr[q] + (off - seg_start[q]));
+        };
         auto g_ptr = [&](int index) -> const S* {
             const GInfo& g = g_infos[static_cast<size_t>(index)];
             if (g.restore != SIZE_MAX) return restore_ptr(g.restore);
@@ -13852,7 +13887,7 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
         std::vector<VBatch<S>> fill_j(fills.size()), fill_i(fills.size());
         for (size_t t = 0; t < fills.size(); ++t) {
             for (const FillTask& f : fills[t]) {
-                const S* P = reinterpret_cast<const S*>(d_buffers + p_offsets[static_cast<size_t>(f.p_j)]);
+                const S* P = at(p_offsets[static_cast<size_t>(f.p_j)]);
                 const int g_ld = g_infos[static_cast<size_t>(f.g_i)].ld;
                 if (!f.rows_i) {
                     // out (m x n) -= P_{E,j}^T (m x r) G_{E,i} (r x n)
@@ -14046,7 +14081,7 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
             flush();
         }
 #endif
-        heap_.free(d_buffers);  // later launches are ordered after this chunk
+        for (char* b : seg_ptr) heap_.free(b);  // later launches are ordered after this chunk
         heap_.free(d_raw);
         for (char* b : xrr_exp_blocks) heap_.free(b);  // (the chunk's P products read them; the next chunk rebuilds its own)
         xrr_exp_blocks.clear();

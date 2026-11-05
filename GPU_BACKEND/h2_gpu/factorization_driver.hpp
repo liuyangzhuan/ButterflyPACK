@@ -1215,6 +1215,10 @@ public:
                         reduced ? (blocks_ ? "merged on this device (process reduction)"
                                            : "sent to their owner's device (process reduction)")
                                 : (blocks_ ? "kept on the device" : "copied to the host"));
+            if (e.tr_buffer_pieced > 0) {
+                std::printf("  [gpu] level %d transition: G;P buffers of %lld chunks in pieces (no free block that large)\n",
+                            level.level, static_cast<long long>(e.tr_buffer_pieced));
+            }
             if (e.ghost_lu_bytes > 0) {
                 std::printf("  [gpu] level %d ghosts' LU held to the level's end (H2_CA_solve home): %.2f GB\n",
                             level.level, e.ghost_lu_bytes / 1e9);
