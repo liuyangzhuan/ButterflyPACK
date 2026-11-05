@@ -183,20 +183,37 @@ const char* deserialize(BoxData<CoordType, DataType>& box, const char* buffer);
  * can see it.
  */
 template<typename CoordType, typename DataType>
+void serialize_box_range(const std::vector<BoxData<CoordType, DataType>>& boxes,
+                         const std::vector<size_t>& box_sizes, size_t first, size_t last,
+                         std::vector<char>& buffer);
+
+template<typename CoordType, typename DataType>
 std::vector<char> serialize_boxes(const std::vector<BoxData<CoordType, DataType>>& boxes) {
-    // First pass: calculate total size needed using get_serialized_size
-    int64_t num_boxes = boxes.size();
-    size_t total_size = sizeof(int64_t);  // Space for num_boxes
-
-    std::vector<size_t> box_sizes(num_boxes);
-
-    for (int64_t i = 0; i < num_boxes; ++i) {
+    std::vector<size_t> box_sizes(boxes.size());
+    for (size_t i = 0; i < boxes.size(); ++i) {
         box_sizes[i] = get_serialized_size(boxes[i]);
+    }
+    std::vector<char> buffer;
+    serialize_box_range(boxes, box_sizes, 0, boxes.size(), buffer);
+    return buffer;
+}
+
+/**
+ * @brief Serialize boxes [first, last) into `buffer` as serialize_boxes lays
+ * them out (a leading int64_t count), so deserialize_boxes reads them back.
+ * `box_sizes[i]` is get_serialized_size(boxes[i]).  The buffer is resized, not
+ * reallocated when it is large enough: a sender reuses it for each group.
+ */
+template<typename CoordType, typename DataType>
+void serialize_box_range(const std::vector<BoxData<CoordType, DataType>>& boxes,
+                         const std::vector<size_t>& box_sizes, size_t first, size_t last,
+                         std::vector<char>& buffer) {
+    const int64_t num_boxes = static_cast<int64_t>(last - first);
+    size_t total_size = sizeof(int64_t);  // Space for num_boxes
+    for (size_t i = first; i < last; ++i) {
         total_size += box_sizes[i];
     }
-
-    // Allocate exact buffer size
-    std::vector<char> buffer(total_size);
+    buffer.resize(total_size);
     char* ptr = buffer.data();
 
     // Write number of boxes
@@ -204,7 +221,7 @@ std::vector<char> serialize_boxes(const std::vector<BoxData<CoordType, DataType>
     ptr += sizeof(int64_t);
 
     // Serialize each box
-    for (int64_t i = 0; i < num_boxes; ++i) {
+    for (size_t i = first; i < last; ++i) {
         char* ptr_before = ptr;
         ptr = serialize(boxes[i], ptr);
 
@@ -225,8 +242,25 @@ std::vector<char> serialize_boxes(const std::vector<BoxData<CoordType, DataType>
                                std::to_string(total_size) +
                                " but wrote " + std::to_string(actual_size));
     }
+}
 
-    return buffer;
+/**
+ * @brief Cut boxes of serialized sizes `box_sizes` into consecutive groups of
+ * at most `group_bytes` (a larger box is a group alone): group g is
+ * [cuts[g], cuts[g + 1]).  At least one group, empty when there are no boxes.
+ */
+inline std::vector<size_t> box_group_cuts(const std::vector<size_t>& box_sizes, size_t group_bytes) {
+    std::vector<size_t> cuts{0};
+    size_t bytes = 0;
+    for (size_t i = 0; i < box_sizes.size(); ++i) {
+        if (i > cuts.back() && bytes + box_sizes[i] > group_bytes) {
+            cuts.push_back(i);
+            bytes = 0;
+        }
+        bytes += box_sizes[i];
+    }
+    cuts.push_back(box_sizes.size());
+    return cuts;
 }
 
 /**
