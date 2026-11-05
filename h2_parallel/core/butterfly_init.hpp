@@ -797,12 +797,45 @@ ProgramOptions with_occupancy_depth(const ProgramOptions& options, const CoordTy
   return out;
 }
 
+// The points each rank needs for c_bpack_set_mesh_h2, which builds the index
+// tree a butterfly beside this H2 is distributed by: it bisects ranks [rh, rt]
+// at (rh + rt) / 2, as ButterflyPACK's process tree does, down to the level L
+// with 2^L >= size groups, and a rank alone in a group of level l < L halves
+// its own range at each level left, 2^(L - l) leaves that must not be empty.
+// A power of two leaves no rank alone above L (one point each); otherwise the
+// ranks alone at level L - 1 need two.
+inline std::vector<int64_t> mesh_points_needed(int size) {
+  int L = 0;
+  while ((int64_t{1} << L) < size) ++L;
+  std::vector<int64_t> needed(static_cast<size_t>(std::max(size, 0)), 1);
+  struct Group { int rh, rt, level; };
+  std::vector<Group> stack;
+  if (size > 0) stack.push_back({0, size - 1, 0});
+  while (!stack.empty()) {
+    const Group g = stack.back();
+    stack.pop_back();
+    if (g.rh == g.rt) {
+      needed[static_cast<size_t>(g.rh)] = int64_t{1} << (L - g.level);
+      continue;
+    }
+    const int mid = (g.rh + g.rt) / 2;
+    stack.push_back({g.rh, mid, g.level + 1});
+    stack.push_back({mid + 1, g.rt, g.level + 1});
+  }
+  return needed;
+}
+
 // H2_unstructured on several ranks: the depth made deeper, a level at a time,
 // while the region layout (fmm::plan_regions, as compute_active_processes
-// will plan it from the same weights) leaves a rank a leaf region with no
-// points, or has no layout at all.  A rank with no points holds none of the
-// H2's points, which c_bpack_set_mesh_h2 refuses; no layout is an error of
-// create_uniform_tree.  Small fronts on many ranks meet both: a front's
+// will plan it from the same weights) leaves a rank a leaf region with fewer
+// points than mesh_points_needed (none, or one where the mesh splits that
+// rank's range), or has no layout at all.  Such a rank leaves an empty group
+// in the index tree of c_bpack_set_mesh_h2, which refuses it; no layout is an
+// error of create_uniform_tree.  The one-point case: Poisson 100^3 on 64
+// ranks, ParMETIS, min_sep 1000, a four-block F11 on 17 ranks whose leaf
+// regions were whole level-2 boxes, one of them a box with a single point (a
+// parent region with as many boxes as child regions gives each one box,
+// whatever its load).  Small fronts on many ranks meet both: a front's
 // points fill a slab of their bounding cube, so at the leaf size's depth whole
 // octants are empty and no split of the few leaf boxes gives every rank points
 // (Poisson 100^3 on 64 ranks with leaf 64: the 8-rank fronts, 64 leaf boxes,
@@ -833,14 +866,31 @@ ProgramOptions with_region_depth(const ProgramOptions& options, const CoordType*
       options.reduction_threshold > 0 ? options.reduction_threshold : morton::children_per_box(options.dimension);
   // (a depth with no layout at all is as unusable: plan_regions throws "no
   // region layout" where whole parent boxes cannot give every rank a range)
+  const std::vector<int64_t> needed = mesh_points_needed(size);
   auto unusable = [&](int levels) {
     const fmm::RegionWeights weights =
         fmm::region_weights_of_points(points, count, options.dimension, levels, bounds, comm, distributed);
+    fmm::RegionPlan plan;
     try {
-      return fmm::plan_regions(options.dimension, levels, size, threshold, weights, true).empty_region;
+      plan = fmm::plan_regions(options.dimension, levels, size, threshold, weights, true);
     } catch (const std::invalid_argument&) {
       return true;
     }
+    if (plan.empty_region || plan.start.empty()) return true;
+    if (weights.empty()) return false;
+    // leaf region r is rank r's (morton_to_rank is the identity at the leaf);
+    // its points, from loads in 1 / 2^(d (leaf - weights' level)) of a point
+    // below the weights' level (whole boxes of that level: exact)
+    const int leaf = levels - 1;
+    const int shift = leaf > weights.level ? options.dimension * (leaf - weights.level) : 0;
+    const std::vector<int64_t>& t = plan.start.back();
+    if (t.size() != static_cast<size_t>(size) + 1) return false;
+    for (int r = 0; r < size; ++r) {
+      const __int128 load = weights.load(options.dimension, leaf, t[static_cast<size_t>(r)],
+                                         t[static_cast<size_t>(r) + 1]);
+      if ((load >> shift) < needed[static_cast<size_t>(r)]) return true;
+    }
+    return false;
   };
   if (!unusable(options.num_levels)) return out;
   const int max_leaf = options.dimension == 3 ? 20 : 30;  // (the Morton codes' bits)
@@ -862,8 +912,8 @@ ProgramOptions with_region_depth(const ProgramOptions& options, const CoordType*
   MPI_Comm_rank(comm, &rank);
   if (rank == 0 && options.verbosity >= 1) {
     std::cout << "H2 tree depth: " << out.num_levels << " levels, so that each of the " << size
-              << " ranks' leaf regions holds points (" << options.num_levels
-              << " leave one empty or have no layout)" << std::endl;
+              << " ranks' leaf regions holds the points the butterfly mesh needs (" << options.num_levels
+              << " leave one too few or have no layout)" << std::endl;
   }
   return out;
 }

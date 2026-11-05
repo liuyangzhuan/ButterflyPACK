@@ -2131,6 +2131,7 @@ contains
       integer ii, level, Lrank, Maxlevel, extra, minsize, group, head, tail, mid
       integer rh, rt, rmid, minleaf, ngrp
       integer, allocatable :: rhd(:), rtl(:), th(:), tt(:)
+      character(len=256) :: msg
 
       allocate(msh)
       msh%Nunk = N
@@ -2194,11 +2195,23 @@ contains
       enddo
 
       minleaf = N
+      rmid = 0
       do group = 2**Lrank, 2**(Lrank + 1) - 1
-         minleaf = min(minleaf, tt(group) - th(group) + 1)
+         if (tt(group) - th(group) + 1 < minleaf) then
+            minleaf = tt(group) - th(group) + 1
+            rmid = rhd(group)
+         endif
       enddo
-      call BPACK_require(minleaf >= 1, &
-         'c_bpack_set_mesh_h2: a leaf of the rank-level index tree is empty')
+      !>**** A rank alone in a group above the process tree's leaves halves its
+      !> range at each level left, so it needs 2^(levels left) points (two for
+      !> a rank alone one level up, with a rank count not a power of two); the
+      !> H2 tree depth is chosen for that (butterfly::mesh_points_needed)
+      if (minleaf < 1) then
+         write (msg, '(A,I0,A,I0,A,I0,A)') 'c_bpack_set_mesh_h2: rank ', rmid, ' of ', nproc, ' holds ', &
+            rank_idxe(rmid + 1) - rank_idxs(rmid + 1) + 1, &
+            ' point(s), too few to split its range down to the process tree leaves (an empty index group)'
+         call BPACK_require(.false., trim(msg))
+      endif
       !>**** How far below the process tree the index tree goes.  It used to
       !> stop at 2 extra levels, which only gave the depth other code asserts
       !> on; but a butterfly block built on this mesh takes its depth from
