@@ -3067,15 +3067,38 @@ public:
 #endif
 
 
+    // A level's solve data does not match the tables it was prepared with:
+    // box b's vector length (b == data.size(): too few boxes).
+    [[noreturn]] void vector_size_error(const char* where, const DeviceSolveLevel& L,
+                                        const std::vector<SolveDataRequest<CoordType, DataType>>& data, size_t b) const {
+        int rank = 0;
+        MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+        char box[256];
+        if (b < data.size()) {
+            std::snprintf(box, sizeof(box), "box %zu (Morton %lld): %zu values for the tables' %d points x %d rhs", b,
+                          static_cast<long long>(data[b].morton_index), data[b].left_side.size(), L.boxes[b].n, nrhs_);
+        } else {
+            std::snprintf(box, sizeof(box), "%zu boxes of data", data.size());
+        }
+        char msg[640];
+        std::snprintf(msg, sizeof(msg),
+                      "device solve: vector size (%s, rank %d, level %d of %d, tables for %zu boxes, %s; the store's "
+                      "operator %p, this solve's %p)",
+                      where, rank, L.level, tree_->num_levels, L.boxes.size(), box, device_solve_store().tree,
+                      static_cast<const void*>(tree_));
+        throw std::runtime_error(msg);
+    }
+
     // a level's vectors: host solve data -> device
     S* upload(DeviceSolveLevel& L, std::vector<SolveDataRequest<CoordType, DataType>>& data) {
         const auto t0 = std::chrono::steady_clock::now();
         const size_t len = static_cast<size_t>(L.points) * nrhs_;
         S* d = heap_.alloc<S>(std::max<size_t>(len, 1) * sizeof(S));
         S* h = static_cast<S*>(host_vec_.reserve(std::max<size_t>(len, 1) * sizeof(S)));
+        if (data.size() < L.boxes.size()) vector_size_error("upload", L, data, data.size());
         for (size_t b = 0; b < L.boxes.size(); ++b) {
             const auto& v = data[b].left_side;
-            if (v.size() != static_cast<size_t>(L.boxes[b].n) * nrhs_) throw std::runtime_error("device solve: vector size");
+            if (v.size() != static_cast<size_t>(L.boxes[b].n) * nrhs_) vector_size_error("upload", L, data, b);
             std::memcpy(h + L.boxes[b].vec * nrhs_, v.data(), v.size() * sizeof(DataType));
         }
         check_cuda(cudaMemcpyAsync(d, h, len * sizeof(S), cudaMemcpyHostToDevice, stream_), "solve upload");
@@ -3253,9 +3276,10 @@ public:
         S* d = heap_.alloc<S>(std::max<size_t>(static_cast<size_t>(L.points) * nrhs_, 1) * sizeof(S));
         const size_t len = static_cast<size_t>(L.local_points) * nrhs_;
         S* h = static_cast<S*>(host_vec_.reserve(std::max<size_t>(len, 1) * sizeof(S)));
+        if (data.size() < nb) vector_size_error("CA upload", L, data, data.size());
         for (size_t b = 0; b < nb; ++b) {
             const auto& v = data[b].left_side;
-            if (v.size() != static_cast<size_t>(L.boxes[b].n) * nrhs_) throw std::runtime_error("device solve: vector size");
+            if (v.size() != static_cast<size_t>(L.boxes[b].n) * nrhs_) vector_size_error("CA upload", L, data, b);
             std::memcpy(h + L.boxes[b].vec * nrhs_, v.data(), v.size() * sizeof(DataType));
         }
         if (len > 0) check_cuda(cudaMemcpyAsync(d, h, len * sizeof(S), cudaMemcpyHostToDevice, stream_), "solve upload");
