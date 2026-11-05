@@ -14,6 +14,8 @@
 
 #include "device_heap.hpp"
 #include "device_solve.hpp"
+#include "evaluator.hpp"
+#include "factor_compress.hpp"
 #include "gpu_runtime.hpp"
 #include "h2_matvec_kernels.hpp"
 #include "h2_matvec_store.hpp"
@@ -43,6 +45,12 @@ struct MatvecStats {
     double mpi = 0.0;           // messages between ranks (within coupling and near)
     double host_handoff = 0.0;  // hand-offs across a process reduction (host)
     double transfer = 0.0;      // input upload, output download
+    // H2_compress_factors (blocks not stored as such), BPACK_TRACE=phase: the
+    // chunks put into the scratch and the launches that read them, timed
+    // apart (synchronized), per level
+    double materialize = 0.0, launches = 0.0, mat_bytes = 0.0;
+    int64_t mat_chunks = 0;
+    std::vector<double> level_materialize, level_launches;
 };
 inline MatvecStats& matvec_stats() {
     static MatvecStats stats;
@@ -170,10 +178,100 @@ void commit_device_matvec(ParallelTree<CoordType, DataType>* tree, bool verbose,
     cudaStream_t stream = Context::instance().stream();
     const int nc = morton::children_per_box(tree->dimension);
     double comm_seconds = 0.0;
+    using S = typename DeviceScalar<DataType>::type;
+    // H2_compress_factors (H2BlockStorage): the scratch the chunks' blocks go
+    // into, the blocks' and pairs' pointers into it (block_K holds their
+    // offsets + 1 until here), and each chunk's items or decompression batch
+    if (store.storage != H2BlockStorage::raw) {
+        if (transposed_products) throw std::logic_error("device matvec: compressed blocks with transposed products");
+        store.scratch = DeviceHeap::instance().alloc_resident(std::max<size_t>(store.scratch_bytes, 1));
+    }
+    auto materialized_plan = [&](H2MatvecLevel& lv) {
+        auto at = [&](const void* p) -> const void* {
+            return p == nullptr ? nullptr : store.scratch + (reinterpret_cast<uintptr_t>(p) - 1);
+        };
+        for (auto& K : lv.block_K) K = at(K);
+        for (auto& pr : lv.pairs) pr.K = at(pr.K);
+        DeviceHeap& heap = DeviceHeap::instance();
+        for (H2MatChunk& c : lv.mat_chunks) {
+            if (!c.slice_box.empty()) {   // the slices as boxes: each box with its slice of its list
+                std::vector<H2Box> sb;
+                sb.reserve(c.slice_box.size());
+                for (size_t j = 0; j < c.slice_box.size(); ++j) {
+                    H2Box hb = lv.boxes[static_cast<size_t>(c.slice_box[j])];
+                    if (c.phase == 0) {
+                        hb.block0 += c.slice_first[j];
+                        hb.nblocks = c.slice_count[j];
+                    } else {
+                        hb.near0 += c.slice_first[j];
+                        hb.nnear = c.slice_count[j];
+                    }
+                    sb.push_back(hb);
+                }
+                char* d = heap.alloc_resident(sb.size() * sizeof(H2Box));
+                lv.allocations.push_back(d);
+                check_cuda(cudaMemcpyAsync(d, sb.data(), sb.size() * sizeof(H2Box), cudaMemcpyHostToDevice, stream),
+                           "matvec slices");
+                lv.bytes += static_cast<double>(sb.size() * sizeof(H2Box));
+                c.d_boxes = reinterpret_cast<const H2Box*>(d);
+                c.nboxes = static_cast<int>(sb.size());
+            }
+            if (c.blocks.empty()) continue;
+            if (store.storage == H2BlockStorage::evaluated) {
+                auto items = std::make_shared<std::vector<EvalItemT<S>>>();
+                for (const size_t m : c.blocks) {
+                    const H2MatBlock& mb = lv.mat_blocks[m];
+                    items->push_back(EvalItemT<S>{reinterpret_cast<S*>(store.scratch + mb.off), mb.m, mb.m, mb.n,
+                                                  mb.rows, mb.cols});
+                    c.max_m = std::max(c.max_m, mb.m);
+                    c.max_n = std::max(c.max_n, mb.n);
+                }
+                char* d = heap.alloc_resident(items->size() * sizeof(EvalItemT<S>));
+                lv.allocations.push_back(d);
+                check_cuda(cudaMemcpyAsync(d, items->data(), items->size() * sizeof(EvalItemT<S>),
+                                           cudaMemcpyHostToDevice, stream), "matvec items");
+                lv.bytes += static_cast<double>(items->size() * sizeof(EvalItemT<S>));
+                c.d_items = d;
+                c.h_items = items;
+            } else {
+#ifdef H2_HAVE_NVCOMP
+                const size_t piece = std::max<size_t>(1, kXnrChunkBytes / sizeof(S)) * sizeof(S);
+                std::vector<const void*> srcs;
+                std::vector<void*> dsts;
+                for (const size_t m : c.blocks) {
+                    const H2MatBlock& mb = lv.mat_blocks[m];
+                    const char* from = mb.packed;
+                    for (size_t k = 0; k < mb.strides.size(); ++k) {
+                        srcs.push_back(from);
+                        dsts.push_back(store.scratch + mb.off + k * piece);
+                        from += mb.strides[k];
+                    }
+                }
+                c.nchunks = srcs.size();
+                char* d = heap.alloc_resident(2 * align_up(srcs.size() * sizeof(void*)));
+                lv.allocations.push_back(d);
+                c.d_srcs = reinterpret_cast<const void**>(d);
+                c.d_dsts = reinterpret_cast<void**>(d + align_up(srcs.size() * sizeof(void*)));
+                check_cuda(cudaMemcpyAsync(c.d_srcs, srcs.data(), srcs.size() * sizeof(void*), cudaMemcpyHostToDevice,
+                                           stream), "matvec decompression");
+                check_cuda(cudaMemcpyAsync(c.d_dsts, dsts.data(), dsts.size() * sizeof(void*), cudaMemcpyHostToDevice,
+                                           stream), "matvec decompression");
+                check_cuda(cudaStreamSynchronize(stream), "matvec decompression");
+                if (bitcompCreateBatchPlanFromCompressedData(&c.plan, c.d_srcs, c.nchunks, nullptr, stream) !=
+                    BITCOMP_SUCCESS) {
+                    throw std::runtime_error("device matvec: the decompression plan of the compressed blocks failed");
+                }
+                c.have_plan = true;
+#endif
+            }
+        }
+        check_cuda(cudaStreamSynchronize(stream), "matvec items");
+    };
     for (int level = 2; level <= leaf; ++level) {
         auto& lvl = tree->levels[static_cast<size_t>(level)];
         if (!lvl.is_process_active) continue;
         H2MatvecLevel& lv = store.levels[static_cast<size_t>(level)];
+        if (store.storage != H2BlockStorage::raw) materialized_plan(lv);
         std::unordered_map<int64_t, size_t> local_index;
         for (size_t b = 0; b < lvl.local_boxes.size(); ++b) local_index.emplace(lvl.local_boxes[b].morton_index, b);
         // remote sources of the blocks: skeleton vectors, and at the leaf the input vectors
@@ -372,7 +470,7 @@ void commit_device_matvec(ParallelTree<CoordType, DataType>* tree, bool verbose,
         lv.ntx = static_cast<int>(tx_targets.size());
         lv.bytes += static_cast<double>(bytes);
     }
-    double bytes = 0.0;
+    double bytes = static_cast<double>(store.storage != H2BlockStorage::raw ? store.scratch_bytes : 0);
     for (const auto& lv : store.levels) bytes += lv.bytes;
     double max_bytes = bytes;
     MPI_Allreduce(MPI_IN_PLACE, &max_bytes, 1, MPI_DOUBLE, MPI_MAX, tree->comm);
@@ -381,8 +479,11 @@ void commit_device_matvec(ParallelTree<CoordType, DataType>* tree, bool verbose,
     store.tree = tree;
     store.bytes = bytes;
     if (verbose && rank == 0) {
-        std::printf("  GPU matvec: on (blocks kept on the device: up to %.2f GB per rank; messages %s; "
+        std::printf("  GPU matvec: on (%s: up to %.2f GB per rank; messages %s; "
                     "planned with %.3f s of messages on rank 0)\n",
+                    store.storage == H2BlockStorage::evaluated ? "blocks evaluated in each matvec, not stored"
+                    : store.storage == H2BlockStorage::compressed ? "blocks kept compressed on the device"
+                                                                    : "blocks kept on the device",
                     max_bytes / 1e9,
                     device_exchange_enabled() && DeviceHeap::exchange_arena().initialized() ? "in device memory"
                                                                                             : "through the host",
@@ -435,6 +536,52 @@ void device_h2_mul(ParallelTree<CoordType, DataType>* tree, const std::vector<Da
         return p;
     };
     auto lv_of = [&](int level) -> H2MatvecLevel& { return store.levels[static_cast<size_t>(level)]; };
+    // H2_compress_factors: a chunk's blocks into the scratch, evaluated or decompressed
+    if (transposed && store.storage != H2BlockStorage::raw) {
+        throw std::logic_error("device matvec: transposed products of compressed blocks");
+    }
+    const bool mat_trace = store.storage != H2BlockStorage::raw && env::trace("phase");
+    auto& mstats = matvec_stats();
+    if (mat_trace && mstats.level_materialize.size() < store.levels.size()) {
+        mstats.level_materialize.assign(store.levels.size(), 0.0);
+        mstats.level_launches.assign(store.levels.size(), 0.0);
+    }
+    int mat_level = 0;
+    std::chrono::steady_clock::time_point mat_t{};
+    auto mat_mark = [&](double* into) {   // (trace) the time since the last mark into `into`
+        if (!mat_trace) return;
+        check_cuda(cudaStreamSynchronize(stream), "matvec trace");
+        const auto now = std::chrono::steady_clock::now();
+        if (into != nullptr) *into += std::chrono::duration<double>(now - mat_t).count();
+        mat_t = now;
+    };
+    auto materialize = [&](const H2MatvecLevel& L, const H2MatChunk& c) {
+        if (c.blocks.empty()) return;
+        if (mat_trace) {
+            mat_mark(&mstats.level_launches[static_cast<size_t>(mat_level)]);
+            ++mstats.mat_chunks;
+            mstats.mat_bytes += static_cast<double>(c.bytes);
+        }
+        struct After {   // (trace) the materialization's own time, then the launches' from here
+            const std::function<void(double*)>& mark;
+            double* into;
+            ~After() { mark(into); }
+        };
+        const std::function<void(double*)> mark = mat_mark;
+        After after{mark, mat_trace ? &mstats.level_materialize[static_cast<size_t>(mat_level)] : nullptr};
+        if (store.storage == H2BlockStorage::evaluated) {
+            const auto& items = *static_cast<const std::vector<EvalItemT<S>>*>(c.h_items.get());
+            evaluator_of(store.evaluator)->eval<S>(items, static_cast<const EvalItemT<S>*>(c.d_items), c.max_m,
+                                                   c.max_n, L.d_lists, L.point_table, stream);
+            return;
+        }
+#ifdef H2_HAVE_NVCOMP
+        bitcompSetStream(c.plan, stream);
+        if (bitcompBatchUncompress(c.plan, c.d_srcs, c.d_dsts) != BITCOMP_SUCCESS) {
+            throw std::runtime_error("device matvec: decompressing a chunk of blocks failed");
+        }
+#endif
+    };
     auto active = [&](int level) { return tree->levels[static_cast<size_t>(level)].is_process_active; };
     // Message buffers: in the exchange arena with GPU-aware MPI (registered
     // once for MPI; sent and received in device memory), else from the heap
@@ -670,9 +817,22 @@ void device_h2_mul(ParallelTree<CoordType, DataType>* tree, const std::vector<Da
                                            tgt[static_cast<size_t>(level)], L.points, nrhs, stream);
             } else {
                 S* ghost = exchange(L.coupling, q, 900 + 2 * level);
-                launch_h2_accumulate<S>(L.d_boxes, static_cast<int>(L.boxes.size()), L.d_blocks,
-                                        tgt[static_cast<size_t>(level)], L.points, q, ghost, nullptr, nrhs, false,
-                                        L.max_k, L.max_q_cols, stream);
+                if (L.mat_chunks.empty()) {
+                    launch_h2_accumulate<S>(L.d_boxes, static_cast<int>(L.boxes.size()), L.d_blocks,
+                                            tgt[static_cast<size_t>(level)], L.points, q, ghost, nullptr, nrhs, false,
+                                            L.max_k, L.max_q_cols, stream);
+                } else {
+                    mat_level = level;
+                    mat_mark(nullptr);
+                    for (const H2MatChunk& c : L.mat_chunks) {
+                        if (c.phase != 0 || c.nboxes == 0) continue;
+                        materialize(L, c);
+                        launch_h2_accumulate<S>(c.d_boxes, c.nboxes, L.d_blocks,
+                                                tgt[static_cast<size_t>(level)], L.points, q, ghost, nullptr, nrhs,
+                                                false, L.max_k, L.max_q_cols, stream);
+                    }
+                    if (mat_trace) mat_mark(&mstats.level_launches[static_cast<size_t>(level)]);
+                }
             }
             launch_h2_downward<S>(L.d_boxes, static_cast<int>(L.boxes.size()), tgt[static_cast<size_t>(level)], L.points,
                                   nrhs, L.max_k, stream);
@@ -721,10 +881,32 @@ void device_h2_mul(ParallelTree<CoordType, DataType>* tree, const std::vector<Da
         const H2MatvecLevel& L = lv_of(leaf);
         S* ghost = exchange(L.near, orig, 990);
         S* partial = alloc(L.partial_points);  // the pairs' products, each block read once
-        launch_h2_pairs<S>(L.d_pairs, static_cast<int>(L.pairs.size()), orig, L.points, partial, L.partial_points, nrhs,
-                           L.max_pair_cols, stream);
-        launch_h2_accumulate<S>(L.d_boxes, static_cast<int>(L.boxes.size()), L.d_blocks, tgt[static_cast<size_t>(leaf)],
-                                L.points, orig, ghost, partial, nrhs, true, L.max_n, L.max_near_cols, stream);
+        if (L.mat_chunks.empty()) {
+            launch_h2_pairs<S>(L.d_pairs, static_cast<int>(L.pairs.size()), orig, L.points, partial, L.partial_points,
+                               nrhs, L.max_pair_cols, stream);
+            launch_h2_accumulate<S>(L.d_boxes, static_cast<int>(L.boxes.size()), L.d_blocks,
+                                    tgt[static_cast<size_t>(leaf)], L.points, orig, ghost, partial, nrhs, true, L.max_n,
+                                    L.max_near_cols, stream);
+        } else {
+            // the pairs first (their partial vectors), then the boxes' other near blocks
+            mat_level = leaf;
+            mat_mark(nullptr);
+            for (int phase = 1; phase <= 2; ++phase) {
+                for (const H2MatChunk& c : L.mat_chunks) {
+                    if (c.phase != phase || (phase == 1 ? c.i1 <= c.i0 : c.nboxes == 0)) continue;
+                    materialize(L, c);
+                    if (phase == 1) {
+                        launch_h2_pairs<S>(L.d_pairs + c.i0, c.i1 - c.i0, orig, L.points, partial, L.partial_points,
+                                           nrhs, L.max_pair_cols, stream);
+                    } else {
+                        launch_h2_accumulate<S>(c.d_boxes, c.nboxes, L.d_blocks,
+                                                tgt[static_cast<size_t>(leaf)], L.points, orig, ghost, partial, nrhs,
+                                                true, L.max_n, L.max_near_cols, stream);
+                    }
+                }
+            }
+            if (mat_trace) mat_mark(&mstats.level_launches[static_cast<size_t>(leaf)]);
+        }
     }
     check_cuda(cudaStreamSynchronize(stream), "matvec near");
     stats.near += seconds_since(t0);
@@ -740,6 +922,21 @@ void device_h2_mul(ParallelTree<CoordType, DataType>* tree, const std::vector<Da
     for (S* p : owned_messages) arena.free(p);
     stats.transfer += seconds_since(t0);
     stats.total += seconds_since(t_start);
+    if (mat_trace && rank == 0) {
+        std::string per_level;
+        for (size_t l = 0; l < mstats.level_materialize.size(); ++l) {
+            if (mstats.level_materialize[l] == 0.0 && mstats.level_launches[l] == 0.0) continue;
+            char b[96];
+            std::snprintf(b, sizeof b, " L%zu %.3f/%.3f", l, mstats.level_materialize[l], mstats.level_launches[l]);
+            per_level += b;
+        }
+        std::printf("  [gpu] matvec (rank 0, %lld calls): total %.3f s, upward %.3f, coupling %.3f, near %.3f; "
+                    "%s blocks into the scratch: %lld chunks, %.2f GB; by level materialize/launches (s):%s\n",
+                    static_cast<long long>(stats.calls), stats.total, stats.upward, stats.coupling, stats.near,
+                    store.storage == H2BlockStorage::evaluated ? "evaluated" : "decompressed",
+                    static_cast<long long>(mstats.mat_chunks), mstats.mat_bytes / 1e9, per_level.c_str());
+        std::fflush(stdout);
+    }
 }
 
 // The device matvec when the compression kept the blocks on every rank's

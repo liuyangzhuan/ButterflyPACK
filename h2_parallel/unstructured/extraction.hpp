@@ -32,6 +32,7 @@
 #include "core/butterfly_types.hpp"
 #include "core/blas_declare.hpp"
 #include "core/butterfly_matvec.hpp"
+#include "core/h2_block_codec.hpp"
 #include "core/extraction_profile.hpp"
 #ifdef H2_HAVE_GPU
 #include "h2_gpu/extract_device.hpp"
@@ -954,7 +955,9 @@ void extract_compressed_blocks(
                 if (tb == nullptr) throw std::logic_error("extract_compressed_blocks: a task's box is not local");
                 if (task.near) {
                     std::unordered_map<int64_t, int64_t> column_of;
-                    const auto& K = near_block(level, tb, task.s, column_of).matrix;
+                    fmm::MatrixStorage<DataType> K_scratch;  // (a compressed block's entries)
+                    const auto& K = fmm::h2_block_values(near_block(level, tb, task.s, column_of), K_scratch,
+                                                         "extract_compressed_blocks");
                     std::vector<int64_t> rpos, cpos;
                     p.row_points(task.rgroup, [&](int64_t d, int64_t) { rpos.push_back(p.leaf_position[static_cast<size_t>(d)]); });
                     p.col_points(task.cgroup, [&](int64_t d, int64_t) {
@@ -977,7 +980,8 @@ void extract_compressed_blocks(
                 const auto tit = tv.find(task.t);
                 const int64_t kt = static_cast<int64_t>(tb->skeleton_indices.size());
                 if (block == nullptr || kt == 0) continue;  // an empty skeleton: no coupling, zeros
-                const auto& K = block->matrix;
+                fmm::MatrixStorage<DataType> K_scratch;  // (a compressed block's entries)
+                const auto& K = fmm::h2_block_values(*block, K_scratch, "extract_compressed_blocks");
                 const int64_t ks = K.cols;
                 if (tit == tv.end() || K.rows != kt) throw std::logic_error("extract_compressed_blocks: inconsistent far data");
                 std::vector<DataType> ut(static_cast<size_t>(kt * nr)), us(static_cast<size_t>(ks * nc));
@@ -1203,7 +1207,8 @@ void extract_compressed_sketches(
                         }
                         const int64_t kt = static_cast<int64_t>(tb->skeleton_indices.size());
                         if (block == nullptr || kt == 0 || d == 0) continue;  // no coupling
-                        const auto& K = block->matrix;
+                        fmm::MatrixStorage<DataType> K_scratch;  // (a compressed block's entries)
+                        const auto& K = fmm::h2_block_values(*block, K_scratch, "extract_compressed_blocks");
                         if (K.rows != kt) throw std::logic_error("extract_compressed_sketches: inconsistent far data");
                         if (part.w.empty()) {
                             part.ks = K.cols;
@@ -1345,7 +1350,8 @@ void extract_compressed_sketches(
                             if (b.source_morton == r.t) block = &b;
                         }
                         if (block == nullptr) continue;  // no coupling
-                        const auto& K = block->matrix;
+                        fmm::MatrixStorage<DataType> K_scratch;  // (a compressed block's entries)
+                        const auto& K = fmm::h2_block_values(*block, K_scratch, "extract_compressed_blocks");
                         if (K.rows != ks || K.cols != r.kt) {
                             throw std::logic_error("extract_compressed_sketches: inconsistent transposed far data");
                         }
@@ -1439,7 +1445,9 @@ void extract_compressed_sketches(
                     auto* sb = level.find_local_box(task.s);
                     if (sb == nullptr) throw std::logic_error("extract_compressed_sketches: a task's box is not local");
                     std::unordered_map<int64_t, int64_t> column_of;
-                    const auto& K = near_block(level, sb, task.t, column_of).matrix;
+                    fmm::MatrixStorage<DataType> K_scratch;  // (a compressed block's entries)
+                    const auto& K = fmm::h2_block_values(near_block(level, sb, task.t, column_of), K_scratch,
+                                                         "extract_compressed_blocks");
                     std::vector<int64_t> spos;
                     p.col_points(task.cgroup, [&](int64_t pt, int64_t) {
                         spos.push_back(p.leaf_position[static_cast<size_t>(pt)]);
@@ -1460,7 +1468,9 @@ void extract_compressed_sketches(
                 auto* tb = level.find_local_box(task.t);
                 if (tb == nullptr) throw std::logic_error("extract_compressed_sketches: a task's box is not local");
                 std::unordered_map<int64_t, int64_t> column_of;
-                const auto& K = near_block(level, tb, task.s, column_of).matrix;
+                fmm::MatrixStorage<DataType> K_scratch;  // (a compressed block's entries)
+                    const auto& K = fmm::h2_block_values(near_block(level, tb, task.s, column_of), K_scratch,
+                                                         "extract_compressed_blocks");
                 std::vector<int64_t> cpos;
                 p.col_points(task.cgroup, [&](int64_t pt, int64_t) {
                     cpos.push_back(column_of.at(p.distinct[static_cast<size_t>(pt)]));

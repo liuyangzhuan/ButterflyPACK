@@ -118,7 +118,9 @@ struct ExtractDeviceRequest {
 // path that declined every call while its blocks sat on the card.
 inline bool compressed_extract_ready(const void* tree) {
     const DeviceMatvecStore& store = device_matvec_store();
-    return store.usable && store.tree == tree;
+    // (H2_compress_factors: the matvec puts each chunk's blocks into its
+    // scratch only for its own launches, so the store holds none to read)
+    return store.usable && store.tree == tree && store.storage == H2BlockStorage::raw;
 }
 
 namespace extract_device_detail {

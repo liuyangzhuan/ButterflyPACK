@@ -833,6 +833,7 @@ inline void reserve_exchange_arena(int nproc, int share, double fraction = 0.0) 
 // return (OperatorCall), since they may run inside a build.
 struct OperatorContext {
     const void* active = nullptr;                         // the operator of the current H2 call
+    bool evicting = false;                                // within evict_operator (the releasers' context)
     uint64_t clock = 0;
     std::unordered_map<const void*, uint64_t> last_use;   // operator -> last use
     // per kind of store (solve, matvec): release an operator's data; bytes it
@@ -888,7 +889,9 @@ inline size_t operator_bytes(const void* tree) {
 inline void evict_operator(const void* tree) {
     OperatorContext& c = operator_context();
     for (const auto& spill : c.spillers) spill(tree);
+    c.evicting = true;
     for (const auto& release : c.releasers) release(tree);
+    c.evicting = false;
     c.last_use.erase(tree);
 }
 

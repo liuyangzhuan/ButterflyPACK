@@ -4,6 +4,7 @@
 #include "core/butterfly_types.hpp"
 #include "butterfly_solve.hpp"
 #include "core/butterfly_matvec.hpp"
+#include "core/h2_block_codec.hpp"
 #include "core/omp_region.hpp"
 #ifdef H2_HAVE_GPU
 #include "h2_gpu/compression_gpu.hpp"
@@ -409,7 +410,7 @@ void hierarchical_compression_parallel(
                         sources[b] = h2_interaction_list(tree, level.local_boxes[b]);
                     }
                 }
-                gpu::build_level_blocks(tree, level_number, kernel, sources, level_number == leaf_level);
+                gpu::build_level_blocks(tree, level_number, kernel, sources, level_number == leaf_level, tolerance);
             } else
 #endif
             build_h2_blocks_for_level(
@@ -527,8 +528,10 @@ void apply_h2_interactions(
                     std::vector<DataType> contribution;
                     const int64_t nrhs =
                         target_data[static_cast<size_t>(box_index)].nrhs;
+                    fmm::MatrixStorage<DataType> block_scratch;  // (a compressed block's entries)
                     h2_matrix_vector_product(
-                        block.matrix, source, contribution, nrhs, 'N');
+                        fmm::h2_block_values(block, block_scratch, "H2 compressed multiply"), source, contribution,
+                        nrhs, 'N');
                     const int64_t skeleton_count =
                         static_cast<int64_t>(target.skeleton_indices.size());
                     if (contribution.size() !=
@@ -594,8 +597,10 @@ void apply_h2_leaf_near(
                     std::vector<DataType> contribution;
                     const int64_t nrhs =
                         target_data[static_cast<size_t>(box_index)].nrhs;
+                    fmm::MatrixStorage<DataType> block_scratch;  // (a compressed block's entries)
                     h2_matrix_vector_product(
-                        block.matrix, source, contribution, nrhs, 'N');
+                        fmm::h2_block_values(block, block_scratch, "H2 compressed multiply"), source, contribution,
+                        nrhs, 'N');
                     if (contribution.size() != output.size()) {
                         throw std::runtime_error(
                             "apply_h2_leaf_near: target size mismatch");

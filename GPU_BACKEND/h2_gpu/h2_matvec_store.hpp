@@ -8,7 +8,13 @@
 #ifdef H2_HAVE_GPU
 
 #include "device_heap.hpp"
+#include "device_kernels.hpp"   // IndexList, PointTable
 #include "h2_matvec_kernels.hpp"
+#ifdef H2_HAVE_NVCOMP
+#include <nvcomp/native/bitcomp.h>
+#endif
+#include <memory>
+#include <vector>
 
 #include <cstdint>
 #include <cstdlib>
@@ -37,6 +43,51 @@ struct H2Exchange {
     const H2Span* d_spans = nullptr;
     int nspans = 0, max_len = 0;
     std::vector<int> span_begin;  // peer p's spans: span_begin[p] .. span_begin[p + 1]
+};
+
+// How a compression-only H2 keeps its blocks for the device matvec.  raw:
+// on the device as evaluated (and on the host).  With H2_compress_factors
+// (core/h2_block_codec.hpp): evaluated, none stored - the matvec evaluates
+// each chunk of blocks into the store's scratch before the launches that
+// read it (a GPU entry evaluator); compressed, as Bitcomp chunks on the
+// device (and on the host) that the matvec decompresses into the scratch.
+// A 900K space-time GP's derivative matrices held 20-25 GB of blocks a rank
+// each on the host, raw.
+enum class H2BlockStorage { raw = 0, evaluated = 1, compressed = 2 };
+
+// A block the matvec puts into the scratch (evaluated or compressed): its
+// place there, its shape, and its source.
+struct H2MatBlock {
+    size_t off = 0;                 // bytes from the scratch's start
+    int m = 0, n = 0;
+    IndexList rows{}, cols{};       // evaluated: the evaluator's lists (in the level's lists image)
+    const char* packed = nullptr;   // compressed: its chunks end to end, on the device
+    std::vector<uint32_t> strides;
+};
+
+// The blocks one group of launches reads, put into the scratch first.
+struct H2MatChunk {
+    int phase = 0;                  // 0: coupling, 1: leaf pairs (pairs i0..i1), 2: leaf near
+    int i0 = 0, i1 = 0;
+    // phases 0 and 2: a slice of every box's blocks (box, its first block in its list, count), so that
+    // each launch has all the level's boxes (whole boxes a chunk left 4 of 256 level-5 boxes a launch)
+    std::vector<int> slice_box, slice_first, slice_count;
+    const H2Box* d_boxes = nullptr;  // the slices as boxes (the commit's table)
+    int nboxes = 0;
+    size_t bytes = 0;               // of the scratch, from its start
+    std::vector<size_t> blocks;     // in H2MatvecLevel::mat_blocks
+    // evaluated: the evaluator's items (the host copy for their count and sizes)
+    std::shared_ptr<void> h_items;  // std::vector<EvalItemT<S>>
+    const void* d_items = nullptr;
+    int max_m = 0, max_n = 0;
+    // compressed: one batch decompression
+    const void** d_srcs = nullptr;
+    void** d_dsts = nullptr;
+    size_t nchunks = 0;
+#ifdef H2_HAVE_NVCOMP
+    bitcompHandle_t plan{};
+    bool have_plan = false;
+#endif
 };
 
 struct H2MatvecLevel {
@@ -76,6 +127,13 @@ struct H2MatvecLevel {
     const H2TBlock* d_tx_blocks = nullptr;
     int ntx = 0;
     double bytes = 0.0;
+    // H2_compress_factors (storage other than raw): block_K and the pairs'
+    // K hold scratch offsets + 1 until the commit points them into the
+    // scratch; the chunks put the blocks there in each matvec
+    std::vector<H2MatBlock> mat_blocks;
+    std::vector<H2MatChunk> mat_chunks;
+    const char* d_lists = nullptr;  // evaluated: the skeleton lists the items index (the meta base)
+    PointTable point_table{};       // evaluated: the level's points (local and remote boxes)
 };
 
 struct DeviceMatvecStore {
@@ -86,13 +144,30 @@ struct DeviceMatvecStore {
     bool transposable = false;  // the transposed products are planned (a nonsymmetric kernel)
     std::vector<H2MatvecLevel> levels;
     double bytes = 0.0;
+    // H2_compress_factors (H2BlockStorage): the chunks' scratch (the largest
+    // chunk of any level), and the evaluator an evaluated store calls
+    H2BlockStorage storage = H2BlockStorage::raw;
+    char* scratch = nullptr;
+    size_t scratch_bytes = 0;
+    std::shared_ptr<void> evaluator;
 
     bool empty() const { return levels.empty(); }
     void release() {
         DeviceHeap& heap = DeviceHeap::instance();
         for (auto& lv : levels) {
             for (char* p : lv.allocations) heap.free(p);
+#ifdef H2_HAVE_NVCOMP
+            for (auto& c : lv.mat_chunks) {
+                if (c.have_plan) bitcompDestroyPlan(c.plan);
+                c.have_plan = false;
+            }
+#endif
         }
+        if (scratch != nullptr) heap.free(scratch);
+        scratch = nullptr;
+        scratch_bytes = 0;
+        storage = H2BlockStorage::raw;
+        evaluator.reset();
         levels.clear();
         tree = nullptr;
         building = false;
@@ -111,6 +186,10 @@ inline DeviceMatvecStore& device_matvec_store() {
         c.releasers.push_back([s](const void* tree) {
             auto it = s->find(tree);
             if (it == s->end()) return;
+            // an evaluated store holds no blocks (points, lists, T, the
+            // chunks' tables) and has no host copy to fall back to: an
+            // eviction leaves it (the operator's destruction still frees it)
+            if (operator_context().evicting && it->second.storage == H2BlockStorage::evaluated) return;
             it->second.release();
             s->erase(it);
         });

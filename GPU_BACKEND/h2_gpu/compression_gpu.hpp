@@ -27,6 +27,9 @@
 #include "device_heap.hpp"
 #include "device_kernels.hpp"
 #include "evaluator.hpp"
+#include "factor_compress.hpp"   // WaveXnrCompressor (H2_compress_factors)
+#include "solve_kernels.hpp"     // CopySpan
+#include "core/h2_block_codec.hpp"
 #include "gpu_runtime.hpp"
 #include "h2_matvec_store.hpp"
 #include "host_copier.hpp"
@@ -255,6 +258,16 @@ public:
         return it == entries_.end() ? nullptr : &it->second;
     }
     PointTable table() const { return PointTable{xyz_, d_ids_, dim_}; }
+    // The table's device buffers handed to `owner` (an evaluated matvec store
+    // keeps the level's points); this object then holds none.
+    PointTable detach(std::vector<char*>& owner) {
+        const PointTable t = table();
+        owner.push_back(reinterpret_cast<char*>(xyz_));
+        owner.push_back(reinterpret_cast<char*>(d_ids_));
+        xyz_ = nullptr;
+        d_ids_ = nullptr;
+        return t;
+    }
     int training_slot0() const { return training_slot0_; }
     double bytes() const { return bytes_; }
 
@@ -878,7 +891,7 @@ void register_matvec_level(TreeLevel<CoordType, DataType>& level, H2MatvecLevel&
 // ---------------------------------------------------------------------------
 template<typename CoordType, typename DataType, typename KernelType>
 void build_level_blocks(ParallelTree<CoordType, DataType>* tree, int level_number, KernelType* kernel,
-                        const std::vector<std::vector<int64_t>>& sources, bool near) {
+                        const std::vector<std::vector<int64_t>>& sources, bool near, double tolerance = 0.0) {
     using S = typename DeviceScalar<DataType>::type;
     using clock = std::chrono::steady_clock;
     const auto t0 = clock::now();
@@ -1019,6 +1032,298 @@ void build_level_blocks(ParallelTree<CoordType, DataType>* tree, int level_numbe
         for (size_t i = split; i < order.size(); ++i) {
             if (blocks[order[i]].n > kH2PairMaxCols) throw std::runtime_error("device matvec: near block too wide");
         }
+    }
+
+    // ---- H2_compress_factors (core/h2_block_codec.hpp): the blocks not kept
+    // as such.  A GPU entry evaluator: none evaluated here - the matvec
+    // evaluates each chunk where it reads it (evaluated); otherwise they are
+    // evaluated, compressed, and kept compressed on the device and the host
+    // (compressed).  A symmetric kernel only (the transposed products read
+    // the blocks where they are stored), on every rank and level alike.
+    H2BlockStorage storage = H2BlockStorage::raw;
+    if (tree->compress_h2_blocks && keep && kernel_symmetric(kernel, 0)) {
+        if (evaluator.inline_entries() && !evaluator.collective()) {
+            storage = H2BlockStorage::evaluated;
+        } else {
+#ifdef H2_HAVE_NVCOMP
+            if (tolerance > 0.0) storage = H2BlockStorage::compressed;
+#endif
+        }
+    }
+    if (storage != H2BlockStorage::raw) {
+        if (store.storage != H2BlockStorage::raw && store.storage != storage) {
+            throw std::logic_error("device compression: levels with different block storage");
+        }
+        store.storage = storage;
+        if (storage == H2BlockStorage::evaluated) store.evaluator = kernel->gpu_evaluator;
+        tree->h2_blocks_evaluated = storage == H2BlockStorage::evaluated;
+        H2MatvecLevel& lv = store.levels[static_cast<size_t>(level_number)];
+        // the host blocks: their shapes; the entries compressed below, or none
+        for (const Block& bl : blocks) {
+            auto& target = level.local_boxes[bl.box];
+            auto& storage_m = bl.near ? target.h2_near_blocks[bl.index].matrix : target.h2_interaction_blocks[bl.index].matrix;
+            storage_m.data.clear();
+            storage_m.rows = bl.m;
+            storage_m.cols = bl.n;
+            storage_m.lda = bl.m;
+            storage_m.format = MatrixStorage<DataType>::FULL;
+            (bl.near ? stats.near_blocks : stats.interaction_blocks) += 1;
+        }
+        // The chunks: the coupling blocks of consecutive boxes, the pairs'
+        // blocks, the other near blocks of consecutive boxes (each launch
+        // group's), at most kChunk bytes unless one box (or pair) alone takes
+        // more; each chunk's blocks from the scratch's start.
+        constexpr size_t kChunk = size_t{256} << 20;
+        const size_t D = sizeof(S);
+        std::vector<char> kept_block(blocks.size(), 0);
+        for (size_t o = 0; o < split; ++o) kept_block[order[o]] = 1;
+        std::unordered_map<int64_t, size_t> local_index;
+        for (size_t b = 0; b < nb; ++b) local_index.emplace(level.local_boxes[b].morton_index, b);
+        auto local_pair = [&](size_t i) {   // (register_matvec_level's rule)
+            return symmetric && blocks[i].near && local_index.count(blocks[i].source) &&
+                   blocks[i].source != level.local_boxes[blocks[i].box].morton_index;
+        };
+        std::vector<int64_t> mat_of(blocks.size(), -1);
+        std::vector<const void*> block_ptr(blocks.size(), nullptr);
+        // per box, its blocks in the matvec's order (register_matvec_level:
+        // index order), all of them: the near lists hold the pairs' partial
+        // references too, which need nothing put into the scratch
+        std::vector<std::vector<size_t>> coupling_of(nb), near_of(nb);
+        std::vector<size_t> pair_blocks;
+        for (size_t i = 0; i < blocks.size(); ++i) {
+            if (!blocks[i].near) {
+                coupling_of[blocks[i].box].push_back(i);
+            } else {
+                near_of[blocks[i].box].push_back(i);
+                if (kept_block[i] && local_pair(i) &&
+                    blocks[i].source < level.local_boxes[blocks[i].box].morton_index) {
+                    pair_blocks.push_back(i);
+                }
+            }
+        }
+        auto materialized_here = [&](size_t i) { return kept_block[i] && !(blocks[i].near && local_pair(i)); };
+        size_t scratch_need = 0;
+        auto add_chunks = [&](int phase, size_t count, auto&& items_of) {
+            size_t at = 0;
+            H2MatChunk c;
+            c.phase = phase;
+            c.i0 = 0;
+            auto close = [&](size_t end) {
+                c.i1 = static_cast<int>(end);
+                c.bytes = at;
+                scratch_need = std::max(scratch_need, at);
+                lv.mat_chunks.push_back(std::move(c));
+                c = H2MatChunk{};
+                c.phase = phase;
+                c.i0 = static_cast<int>(end);
+                at = 0;
+            };
+            for (size_t u = 0; u < count; ++u) {
+                size_t need = 0;
+                for (size_t i : items_of(u)) need += align_up(static_cast<size_t>(blocks[i].m) * blocks[i].n * D);
+                if (at > 0 && at + need > kChunk) close(u);
+                for (size_t i : items_of(u)) {
+                    H2MatBlock mb;
+                    mb.off = at;
+                    mb.m = blocks[i].m;
+                    mb.n = blocks[i].n;
+                    mb.rows = blocks[i].rows;
+                    mb.cols = blocks[i].cols;
+                    mat_of[i] = static_cast<int64_t>(lv.mat_blocks.size());
+                    c.blocks.push_back(lv.mat_blocks.size());
+                    lv.mat_blocks.push_back(std::move(mb));
+                    block_ptr[i] = reinterpret_cast<const void*>(static_cast<uintptr_t>(at + 1));  // the commit points it
+                    at += align_up(static_cast<size_t>(blocks[i].m) * blocks[i].n * D);
+                }
+            }
+            if (count > 0) close(count);
+        };
+        // phases 0 and 2: K chunks, chunk c the c-th slice (by bytes) of every
+        // box's list, so that each launch runs every box of the level
+        auto sliced_chunks = [&](int phase, const std::vector<std::vector<size_t>>& list_of) {
+            auto bytes_of = [&](size_t i) {
+                return materialized_here(i) ? align_up(static_cast<size_t>(blocks[i].m) * blocks[i].n * D) : size_t{0};
+            };
+            size_t total = 0, any = 0;
+            for (const auto& list : list_of) {
+                any += list.size();
+                for (size_t i : list) total += bytes_of(i);
+            }
+            if (any == 0) return;
+            const size_t k = std::max<size_t>(1, (total + kChunk - 1) / kChunk);
+            std::vector<H2MatChunk> chunks(k);
+            std::vector<size_t> at(k, 0);
+            for (size_t b = 0; b < list_of.size(); ++b) {
+                const auto& list = list_of[b];
+                if (list.empty()) continue;
+                size_t box_bytes = 0;
+                for (size_t i : list) box_bytes += bytes_of(i);
+                // slice c: the blocks whose bytes before them fall in [c, c + 1) * box_bytes / k
+                size_t before = 0, j = 0;
+                for (size_t c = 0; c < k; ++c) {
+                    const size_t first = j;
+                    while (j < list.size() &&
+                           (c + 1 == k || static_cast<double>(before) < static_cast<double>(box_bytes) * (c + 1) / k)) {
+                        const size_t i = list[j];
+                        if (materialized_here(i)) {
+                            H2MatBlock mb;
+                            mb.off = at[c];
+                            mb.m = blocks[i].m;
+                            mb.n = blocks[i].n;
+                            mb.rows = blocks[i].rows;
+                            mb.cols = blocks[i].cols;
+                            mat_of[i] = static_cast<int64_t>(lv.mat_blocks.size());
+                            chunks[c].blocks.push_back(lv.mat_blocks.size());
+                            lv.mat_blocks.push_back(std::move(mb));
+                            block_ptr[i] = reinterpret_cast<const void*>(static_cast<uintptr_t>(at[c] + 1));
+                            at[c] += bytes_of(i);
+                        }
+                        before += bytes_of(i);
+                        ++j;
+                    }
+                    if (j > first) {
+                        chunks[c].slice_box.push_back(static_cast<int>(b));
+                        chunks[c].slice_first.push_back(static_cast<int>(first));
+                        chunks[c].slice_count.push_back(static_cast<int>(j - first));
+                    }
+                }
+            }
+            for (size_t c = 0; c < k; ++c) {
+                chunks[c].phase = phase;
+                chunks[c].bytes = at[c];
+                scratch_need = std::max(scratch_need, at[c]);
+                if (!chunks[c].slice_box.empty()) lv.mat_chunks.push_back(std::move(chunks[c]));
+            }
+        };
+        sliced_chunks(0, coupling_of);
+        if (near) {
+            std::vector<std::vector<size_t>> one(pair_blocks.size());
+            for (size_t p = 0; p < pair_blocks.size(); ++p) one[p] = {pair_blocks[p]};
+            add_chunks(1, pair_blocks.size(), [&](size_t p) -> const std::vector<size_t>& { return one[p]; });
+            sliced_chunks(2, near_of);
+        }
+        if (storage == H2BlockStorage::evaluated) {
+            // the lists the items index, and the level's points, kept
+            char* d_lists = heap.alloc_resident(std::max<size_t>(lists_end, 1));
+            if (lists_end > 0) {
+                check_cuda(cudaMemcpyAsync(d_lists, meta.host(0), lists_end, cudaMemcpyHostToDevice, stream),
+                           "matvec lists");
+            }
+            lv.allocations.push_back(d_lists);
+            lv.d_lists = d_lists;
+            lv.point_table = points.detach(lv.allocations);
+            lv.bytes += static_cast<double>(lists_end) + points.bytes();
+        }
+#ifdef H2_HAVE_NVCOMP
+        if (storage == H2BlockStorage::compressed) {
+            // every block evaluated a chunk at a time and compressed: the
+            // packed chunks kept on the device (the kept blocks) and copied to
+            // the host blocks (all of them)
+            const size_t budget = compression_detail::chunk_budget();
+            WaveXnrCompressor<S> compressor(heap);
+            DeviceBuffer meta_device;
+            std::vector<char> lists_image(meta.host(0), meta.host(0) + lists_end);
+            for (size_t c0 = 0; c0 < blocks.size();) {
+                size_t c1 = c0, bytes = 0;
+                while (c1 < blocks.size() &&
+                       (c1 == c0 || bytes + align_up(static_cast<size_t>(blocks[c1].m) * blocks[c1].n * D) <= budget)) {
+                    bytes += align_up(static_cast<size_t>(blocks[c1].m) * blocks[c1].n * D);
+                    ++c1;
+                }
+                char* out = heap.alloc(std::max<size_t>(bytes, 1));
+                meta.clear();
+                (void)meta.append(lists_image.data(), lists_image.size());
+                std::vector<EvalItemT<S>> evals;
+                std::vector<const S*> srcs;
+                std::vector<size_t> elems;
+                int max_m = 0, max_n = 0;
+                size_t at = 0;
+                for (size_t i = c0; i < c1; ++i) {
+                    const Block& bl = blocks[i];
+                    evals.push_back(EvalItemT<S>{reinterpret_cast<S*>(out + at), bl.m, bl.m, bl.n, bl.rows, bl.cols});
+                    srcs.push_back(reinterpret_cast<const S*>(out + at));
+                    elems.push_back(static_cast<size_t>(bl.m) * bl.n);
+                    max_m = std::max(max_m, bl.m);
+                    max_n = std::max(max_n, bl.n);
+                    at += align_up(static_cast<size_t>(bl.m) * bl.n * D);
+                }
+                const size_t off_evals = meta.append(evals);
+                char* md = meta.upload(meta_device, stream);
+                stats.bytes_up += static_cast<double>(meta.size());
+                evaluator.eval<S>(evals, reinterpret_cast<const EvalItemT<S>*>(md + off_evals), max_m, max_n, md,
+                                  points.table(), stream);
+                std::vector<CompressedXnr> comp;
+                if (!compressor.compress(srcs, elems, tolerance * kH2BlockToleranceFraction, comp, stream)) {
+                    throw std::runtime_error("device compression: compressing the blocks failed (no room for the "
+                                             "compressor's staging)");
+                }
+                const auto& cks = compressor.chunks();
+                size_t packed = 0;
+                for (const auto& cb : comp) {
+                    for (size_t k = 0; k < cb.nchunks; ++k) packed += cks[cb.chunk0 + k].stride;
+                }
+                // the kept blocks' chunks into one device run; every block's to the host
+                char* run = heap.alloc_resident(std::max<size_t>(packed, 1));
+                lv.allocations.push_back(run);
+                std::vector<CopySpan> spans;
+                int64_t max_words = 0;
+                size_t run_at = 0;
+                std::vector<size_t> block_at(c1 - c0);
+                for (size_t i = c0; i < c1; ++i) {
+                    const auto& cb = comp[i - c0];
+                    block_at[i - c0] = run_at;
+                    for (size_t k = 0; k < cb.nchunks; ++k) {
+                        const auto& ck = cks[cb.chunk0 + k];
+                        spans.push_back(CopySpan{compressor.staging() + ck.offset, run + run_at,
+                                                 static_cast<int64_t>(ck.stride / 4)});
+                        max_words = std::max(max_words, static_cast<int64_t>(ck.stride / 4));
+                        run_at += ck.stride;
+                    }
+                }
+                if (!spans.empty()) {
+                    DeviceBuffer span_device;
+                    auto* d_spans = static_cast<CopySpan*>(span_device.reserve(spans.size() * sizeof(CopySpan)));
+                    check_cuda(cudaMemcpyAsync(d_spans, spans.data(), spans.size() * sizeof(CopySpan),
+                                               cudaMemcpyHostToDevice, stream), "compressed blocks");
+                    launch_copy_spans(d_spans, static_cast<int>(spans.size()), max_words, stream);
+                    check_cuda(cudaStreamSynchronize(stream), "compressed blocks");
+                }
+                std::vector<char> host_run(run_at);
+                if (run_at > 0) check_cuda(cudaMemcpy(host_run.data(), run, run_at, cudaMemcpyDeviceToHost), "compressed blocks");
+                for (size_t i = c0; i < c1; ++i) {
+                    const Block& bl = blocks[i];
+                    const auto& cb = comp[i - c0];
+                    auto& target = level.local_boxes[bl.box];
+                    auto& hb = bl.near ? target.h2_near_blocks[bl.index] : target.h2_interaction_blocks[bl.index];
+                    size_t len = 0;
+                    hb.strides.clear();
+                    for (size_t k = 0; k < cb.nchunks; ++k) {
+                        hb.strides.push_back(static_cast<uint32_t>(cks[cb.chunk0 + k].stride));
+                        len += cks[cb.chunk0 + k].stride;
+                    }
+                    hb.packed.assign(host_run.data() + block_at[i - c0], host_run.data() + block_at[i - c0] + len);
+                    if (mat_of[i] >= 0) {
+                        H2MatBlock& mb = lv.mat_blocks[static_cast<size_t>(mat_of[i])];
+                        mb.packed = run + block_at[i - c0];
+                        mb.strides = hb.strides;
+                    }
+                }
+                lv.bytes += static_cast<double>(run_at);
+                stats.bytes_down += static_cast<double>(run_at);
+                compressor.release();
+                heap.free(out);
+                c0 = c1;
+            }
+        }
+#endif
+        register_matvec_level<S>(level, lv, [&](size_t i) { return blocks[i].box; },
+                                 [&](size_t i) { return blocks[i].near; }, [&](size_t i) { return blocks[i].source; },
+                                 [&](size_t i) { return blocks[i].n; }, block_ptr, symmetric, stream);
+        store.scratch_bytes = std::max(store.scratch_bytes, scratch_need);
+        stats.heap_peak = std::max(stats.heap_peak, heap.peak());
+        stats.blocks_device += std::chrono::duration<double>(clock::now() - td).count();
+        stats.blocks += std::chrono::duration<double>(clock::now() - t0).count();
+        return;
     }
     const size_t budget = compression_detail::chunk_budget();
     DeviceBuffer meta_device;

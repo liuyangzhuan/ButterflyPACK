@@ -1108,6 +1108,14 @@ template<typename DataType>
 struct H2Block {
     int64_t source_morton;
     MatrixStorage<DataType> matrix;
+    // H2_compress_factors (GPU compression, core/h2_block_codec.hpp): the
+    // entries as lossy Bitcomp chunks end to end, each padded to its stride,
+    // with matrix.data empty (its rows and cols kept); or, with a GPU entry
+    // evaluator, not stored at all (the device matvec evaluates the block,
+    // ParallelTree::h2_blocks_evaluated)
+    std::vector<char> packed;
+    std::vector<uint32_t> strides;
+    bool compressed() const { return !strides.empty(); }
 
     H2Block() : source_morton(-1) {}
     ~H2Block() = default;
@@ -1817,6 +1825,8 @@ struct ParallelTree {
     double id_s_op = 0.0;                ///< H2_s_op: the IDs' absolute floor is tol * id_s_op (0: off)
     int64_t partial_count = 0;           ///< H2_partial: points with id < partial_count are F11 (eliminated); 0: full factorization
     bool partial_compress_records = false;  ///< H2_compress_factors with H2_partial: the F22 records stored compressed
+    bool compress_h2_blocks = false;        ///< H2_compress_factors: a compression-only H2's blocks evaluated or compressed (GPU)
+    bool h2_blocks_evaluated = false;       ///< ... the blocks are not stored: the device matvec evaluates them
     bool partial_records_on_device = false;  ///< some F22 records kept on the device only (partial_device.hpp)
     bool gpu_exchanges_warmed = false;       ///< the GPU exchanges with this tree's peer ranks warmed up (warm_up_exchange)
     bool partial() const { return partial_count > 0; }

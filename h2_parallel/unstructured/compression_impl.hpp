@@ -478,7 +478,7 @@ void hierarchical_compression_unstructured(
                             tree, level.local_boxes[static_cast<size_t>(local_index)], occupied_topology);
                     }
                 }
-                gpu::build_level_blocks(tree, level_number, kernel, sources, level_number == leaf_level);
+                gpu::build_level_blocks(tree, level_number, kernel, sources, level_number == leaf_level, tolerance);
                 // (entries through a collective callback: the device fetched
                 // the blocks it lacked on the spot, in rounds; every rank
                 // quiesces them here, before the next level's exchanges and
