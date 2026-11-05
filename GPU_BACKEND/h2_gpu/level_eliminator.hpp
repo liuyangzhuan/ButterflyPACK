@@ -1262,7 +1262,8 @@ private:
     };
     void land_full_factors(const std::vector<const OwnerEntry*>& entries);  // into the kept store, else the host boxes
     // MPI buffers: from the exchange arena, or the main one when it is full
-    char* exchange_alloc(size_t bytes) {
+    // (`host_beyond_arena`: pinned host memory instead of the main heap)
+    char* exchange_alloc(size_t bytes, bool host_beyond_arena = false) {
         DeviceHeap& arena = DeviceHeap::exchange_arena();
         if (char* p = arena.try_alloc(bytes)) return p;
         // receive buffers the copier still holds, as their host copies finish
@@ -1282,7 +1283,18 @@ private:
         }
         waited();
         ++eliminator_stats().exchange_fallbacks;
-        if (char* p = heap_.try_alloc(bytes, ResidentKind::Exchange)) return p;
+        // H2_compress_factors: the main heap only within its hold limit - the
+        // rest of the heap is the waves' (their chunking assumes it), and the
+        // buffer lives through the wave it was planned for.  GPTune's 900K
+        // space-time GP: a 15.8 GB outbox of level 3's second colour took the
+        // main heap beside 41 GB of blocks and factors, and the colour's first
+        // wave had no room for its outputs.
+        const bool heap_room = !host_beyond_arena &&
+                               (compress_factors_ < 1 || static_cast<double>(heap_.used()) + static_cast<double>(bytes) <=
+                                                             static_cast<double>(hold_limit()));
+        if (heap_room) {
+            if (char* p = heap_.try_alloc(bytes, ResidentKind::Exchange)) return p;
+        }
         // No range of the main heap holds it either: pinned host memory, which
         // the device reads and writes at the same address (2026-10-11: CA3's
         // owner-wave payloads at 8x are 2-7 GB, one block a wave, and a heap
@@ -11880,7 +11892,13 @@ void LevelEliminator<CoordType, DataType, KernelType>::plan_generators(
         total = align_up(total + kv.second.bytes);
     }
     if (total == 0) return;
-    outbox_ = exchange_alloc(total);
+    // H2_compress_factors: an outbox the exchange arena cannot hold goes to
+    // pinned host memory rather than the main heap.  It is written once, by
+    // copies after the wave's elimination, and read once, by MPI, but it is
+    // taken here, before the wave, and so sits through the wave's peak.  The
+    // 900K space-time GP's level 3 (blocks up to 8.8K x 8.8K): a 12.6 GB outbox under
+    // the hold limit when taken, and the colour's wave then outgrew the card.
+    outbox_ = exchange_alloc(total, compress_factors_ >= 1);
 }
 
 // The pieces of the boxes in `active`, copied into the outbox the plan
