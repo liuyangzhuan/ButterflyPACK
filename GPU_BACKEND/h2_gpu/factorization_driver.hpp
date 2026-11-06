@@ -1779,6 +1779,7 @@ public:
                         static_cast<long long>(e.fs_slots), static_cast<long long>(e.fs_boxes),
                         static_cast<long long>(e.fs_waves_plain),
                         static_cast<long long>(e.fs_packed_short));
+            if (e.fs_pieced > 0) std::printf(", %lld compressed in pieces", static_cast<long long>(e.fs_pieced));
             if (e.fs_check_tol > 0.0) {
                 std::printf("; round trip worst error %.3e against %.3e allowed%s", e.fs_check_err, e.fs_check_tol,
                             e.fs_check_err <= e.fs_check_tol ? " (ok)" : "  *** OVER TOLERANCE ***");

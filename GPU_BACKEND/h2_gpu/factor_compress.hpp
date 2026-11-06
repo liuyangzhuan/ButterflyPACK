@@ -225,11 +225,15 @@ public:
     // was 1.13.  Sharing it holds a box to one relative tolerance, which is
     // what the kept X_NR has always had.  `tolerance_of`, one entry a block,
     // replaces `tolerance` for that block (the kept T and X_SR take a finer
-    // step than X_NR in the same batch).
+    // step than X_NR in the same batch).  `maxabs_floor`, one entry a block:
+    // its scale is at least this (a box compressed a few blocks at a time
+    // passes its max_abs over all of them, so each call takes the step one
+    // call over the whole box would).
     bool compress(const std::vector<const S*>& srcs, const std::vector<size_t>& elems,
                   double tolerance, std::vector<CompressedXnr>& out, cudaStream_t stream,
                   const std::vector<int>* group_of = nullptr,
-                  const std::vector<double>* tolerance_of = nullptr) {
+                  const std::vector<double>* tolerance_of = nullptr,
+                  const std::vector<double>* maxabs_floor = nullptr) {
         release();
         stream_ = stream;
         const size_t n = srcs.size();
@@ -315,6 +319,9 @@ public:
             }
             for (size_t i = 0; i < n; ++i) maxabs[i] = gmax[(*group_of)[i]];
         }
+        if (maxabs_floor != nullptr && maxabs_floor->size() == n) {
+            for (size_t i = 0; i < n; ++i) maxabs[i] = std::max(maxabs[i], (*maxabs_floor)[i]);
+        }
         for (size_t i = 0; i < n; ++i) {
             // A block of zeros has no scale: any positive delta is exact.
             const double tol = tolerance_of != nullptr && tolerance_of->size() == n ? (*tolerance_of)[i] : tolerance;
@@ -354,6 +361,34 @@ public:
             out[owner[c]].bytes += chunks_[c].stride;
         }
         return true;
+    }
+
+    // max|.| over all the blocks (as compress() measures each; their group's
+    // scale), or a negative value when the heap has no room for the list.
+    double max_abs(const std::vector<const S*>& srcs, const std::vector<size_t>& elems, cudaStream_t stream) {
+        const size_t n = srcs.size();
+        if (n == 0) return 0.0;
+        const size_t per = sizeof(S) / sizeof(double);
+        char* m = heap_.try_alloc(align_up(n * sizeof(AbsMaxItem)) + align_up(n * sizeof(double)), ResidentKind::Codec);
+        if (m == nullptr) return -1.0;
+        auto* d_items = reinterpret_cast<AbsMaxItem*>(m);
+        auto* d_max = reinterpret_cast<double*>(m + align_up(n * sizeof(AbsMaxItem)));
+        std::vector<AbsMaxItem> items(n);
+        for (size_t i = 0; i < n; ++i) {
+            items[i].a = reinterpret_cast<const double*>(srcs[i]);
+            items[i].n = static_cast<int64_t>(elems[i] * per);
+            items[i].out = d_max + i;
+        }
+        check_cuda(cudaMemcpyAsync(d_items, items.data(), n * sizeof(AbsMaxItem), cudaMemcpyHostToDevice, stream),
+                   "max_abs items");
+        launch_abs_max(d_items, static_cast<int>(n), stream);
+        std::vector<double> got(n, 0.0);
+        check_cuda(cudaMemcpyAsync(got.data(), d_max, n * sizeof(double), cudaMemcpyDeviceToHost, stream), "max_abs");
+        check_cuda(cudaStreamSynchronize(stream), "max_abs");
+        heap_.free(m);
+        double v = 0.0;
+        for (double x : got) v = std::max(v, x);
+        return v;
     }
 
     // The wave's chunks, in box order (CompressedXnr::chunk0 indexes this).

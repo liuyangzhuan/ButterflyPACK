@@ -245,6 +245,7 @@ struct EliminatorStats {
     int64_t ow_slots = 0;
     int64_t fs_waves_plain = 0;   // a wave whose staging did not fit
     int64_t fs_packed_short = 0;  // a box whose packed block did not fit (it stays raw)
+    int64_t fs_pieced = 0;        // a box whose staging did not fit, compressed a few slots at a time
     int64_t np_shared_blocks = 0;  // replicated CA levels: near blocks on more than one rank, held packed always
     double np_shared_raw = 0.0;    // ... their raw bytes
     // the scratch a wave's sketch needs for the slots it reads, and what it
@@ -10981,10 +10982,11 @@ void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_source_set(
     // Gather one group's compressed slots out of the compressor's staging into
     // a packed block per box, recording where each slot's bytes start and
     // which chunks they are.  A box whose packed block does not fit keeps its
-    // raw temp2^T, which is correct and only costs memory.
-    auto pack = [&](const std::vector<CompressedXnr>& comp) {
-        const auto& cks = fill_compressor_.chunks();
-        const char* staging = fill_compressor_.staging();
+    // raw temp2^T, which is correct and only costs memory.  `cks`: chunk c's
+    // compressed bytes on the device (the staging, or a piece's block) and
+    // the padded length the packed block gives it.
+    struct ChunkRef { const char* src; size_t stride; };
+    auto pack = [&](const std::vector<CompressedXnr>& comp, const std::vector<ChunkRef>& cks) {
         std::vector<CopySpan> spans;
         std::vector<BoxState*> raw_to_free;
         std::vector<BoxState*> packed_now;  // (temp2^T only: X_NR^T stays on the device for its wave)
@@ -11023,9 +11025,8 @@ void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_source_set(
                 sl.nchunks = static_cast<uint32_t>(comp[i].nchunks);
                 sl.rows = slot_rows[i];
                 for (size_t c = 0; c < comp[i].nchunks; ++c) {
-                    const auto& ck = cks[comp[i].chunk0 + c];
-                    spans.push_back(CopySpan{staging + ck.offset, packed + off,
-                                             static_cast<int64_t>(ck.stride / 4)});
+                    const ChunkRef& ck = cks[comp[i].chunk0 + c];
+                    spans.push_back(CopySpan{ck.src, packed + off, static_cast<int64_t>(ck.stride / 4)});
                     max_words = std::max(max_words, static_cast<int64_t>(ck.stride / 4));
                     dst.strides.push_back(static_cast<uint32_t>(ck.stride));
                     off += ck.stride;
@@ -11148,31 +11149,126 @@ void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_source_set(
         free_raw();
     };
 
+    auto account = [&](const std::vector<CompressedXnr>& comp) {
+        size_t raw = 0, stored = 0;
+        for (size_t i = 0; i < srcs.size(); ++i) {
+            raw += elems[i] * D;
+            stored += comp[i].bytes;
+        }
+        if (into_xnrt) {
+            stats.xt_raw_bytes += static_cast<double>(raw);
+            stats.xt_stored_bytes += static_cast<double>(stored);
+            stats.xt_slots += static_cast<int64_t>(srcs.size());
+            stats.xt_boxes += static_cast<int64_t>(group_of.size());
+        } else {
+            stats.fs_raw_bytes += static_cast<double>(raw);
+            stats.fs_stored_bytes += static_cast<double>(stored);
+            stats.fs_slots += static_cast<int64_t>(srcs.size());
+            stats.fs_boxes += static_cast<int64_t>(group_of.size());
+        }
+    };
+
+    // A box alone whose staging did not fit (the compressor's staging is at
+    // least its input: a level-2 box of the 900K RBF K#3 had 10.45 GB of
+    // temp2^T against 6.76 GB free, stayed raw to the level's end, and the
+    // keep could not pledge it): its slots a few at a time, each piece
+    // compressed and its chunks laid end to end in a block of their own, then
+    // packed from those blocks as from the staging.  Every piece takes the
+    // box's step (the largest |.| over all its slots), so the packed bytes
+    // are the ones one compression of the box would have given.
+    auto compress_in_pieces = [&]() -> bool {
+        const double box_max = fill_compressor_.max_abs(srcs, elems, stream);
+        if (box_max < 0.0) return false;
+        std::vector<char*> blocks;
+        auto give_back = [&] {
+            for (char* b : blocks) heap_.free(b);
+            blocks.clear();
+        };
+        std::vector<CompressedXnr> comp(srcs.size());
+        std::vector<ChunkRef> refs;
+        size_t at = 0;
+        while (at < srcs.size()) {
+            // (a quarter of the largest free range: the staging, and the
+            // pieces' blocks and the packed block after it)
+            const size_t budget = std::max<size_t>(heap_.largest_free() / 4, 1);
+            size_t end = at, raw = 0;
+            while (end < srcs.size() && (end == at || raw + elems[end] * D <= budget)) raw += elems[end++] * D;
+            const std::vector<const S*> p_srcs(srcs.begin() + static_cast<std::ptrdiff_t>(at),
+                                               srcs.begin() + static_cast<std::ptrdiff_t>(end));
+            const std::vector<size_t> p_elems(elems.begin() + static_cast<std::ptrdiff_t>(at),
+                                              elems.begin() + static_cast<std::ptrdiff_t>(end));
+            const std::vector<int> p_box(end - at, 0);
+            const std::vector<double> p_floor(end - at, box_max);
+            std::vector<CompressedXnr> p_comp;
+            if (!fill_compressor_.compress(p_srcs, p_elems, tolerance_ * fill_frac_, p_comp, stream, &p_box, nullptr,
+                                           &p_floor)) {
+                fill_compressor_.release();
+                give_back();
+                return false;
+            }
+            const auto& cks = fill_compressor_.chunks();
+            size_t bytes = 0;
+            for (const auto& ck : cks) bytes += ck.stride;
+            char* blk = heap_.try_alloc(std::max<size_t>(bytes, 1), ResidentKind::Codec);
+            if (blk == nullptr) {
+                fill_compressor_.release();
+                give_back();
+                return false;
+            }
+            blocks.push_back(blk);
+            std::vector<CopySpan> spans;
+            int64_t max_words = 0;
+            const size_t chunk_base = refs.size();
+            size_t off = 0;
+            for (const auto& ck : cks) {
+                spans.push_back(CopySpan{fill_compressor_.staging() + ck.offset, blk + off,
+                                         static_cast<int64_t>(ck.stride / 4)});
+                max_words = std::max(max_words, static_cast<int64_t>(ck.stride / 4));
+                refs.push_back(ChunkRef{blk + off, ck.stride});
+                off += ck.stride;
+            }
+            const size_t list_bytes = spans.size() * sizeof(CopySpan);
+            if (list_bytes > fill_meta_device_.capacity()) {
+                check_cuda(cudaStreamSynchronize(stream), "fill source pieces");  // the old list may still be read
+                fill_meta_device_.reserve(list_bytes);
+            }
+            auto* d_items = static_cast<CopySpan*>(fill_meta_device_.reserve(list_bytes));
+            check_cuda(cudaMemcpyAsync(d_items, spans.data(), list_bytes, cudaMemcpyHostToDevice, stream),
+                       "fill source pieces");
+            launch_copy_spans(d_items, static_cast<int>(spans.size()), max_words, stream);
+            check_cuda(cudaStreamSynchronize(stream), "fill source pieces");  // (the staging goes back next)
+            for (size_t i = at; i < end; ++i) {
+                comp[i] = p_comp[i - at];
+                comp[i].chunk0 += chunk_base;
+            }
+            fill_compressor_.release();
+            at = end;
+        }
+        account(comp);
+        ++stats.fs_pieced;  // (pack counts the box short if its packed block does not fit)
+        pack(comp, refs);   // (its gather is synchronized: the pieces' blocks can go)
+        give_back();
+        return true;
+    };
+
     auto flush = [&]() {
         if (!srcs.empty()) {
             std::vector<CompressedXnr> comp;
             if (fill_compressor_.compress(srcs, elems, tolerance_ * fill_frac_, comp, stream,
                                           &slot_box)) {
-                size_t raw = 0, stored = 0;
-                for (size_t i = 0; i < srcs.size(); ++i) {
-                    raw += elems[i] * D;
-                    stored += comp[i].bytes;
+                account(comp);
+                std::vector<ChunkRef> refs;
+                refs.reserve(fill_compressor_.chunks().size());
+                for (const auto& ck : fill_compressor_.chunks()) {
+                    refs.push_back(ChunkRef{fill_compressor_.staging() + ck.offset, ck.stride});
                 }
-                if (into_xnrt) {
-                    stats.xt_raw_bytes += static_cast<double>(raw);
-                    stats.xt_stored_bytes += static_cast<double>(stored);
-                    stats.xt_slots += static_cast<int64_t>(srcs.size());
-                    stats.xt_boxes += static_cast<int64_t>(group_of.size());
-                } else {
-                    stats.fs_raw_bytes += static_cast<double>(raw);
-                    stats.fs_stored_bytes += static_cast<double>(stored);
-                    stats.fs_slots += static_cast<int64_t>(srcs.size());
-                    stats.fs_boxes += static_cast<int64_t>(group_of.size());
-                }
-                pack(comp);
+                pack(comp, refs);
             } else {
-                ++stats.fs_waves_plain;
-                warn_replica_fallback("a group of fill sources stayed raw (no staging)");
+                fill_compressor_.release();
+                if (group_of.size() != 1 || srcs.size() < 2 || !compress_in_pieces()) {
+                    ++stats.fs_waves_plain;
+                    warn_replica_fallback("a group of fill sources stayed raw (no staging)");
+                }
             }
             fill_compressor_.release();
         }
