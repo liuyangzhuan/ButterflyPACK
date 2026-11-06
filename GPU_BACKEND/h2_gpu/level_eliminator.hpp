@@ -1048,6 +1048,9 @@ private:
         S* temp4 = nullptr;
         S* persist_temp4 = nullptr;
         size_t off_temp3 = 0, off_temp4 = 0;
+        // its chunk built its fill stores and freed the raw outputs (xnr,
+        // temp2, xrn and temp4 are null): the owner pass reads its slots
+        bool stored = false;
     };
 
     // (lo, hi) Morton pair of a near-field edge.
@@ -5663,7 +5666,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     // the compressed stores - still run once over the whole wave, which keeps
     // a block's contributions inside one owner pass and so leaves the near
     // store's re-packing where it is.
-    bool from_store = compress_factors_ >= 1;  // and every chunk's stores, below
+    bool from_store = compress_factors_ >= 1;  // and every chunk's stores, below (the whole wave's)
     elim_marks_.clear();
     // Only where nothing outside a chunk reads its raw output: the owner pass
     // has to read the stores (so compression must be on), and the host must
@@ -5695,7 +5698,13 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     // them at its window), else after the chunks, when the raw outputs are
     // still named: planned after the last chunk's outputs it ran with the
     // device idle (0.6 s at the 384^3 leaf, 2026-10-22).  Planned early and a
-    // store then failing, it is planned again with the raw pointers.
+    // store then failing, it is planned again after the chunks, a source read
+    // from its stores where its chunk built them (and freed its raw outputs,
+    // WaveBox::stored) and raw elsewhere.  A wave-wide choice there handed the
+    // GEMMs a stored chunk's null raw pointers: RBF K#3 at 900K, level 2.
+    auto reads_store = [&](int32_t src) {
+        return src >= 0 && (from_store || boxes[static_cast<size_t>(src)].stored);
+    };
     auto win_key = [](int32_t src, int32_t slot, int which) {
         return (static_cast<uint64_t>(src) << 33) | (static_cast<uint64_t>(slot) << 1) |
                static_cast<uint64_t>(which);
@@ -6037,14 +6046,13 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                 while (end < targets.size()) {
                     if (end > at && (bytes >= group_budget || win >= window_budget)) break;
                     bytes += static_cast<size_t>(targets[end].rows) * targets[end].cols * D;
-                    if (from_store) {
-                        for (const SrcSlot& ss : targets[end].src_slots) {
-                            for (int which = 0; which < 2; ++which) {
-                                const int32_t slot = which == 0 ? ss.sa : ss.sb;
-                                if (ss.src < 0 || slot < 0) continue;
-                                if (!seen.insert(win_key(ss.src, slot, which)).second) continue;
-                                win += slot_bytes(ss.src, slot, which);
-                            }
+                    for (const SrcSlot& ss : targets[end].src_slots) {
+                        if (!reads_store(ss.src)) continue;
+                        for (int which = 0; which < 2; ++which) {
+                            const int32_t slot = which == 0 ? ss.sa : ss.sb;
+                            if (slot < 0) continue;
+                            if (!seen.insert(win_key(ss.src, slot, which)).second) continue;
+                            win += slot_bytes(ss.src, slot, which);
                         }
                     }
                     ++end;
@@ -6891,8 +6899,8 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                 chunk_stored = false;
             }
         }
-        // the owner pass reads the whole wave, so it may only take the stores
-        // if every chunk stored its own
+        // the owner pass planned at chunk 0 holds only if every chunk stores
+        // its own; else it is planned again, source by source (stored)
         from_store = from_store && chunk_stored;
         std::vector<char> temp2_needed(d_temp2.size(), 0);
         for (int i : chunk_active) {
@@ -6912,6 +6920,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             }
             for (int i : chunk_active) {  // nothing may read the raw form again
                 WaveBox& wb = boxes[static_cast<size_t>(i)];
+                wb.stored = true;
                 wb.xnr = nullptr;
                 wb.temp2 = nullptr;
                 wb.xrn = nullptr;     // (a nonsymmetric matrix: X_RN's block went with X_NR's,
@@ -6992,6 +7001,10 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
 
 
     if (!owner_planned || !from_store) plan_owner();
+    // whether any source is read from its stores: the windows (a wave with none
+    // reads every operand raw, as it did before any chunk stored)
+    bool wave_reads_stores = from_store;
+    for (const WaveBox& wb : boxes) wave_reads_stores = wave_reads_stores || wb.stored;
     t0 = clock::now();
     // Then one group at a time: its blocks raw, its kernel values, its GEMMs.
     // Each group stages its own image, because a slot list is an offset into
@@ -7119,15 +7132,16 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         std::unordered_map<uint64_t, size_t> win_at;
         SolveXnrWave w;   // (its plan and lists released after the group's sync: the
                           //  decompression then runs under the group's staging)
-        if (from_store) {
+        if (wave_reads_stores) {
             struct Need { int32_t src; int32_t slot; int which; size_t off; };
             std::vector<Need> needs;   // in traversal order, so every rank agrees
             size_t need_bytes = 0;
             for (size_t i = first; i < last; ++i) {
                 for (const SrcSlot& ss : targets[i].src_slots) {
+                    if (!reads_store(ss.src)) continue;   // (raw: read in place)
                     for (int which = 0; which < 2; ++which) {
                         const int32_t slot = which == 0 ? ss.sa : ss.sb;
-                        if (ss.src < 0 || slot < 0) continue;
+                        if (slot < 0) continue;
                         const auto [it, fresh_slot] = win_at.emplace(win_key(ss.src, slot, which), need_bytes);
                         if (!fresh_slot) continue;
                         needs.push_back(Need{ss.src, slot, which, need_bytes});
@@ -7188,36 +7202,49 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             ev_n = std::max(ev_n, t.cols);
         }
         const size_t off_ev = owner_meta_.append(evals);
-        std::vector<VBatch<S>> gb(depth);
+        // Sub-batch j of each kind: the tasks reading their source's stores,
+        // whose slots are stored transposed (r x rows, so leading dimension r
+        // and (Trans, NoTrans)), and those reading the raw outputs in place
+        // ((NoTrans, Trans); a nonsymmetric matrix's temp2 rows times X_RN
+        // columns, NN).  A target has one task at depth j, so the two
+        // launches of a depth write different blocks and each block sees its
+        // contributions in the same order.
+        std::vector<VBatch<S>> gb(depth), gb_raw(depth);
         for (size_t i = first; i < last; ++i) {
             Target& t = targets[i];
             for (auto& e : t.tasks) e.c = t.block->ptr;
-            if (from_store) {
-                // the slots are stored transposed, r x rows, so the operands
-                // have leading dimension r and the batch runs (Trans, NoTrans)
-                if (t.src_slots.size() != t.tasks.size()) {
-                    throw std::runtime_error("LevelEliminator: owner target has " +
-                                             std::to_string(t.tasks.size()) + " tasks but " +
-                                             std::to_string(t.src_slots.size()) + " source slots");
-                }
-                for (size_t j = 0; j < t.tasks.size(); ++j) {
-                    const SrcSlot& ss = t.src_slots[j];
-                    const magma_int_t r = static_cast<magma_int_t>(boxes[static_cast<size_t>(ss.src)].r);
-                    t.tasks[j].a = reinterpret_cast<const S*>(window + win_at.at(win_key(ss.src, ss.sa, 0)));
-                    t.tasks[j].lda = r;
-                    t.tasks[j].b = reinterpret_cast<const S*>(window + win_at.at(win_key(ss.src, ss.sb, 1)));
-                    t.tasks[j].ldb = r;
-                }
+            if (wave_reads_stores && t.src_slots.size() != t.tasks.size()) {
+                throw std::runtime_error("LevelEliminator: owner target has " +
+                                         std::to_string(t.tasks.size()) + " tasks but " +
+                                         std::to_string(t.src_slots.size()) + " source slots");
             }
-            for (size_t j = 0; j < t.tasks.size(); ++j) gb[j].entries.push_back(t.tasks[j]);
+            for (size_t j = 0; j < t.tasks.size(); ++j) {
+                if (!wave_reads_stores || !reads_store(t.src_slots[j].src)) {
+                    gb_raw[j].entries.push_back(t.tasks[j]);
+                    continue;
+                }
+                const SrcSlot& ss = t.src_slots[j];
+                const magma_int_t r = static_cast<magma_int_t>(boxes[static_cast<size_t>(ss.src)].r);
+                t.tasks[j].a = reinterpret_cast<const S*>(window + win_at.at(win_key(ss.src, ss.sa, 0)));
+                t.tasks[j].lda = r;
+                t.tasks[j].b = reinterpret_cast<const S*>(window + win_at.at(win_key(ss.src, ss.sb, 1)));
+                t.tasks[j].ldb = r;
+                gb[j].entries.push_back(t.tasks[j]);
+            }
         }
-        for (auto& b : gb) b.stage(owner_meta_);
+        for (auto& b : gb) {
+            if (b.count() > 0) b.stage(owner_meta_);
+        }
+        for (auto& b : gb_raw) {
+            if (b.count() > 0) b.stage(owner_meta_);
+        }
         char* gmd = owner_meta_.upload(owner_meta_device_, stream);
         stats.bytes_up += static_cast<double>(owner_meta_.size());
         lap(stats.og_stage);
         phase.next("group launch");
         check_items(evals, "group evals");
         for (const auto& b : gb) check_batch(b, "group gemms");
+        for (const auto& b : gb_raw) check_batch(b, "group gemms (raw)");
         StreamMarks gmarks;   // the kernel values, then each sub-batch (read after the group's sync)
         gmarks.mark(stream);
         {
@@ -7226,22 +7253,24 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         }
         gmarks.mark(stream);
         for (size_t j = 0; j < gb.size(); ++j) {
-            const auto& b = gb[j];
-            // (a nonsymmetric matrix: temp2 rows times X_RN columns)
-            b.gemm(gmd, from_store ? MagmaTrans : MagmaNoTrans,
-                   from_store || nonsym_ ? MagmaNoTrans : MagmaTrans, 1.0, 1.0, queue);
-            gmarks.mark(stream);
             const size_t bin = std::min<size_t>(j, EliminatorStats::kOwnerDepthBins - 1);
-            stats.owner_gemms += static_cast<int64_t>(b.count());
-            stats.og_gemm_count[bin] += static_cast<int64_t>(b.count());
-            ++stats.og_gemm_launches[bin];
-            for (const auto& e : b.entries) {
-                stats.owner_flops += kFlopScale * 2.0 * e.m * e.n * e.k;
-                stats.fl_box[7] += kFlopScale * 2.0 * e.m * e.n * e.k;
-                stats.og_gemm_flops[bin] += kFlopScale * 2.0 * e.m * e.n * e.k;
-                stats.og_gemm_mn[bin] += static_cast<double>(e.m) * e.n;
+            for (int kind = 0; kind < 2; ++kind) {
+                const auto& b = kind == 0 ? gb[j] : gb_raw[j];
+                if (b.count() == 0) continue;
+                if (kind == 0) b.gemm(gmd, MagmaTrans, MagmaNoTrans, 1.0, 1.0, queue);
+                else b.gemm(gmd, MagmaNoTrans, nonsym_ ? MagmaNoTrans : MagmaTrans, 1.0, 1.0, queue);
+                stats.owner_gemms += static_cast<int64_t>(b.count());
+                stats.og_gemm_count[bin] += static_cast<int64_t>(b.count());
+                ++stats.og_gemm_launches[bin];
+                for (const auto& e : b.entries) {
+                    stats.owner_flops += kFlopScale * 2.0 * e.m * e.n * e.k;
+                    stats.fl_box[7] += kFlopScale * 2.0 * e.m * e.n * e.k;
+                    stats.og_gemm_flops[bin] += kFlopScale * 2.0 * e.m * e.n * e.k;
+                    stats.og_gemm_mn[bin] += static_cast<double>(e.m) * e.n;
+                }
+                ++stats.owner_batches;
             }
-            ++stats.owner_batches;
+            gmarks.mark(stream);   // (one a depth: og_dev_gemm[j] below)
         }
         // The next group's packed blocks gathered now, on the near copy
         // stream, while this group's GEMMs run.  A wave's groups partition
