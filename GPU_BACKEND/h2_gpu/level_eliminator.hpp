@@ -901,6 +901,12 @@ public:
         // (a nonsymmetric matrix: X_RS and X_RN with them)
         skip_xnr_ = keep_solve_ && !ca_replica_check_enabled() &&
                     (device_exchange_ || ca_ || level_.num_active_processes == 1);
+        // A wave whose outputs do not fit is produced in chunks on such a
+        // level, also once a failed keep or a rescue has the host want X_NR
+        // again (skip_xnr_ false): each chunk then sends its X_NR to the host
+        // itself.  Unchunked after the keep failed, RBF K#3 of the 900K fit
+        // held a level-2 wave's outputs whole and ran out of device memory.
+        chunk_level_ = skip_xnr_;
     }
     void set_node_level_ranks(int n) override { node_level_ranks_ = std::max(1, n); }
     void restore_host_copies() override { rescue_skipped_xnr(); }
@@ -3212,6 +3218,7 @@ private:
     double factor_bytes_ = 0.0;   // the eliminated boxes' factors, as keep_solve_factors lays them out
     int keep_failure_ = 0;        // solve_keep_failure
     bool skip_xnr_ = false;       // kept boxes' X_NR, X_SR and LU not downloaded
+    bool chunk_level_ = false;    // ... at the level's start: its waves' production may be chunked
     std::vector<Box*> skipped_xnr_;      // ... the boxes whose X_NR stayed on the device (rescue_skipped_xnr)
     std::vector<Box*> skipped_factors_;  // ... whose X_SR and LU did
     KeptSolveLevel kept_;
@@ -5530,8 +5537,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         wave_bytes += 2 * ntot * static_cast<size_t>(wb.state->n) * sizeof(S);
     }
     const bool chunk_for_room = heap_.used() + wave_bytes > hold_limit();
-    const bool chunk_production = compress_factors_ >= 1 && gpu_sketch_ && skip_xnr_ &&
-                                  keep_solve_ && !keep_failed_ && chunk_for_room;
+    const bool chunk_production = compress_factors_ >= 1 && gpu_sketch_ && chunk_level_ && chunk_for_room;
     ++stats.np_waves;
     if (chunk_production) ++stats.np_waves_chunked;
     // as many chunks as the wave's bytes need at kWaveChunkBytes each, so a
@@ -5649,6 +5655,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     for (size_t g = 0; g < d_sources.size(); ++g) d_sources[g] = heap_.alloc(std::max<size_t>(source_group_bytes[g], 1), ResidentKind::WaveSource);
     std::vector<char*> d_temp2(temp2_group_bytes.size(), nullptr);  // allocated by their chunk
     std::vector<char> temp2_to_copier(d_temp2.size(), 0);  // the copier frees these
+    std::vector<char> xnr_sent(boxes.size(), 0);  // X_NR on its way to the host since its chunk (chunked waves)
     char* d_xnr = nullptr;  // (the chunk's, below)
     std::vector<char*> work_blocks;
     std::vector<char*> xnr_blocks;
@@ -5669,8 +5676,8 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     bool from_store = compress_factors_ >= 1;  // and every chunk's stores, below (the whole wave's)
     elim_marks_.clear();
     // Only where nothing outside a chunk reads its raw output: the owner pass
-    // has to read the stores (so compression must be on), and the host must
-    // not want X_NR, which it does not while the factors are kept.
+    // has to read the stores (so compression must be on), and the host gets
+    // the X_NR it wants (none while the factors are kept) from the chunk.
     const bool can_chunk = chunk_production;
     if (device_exchange_) {  // (the generators' headers and offsets are the wave's; the copies are the chunks')
         if (owner_ != nullptr) {
@@ -6085,6 +6092,8 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                                             active.begin() + static_cast<ptrdiff_t>(c1));
         elim_marks_.emplace_back(std::make_unique<StreamMarks>(), 0);
         StreamMarks& marks = *elim_marks_.back().first;
+        // (the earlier chunks' X_NR copies that have finished give their blocks back first)
+        if (chunk > 0) free_copied_blocks(copier_->take_finished());
         // this chunk's temp2 blocks; its X_NR blocks come with its boxes
         for (size_t g = 0; g < d_temp2.size(); ++g) {
             if (group_chunk_of[g] != chunk) continue;
@@ -6918,6 +6927,38 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                 heap_.free(d_temp2[g]);
                 d_temp2[g] = nullptr;
             }
+            // ... and in a chunked wave the groups whose X_NR the host wants
+            // (all of them once a keep failed) go to the copier now, which
+            // frees each when it is copied, rather than wait beside every
+            // other chunk's for the wave's end (step 4 sends the rest)
+            if (nchunks > 1) {
+                for (size_t g = 0; g < d_temp2.size(); ++g) {
+                    if (group_chunk_of[g] != chunk || !temp2_needed[g] || d_temp2[g] == nullptr) continue;
+                    HostCopier::Job t2job;
+                    t2job.device = d_temp2[g];
+                    t2job.bytes = temp2_group_bytes[g];
+                    for (int i : chunk_active) {
+                        const WaveBox& wb = boxes[static_cast<size_t>(i)];
+                        if (wb.source_group != static_cast<int>(g)) continue;
+                        wb.box->X_NR = MatrixStorage<DataType>{};  // (the copier appends to it)
+                        if (nonsym_) wb.box->X_RN = MatrixStorage<DataType>{};
+                        const size_t nt = static_cast<size_t>(wb.ntot), r = static_cast<size_t>(wb.r);
+                        if (nt == 0 || host_skips_xnr(wb) || host_drops_ghost_xnr(wb)) continue;
+                        t2job.segments.push_back(HostCopier::Segment{&wb.box->X_NR.data, nullptr, wb.off_temp2, nt * r * D});
+                        if (nonsym_) {
+                            t2job.segments.push_back(HostCopier::Segment{&wb.box->X_RN.data, nullptr, wb.off_temp4, r * nt * D});
+                        }
+                        xnr_sent[static_cast<size_t>(i)] = 1;
+                    }
+                    cudaEvent_t ev = nullptr;
+                    check_cuda(cudaEventCreateWithFlags(&ev, cudaEventDisableTiming), "cudaEventCreate");
+                    check_cuda(cudaEventRecord(ev, stream), "cudaEventRecord");
+                    t2job.ready = ev;
+                    t2job.finalize = [] {};  // (the shapes are set by the source group's job, step 4)
+                    temp2_to_copier[g] = 1;
+                    copier_->submit(std::move(t2job));
+                }
+            }
             for (int i : chunk_active) {  // nothing may read the raw form again
                 WaveBox& wb = boxes[static_cast<size_t>(i)];
                 wb.stored = true;
@@ -7478,15 +7519,18 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             HostCopier::Job t2job;
             t2job.device = d_temp2[g];
             t2job.bytes = temp2_group_bytes[g];
+            const bool sent = temp2_to_copier[g] != 0;  // (its chunk sent its X_NR already)
             struct Shape { Box* box; int ntot, r; bool xrr; };
             auto shapes = std::make_shared<std::vector<Shape>>();
             for (int i : active) {
                 const WaveBox& wb = boxes[static_cast<size_t>(i)];
                 if (wb.source_group != static_cast<int>(g)) continue;
                 const size_t nt = static_cast<size_t>(wb.ntot), r = static_cast<size_t>(wb.r);
-                wb.box->X_NR = MatrixStorage<DataType>{};
+                if (!sent) {  // (else the copier may be filling them)
+                    wb.box->X_NR = MatrixStorage<DataType>{};
+                    if (nonsym_) wb.box->X_RN = MatrixStorage<DataType>{};
+                }
                 wb.box->X_RR_full = MatrixStorage<DataType>{};
-                if (nonsym_) wb.box->X_RN = MatrixStorage<DataType>{};
                 // (a kept box's X_NR stays on the device only: rescue_skipped_xnr)
                 // (an owned ghost keeps its host copies: a fill source the
                 // transition may restore, not a solve factor here - its X_NR
@@ -7496,11 +7540,12 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                 if (skip) skipped_xnr_.push_back(wb.box);
                 const bool skip_xrr = host_skips_xrr(wb);  // (H2 host memory: rebuilt from the kept LU instead)
                 if (nt > 0 && !skip && !ghost_drop) {
-                    if (d_temp2[g] == nullptr) {
-                        // its chunk gave the raw form back before the keep
-                        // failed; rescue_skipped_xnr reads the store instead
+                    if (sent ? !xnr_sent[static_cast<size_t>(i)] : d_temp2[g] == nullptr) {
+                        // its chunk gave the raw form back, or sent the
+                        // group without it, while it was kept, and the keep
+                        // failed after; rescue_skipped_xnr reads the store instead
                         skipped_xnr_.push_back(wb.box);
-                    } else {
+                    } else if (!sent) {
                         t2job.segments.push_back(Seg{&wb.box->X_NR.data, nullptr, wb.off_temp2, nt * r * D});
                         // (a nonsymmetric matrix: temp4, the solve's X_RN, beside temp2 in its group)
                         if (nonsym_) t2job.segments.push_back(Seg{&wb.box->X_RN.data, nullptr, wb.off_temp4, r * nt * D});
