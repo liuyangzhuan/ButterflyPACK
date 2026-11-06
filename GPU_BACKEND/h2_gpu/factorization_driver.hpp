@@ -1878,6 +1878,10 @@ public:
                 std::printf("  [gpu] level %d exchange buffers in pinned host memory (no device range fitted): %lld, %.2f GB\n",
                             lvl, static_cast<long long>(e.exchange_host), e.exchange_host_bytes / 1e9);
             }
+            if (e.xnr_host > 0) {
+                std::printf("  [gpu] level %d generators' original X_NR in pinned host memory (no device range fitted): "
+                            "%lld blocks, %.2f GB\n", lvl, static_cast<long long>(e.xnr_host), e.xnr_host_bytes / 1e9);
+            }
         }
         std::fflush(stdout);
         return true;

@@ -399,6 +399,8 @@ struct EliminatorStats {
     int64_t keep_splits = 0;            // keep groups split for want of one range
     int64_t owner_early_installs = 0;   // owner payloads installed at a wave boundary, before their colour's end
     double exchange_host_bytes = 0.0;
+    int64_t xnr_host = 0;               // generators' original X_NR with no device range: in pinned host memory
+    double xnr_host_bytes = 0.0;
     int64_t remote_generators = 0;
     // H2_compress_factors: waves whose X_NR was compressed, waves that fell
     // back to storing it uncompressed, and why.
@@ -1405,6 +1407,31 @@ private:
         return c.ptr;
     }
     std::unordered_map<const void*, PinnedChunkPool::Chunk> exchange_host_;
+    // A chunk's block of its generators' original X_NR (the device exchange):
+    // from the heap, reclaiming as an allocation does, else pinned host
+    // memory, which the gather writes and the generator copies read at the
+    // same address (free_block gives it back).  RBF K#3 of the 900K fit, level
+    // 2: one box's 10.8 GB with 12.9 GB free in 16 ranges, the largest 8.5.
+    char* alloc_xnr_sources(size_t bytes, int wave_index) {
+        for (;;) {
+            if (char* p = heap_.try_alloc(bytes, ResidentKind::WaveSource)) return p;
+            if (!reclaim_heap()) break;
+        }
+        const double largest = static_cast<double>(heap_.largest_free());
+        PinnedChunkPool::Chunk c = pinned_chunk_pool().take(bytes);
+        exchange_host_[c.ptr] = c;
+        ++eliminator_stats().xnr_host;
+        eliminator_stats().xnr_host_bytes += static_cast<double>(bytes);
+        if (env::trace("wave")) {
+            int rank = 0;
+            MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+            std::printf("  [gpu] rank %d level %d wave %d: generators' original X_NR (%.2f GB) in pinned host memory "
+                        "(largest free %.2f GB)\n", rank, level_index_, wave_index, static_cast<double>(bytes) / 1e9,
+                        largest / 1e9);
+            std::fflush(stdout);
+        }
+        return c.ptr;
+    }
     void free_block(const void* ptr) {
         DeviceHeap& arena = DeviceHeap::exchange_arena();
         if (arena.owns(ptr)) {
@@ -2867,6 +2894,10 @@ private:
         free_copied_blocks(std::move(blocks));
     }
     void free_copied_blocks(std::vector<char*>&& blocks);
+    // The heap's reclaimer (set at begin): finished copies' blocks, released
+    // sources, the next copy's block, and last a nonsymmetric level's kept
+    // factors.  False when nothing could be freed.
+    bool reclaim_heap();
     void download_blocks_to_host();
     void release_level_data();
     void check_device_kernel();
@@ -3318,36 +3349,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::begin() {
     copier_ = std::make_unique<HostCopier>(ctx.device());
     if (device_exchange_) exchange_copier_ = std::make_unique<HostCopier>(ctx.device(), 1, 8);
     // a full heap waits for the next background copy, whose block then frees
-    heap_.set_reclaimer([this] {
-        const auto tw = std::chrono::steady_clock::now();
-        bool freed = false;
-        for (HostCopier* c : {copier_.get(), exchange_copier_.get()}) {
-            if (c == nullptr) continue;
-            std::vector<char*> done = c->take_finished();
-            freed = freed || !done.empty();
-            free_copied_blocks(std::move(done));
-        }
-        if (!freed) freed = reclaim_released_source();
-        if (!freed && copier_) {
-            std::vector<char*> done = copier_->wait_released();
-            freed = !done.empty();
-            free_copied_blocks(std::move(done));
-        }
-        if (!freed && nonsym_ && keep_solve_ && !keep_failed_ && !kept_.blocks.empty()) {
-            // A nonsymmetric level's kept factors can go when the level is
-            // short: their host copies back first (rescue_skipped_xnr, host
-            // memory only), and the first solve uploads them instead.  (Its
-            // X_RR_full stays with the fill sources: nothing has to be rebuilt
-            // from the LU here.)
-            rescue_skipped_xnr(true);
-            drop_kept(false, "the heap is short (nonsymmetric: the host copies serve)");
-            keep_failed_ = true;
-            keep_failure_ = 2;
-            freed = true;
-        }
-        eliminator_stats().reclaim_wait += std::chrono::duration<double>(std::chrono::steady_clock::now() - tw).count();
-        return freed;
-    });
+    heap_.set_reclaimer([this] { return reclaim_heap(); });
     cudaStream_t stream = ctx.stream();
     auto& stats = eliminator_stats();
 
@@ -6116,7 +6118,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             d_temp2[g] = heap_.alloc(std::max<size_t>(temp2_group_bytes[g], 1), ResidentKind::WaveOutput);
         }
         if (static_cast<size_t>(chunk) < xnr_chunk_bytes.size() && xnr_chunk_bytes[static_cast<size_t>(chunk)] > 0) {
-            d_xnr = heap_.alloc(xnr_chunk_bytes[static_cast<size_t>(chunk)], ResidentKind::WaveSource);
+            d_xnr = alloc_xnr_sources(xnr_chunk_bytes[static_cast<size_t>(chunk)], wave_index);
         }
         const size_t xnr_first = xnr_blocks.size();
         const size_t work_first = work_blocks.size();
@@ -6894,7 +6896,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                 copy_generators(boxes, chunk_active, d_sources, d_temp2, d_xnr, d_result, stream);
             }
             if (d_xnr != nullptr) {
-                heap_.free(d_xnr);  // read by the chunk's packs only, and they have run
+                free_block(d_xnr);  // read by the chunk's packs only, and they have run
                 d_xnr = nullptr;
             }
         }
@@ -7049,7 +7051,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     // (after every chunk: a last chunk with no boxes is skipped above)
     if (device_exchange_ && owner_ != nullptr) finish_owner_generators(stream);
     if (d_xnr != nullptr) {
-        heap_.free(d_xnr);
+        free_block(d_xnr);
         d_xnr = nullptr;
     }
     elim_marks_.emplace_back(std::make_unique<StreamMarks>(), 7);  // the owner GEMMs
@@ -7729,6 +7731,38 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         stats.heap_peak_transient = heap_.transient_at_peak();
     }
     return boundary_count;
+}
+
+template<typename CoordType, typename DataType, typename KernelType>
+bool LevelEliminator<CoordType, DataType, KernelType>::reclaim_heap() {
+    const auto tw = std::chrono::steady_clock::now();
+    bool freed = false;
+    for (HostCopier* c : {copier_.get(), exchange_copier_.get()}) {
+        if (c == nullptr) continue;
+        std::vector<char*> done = c->take_finished();
+        freed = freed || !done.empty();
+        free_copied_blocks(std::move(done));
+    }
+    if (!freed) freed = reclaim_released_source();
+    if (!freed && copier_) {
+        std::vector<char*> done = copier_->wait_released();
+        freed = !done.empty();
+        free_copied_blocks(std::move(done));
+    }
+    if (!freed && nonsym_ && keep_solve_ && !keep_failed_ && !kept_.blocks.empty()) {
+        // A nonsymmetric level's kept factors can go when the level is
+        // short: their host copies back first (rescue_skipped_xnr, host
+        // memory only), and the first solve uploads them instead.  (Its
+        // X_RR_full stays with the fill sources: nothing has to be rebuilt
+        // from the LU here.)
+        rescue_skipped_xnr(true);
+        drop_kept(false, "the heap is short (nonsymmetric: the host copies serve)");
+        keep_failed_ = true;
+        keep_failure_ = 2;
+        freed = true;
+    }
+    eliminator_stats().reclaim_wait += std::chrono::duration<double>(std::chrono::steady_clock::now() - tw).count();
+    return freed;
 }
 
 template<typename CoordType, typename DataType, typename KernelType>
