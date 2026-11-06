@@ -5530,14 +5530,29 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     // ... and only when the wave's outputs would not fit beside what the
     // heap holds: a chunk costs a compression pass (fill sources, kept
     // factors, X_NR^T) with its syncs, 0.9 s a leaf level at 192^3 for four
-    size_t wave_bytes = 0;
+    // Whether to chunk counts the wave's sources too: each box's X_RR_full and
+    // a generator's original X_NR (the source groups, or with the device
+    // exchange its chunk's block), held beside the outputs.  Without them RBF
+    // K#3 at 900K took a level-2 wave of 22.9 GB outputs unchunked at 24.6 GB
+    // used against a 48.1 GB hold limit; its 12.7 GB of sources then left no
+    // range for one box's 10.8 GB temp2.  (The chunks are still cut by the
+    // outputs alone.)
+    size_t wave_bytes = 0, source_bytes = 0;
     for (const WaveBox& wb : boxes) {
         if (wb.r == 0) continue;
         size_t ntot = 0;
-        for (int64_t nm : wb.box->one_hop) ntot += static_cast<size_t>(current_size(state_of(nm)));
+        bool remote = owner_ != nullptr && owner_->recipients.count(wb.box->morton_index) != 0;
+        for (int64_t nm : wb.box->one_hop) {
+            const BoxState& ns = state_of(nm);
+            ntot += static_cast<size_t>(current_size(ns));
+            remote = remote || (ns.remote && !ca_);  // (as wb.has_remote below)
+        }
+        const size_t r = static_cast<size_t>(wb.r);
         wave_bytes += 2 * ntot * static_cast<size_t>(wb.state->n) * sizeof(S);
+        source_bytes += align_up(r * r * sizeof(S));
+        if (remote && (!device_exchange_ || !nonsym_)) source_bytes += align_up(ntot * r * sizeof(S));
     }
-    const bool chunk_for_room = heap_.used() + wave_bytes > hold_limit();
+    const bool chunk_for_room = heap_.used() + wave_bytes + source_bytes > hold_limit();
     const bool chunk_production = compress_factors_ >= 1 && gpu_sketch_ && chunk_level_ && chunk_for_room;
     ++stats.np_waves;
     if (chunk_production) ++stats.np_waves_chunked;
