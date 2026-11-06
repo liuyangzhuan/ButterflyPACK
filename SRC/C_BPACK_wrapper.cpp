@@ -18,6 +18,9 @@
 #include <iomanip>
 #include <stdlib.h>
 #include <type_traits>
+#if defined(__GLIBC__)
+#include <malloc.h>   // malloc_trim (c_bpack_h2_delete)
+#endif
 
 using namespace std;
 
@@ -3347,6 +3350,20 @@ extern "C" void c_bpack_h2_delete(C2Fptr h2_ptr) {
     if (H2_solver != nullptr) fmm::gpu::release_operator(H2_solver->tree.get());
 #endif
     delete H2_solver;
+    // The host memory it held, back to the system.  The pinned pool keeps
+    // the chunks it gave back for the next operator's stores, and glibc keeps
+    // what it freed in its arenas; the node's other ranks can use neither.  A
+    // GP fit builds and frees a K and its four derivatives per evaluation, and
+    // after four of them the ranks held 13-40 GB with 0.3 GB live (900K Matern,
+    // 8 ranks at 2 a node, 2026-11-05).  Idle pinned chunks go down to what a
+    // level start keeps when the node is short, and malloc_trim gives the
+    // arenas' free pages back (0.1-0.7 s there).
+#ifdef H2_HAVE_GPU
+    fmm::gpu::pinned_chunk_pool().trim(fmm::gpu::PinnedChunkPool::kIdleKeep);
+#endif
+#if defined(__GLIBC__)
+    malloc_trim(0);
+#endif
 #else
 	(void)h2_ptr;
 #endif
