@@ -246,6 +246,8 @@ struct EliminatorStats {
     int64_t fs_waves_plain = 0;   // a wave whose staging did not fit
     int64_t fs_packed_short = 0;  // a box whose packed block did not fit (it stays raw)
     int64_t fs_pieced = 0;        // a box whose staging did not fit, compressed a few slots at a time
+    int64_t fs_streamed = 0;      // a box with no room for its raw temp2^T: transposed and compressed by slot
+    int64_t xt_streamed = 0;      // ... nor for its X_NR^T staging
     int64_t np_shared_blocks = 0;  // replicated CA levels: near blocks on more than one rank, held packed always
     double np_shared_raw = 0.0;    // ... their raw bytes
     // the scratch a wave's sketch needs for the slots it reads, and what it
@@ -1638,6 +1640,11 @@ private:
         int r = 0;
         const std::vector<int64_t>* counts = nullptr;
         BoxState* st = nullptr;   // where the packed form is recorded
+        // t2t null: the source untransposed (temp2 or X_NR, ntot x r, ld
+        // ntot), its slots transposed a few at a time into a scratch and
+        // compressed from there - no raw transposed block when none fits
+        const S* src = nullptr;
+        int64_t nt = 0;
     };
     void compress_fill_sources(std::vector<WaveBox>& boxes, const std::vector<int>& active, cudaStream_t stream);
     // store: 0 temp2^T, 1 the owner pass's store (X_NR^T, or a nonsymmetric
@@ -10853,8 +10860,28 @@ void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_sources(
             const size_t bytes = std::max<size_t>(nt * r * D, 1);
             // A box without its temp2^T has no fill source and quietly changes
             // the answer, so this is not a place to degrade: alloc_resident
-            // throws if the group does not fit, and the group is bounded.
-            char* blk = heap_.alloc_resident(bytes, ResidentKind::FillRaw);
+            // throws if the group does not fit, and the group is bounded -
+            // but one box is a group however large, and a symmetric matrix's
+            // box with no room for its raw block (after the reclaims an
+            // allocation runs) is transposed and compressed slot by slot from
+            // temp2 instead (compress_fill_source_set; a level-2 box of the
+            // 900K Matern fits wanted 8-10 GB with 6.6-7.2 GB in one range).
+            char* blk = nullptr;
+            if (!nonsym_) {
+                for (;;) {
+                    if ((blk = heap_.try_alloc_resident(bytes, ResidentKind::FillRaw)) != nullptr) break;
+                    if (!reclaim_heap()) break;
+                }
+                if (blk == nullptr) {
+                    FillSrcRef ref{nullptr, wb.r, &wb.counts, wb.state};
+                    ref.src = wb.temp2;
+                    ref.nt = wb.ntot;
+                    items.push_back(ref);
+                    continue;
+                }
+            } else {
+                blk = heap_.alloc_resident(bytes, ResidentKind::FillRaw);
+            }
             auto& es = eliminator_stats();
             es.persist_bytes += static_cast<double>(bytes);
             es.persist_peak = std::max(es.persist_peak, es.persist_bytes);
@@ -10951,7 +10978,13 @@ void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_sources(
                 }
                 const size_t r = static_cast<size_t>(wb.r), nt = static_cast<size_t>(wb.ntot);
                 char* blk = heap_.try_alloc(std::max<size_t>(nt * r * D, 1), ResidentKind::Codec);
-                if (blk == nullptr) { room = false; break; }
+                if (blk == nullptr) {  // no staging: X_NR transposed and compressed slot by slot
+                    FillSrcRef ref{nullptr, wb.r, &wb.counts, wb.state};
+                    ref.src = wb.xnr;
+                    ref.nt = wb.ntot;
+                    xitems.push_back(ref);
+                    continue;
+                }
                 staging.push_back(blk);
                 xtr.push_back(TransposeItemT<S>{wb.xnr, static_cast<int>(nt), reinterpret_cast<S*>(blk),
                                                 static_cast<int>(r), static_cast<int>(nt), static_cast<int>(r)});
@@ -10961,16 +10994,18 @@ void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_sources(
             }
             if (nonsym_) {
                 compress_fill_source_set(xitems, stream, 1);
-            } else if (room && !xtr.empty()) {
-                const size_t list_bytes = xtr.size() * sizeof(TransposeItemT<S>);
-                if (list_bytes > t2t_meta_device_.capacity()) {
-                    check_cuda(cudaStreamSynchronize(stream), "owner source transposes");
-                    t2t_meta_device_.reserve(list_bytes);
+            } else if (room && !xitems.empty()) {
+                if (!xtr.empty()) {
+                    const size_t list_bytes = xtr.size() * sizeof(TransposeItemT<S>);
+                    if (list_bytes > t2t_meta_device_.capacity()) {
+                        check_cuda(cudaStreamSynchronize(stream), "owner source transposes");
+                        t2t_meta_device_.reserve(list_bytes);
+                    }
+                    auto* d_tr = static_cast<TransposeItemT<S>*>(t2t_meta_device_.reserve(list_bytes));
+                    check_cuda(cudaMemcpyAsync(d_tr, xtr.data(), list_bytes, cudaMemcpyHostToDevice, stream),
+                               "owner source transposes");
+                    launch_transpose(d_tr, static_cast<int>(xtr.size()), xm, xn, stream);
                 }
-                auto* d_tr = static_cast<TransposeItemT<S>*>(t2t_meta_device_.reserve(list_bytes));
-                check_cuda(cudaMemcpyAsync(d_tr, xtr.data(), list_bytes, cudaMemcpyHostToDevice, stream),
-                           "owner source transposes");
-                launch_transpose(d_tr, static_cast<int>(xtr.size()), xm, xn, stream);
                 compress_fill_source_set(xitems, stream, 1);  // (it syncs before returning)
             } else {
                 ++eliminator_stats().xt_short;
@@ -11035,6 +11070,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_source_set(
     // compressed bytes on the device (the staging, or a piece's block) and
     // the padded length the packed block gives it.
     struct ChunkRef { const char* src; size_t stride; };
+    bool srcs_streamed = false;  // (compress_streamed: srcs name no raw block, so no round-trip check)
     auto pack = [&](const std::vector<CompressedXnr>& comp, const std::vector<ChunkRef>& cks) {
         std::vector<CopySpan> spans;
         std::vector<BoxState*> raw_to_free;
@@ -11154,7 +11190,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_source_set(
         // what it was made from.  This is what tests the gather and the
         // offset arithmetic - a wrong stride would otherwise surface as a
         // plausible but wrong answer much later.
-        if (!check) {
+        if (!check || srcs_streamed) {
             free_raw();
             return;
         }
@@ -11300,6 +11336,144 @@ void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_source_set(
         return true;
     };
 
+    // A box with no room for its raw transposed source (FillSrcRef::src: the
+    // source untransposed, ntot x r): its slots transposed a few at a time
+    // into a scratch, each piece compressed and its chunks gathered into a
+    // block of their own, then packed from those as compress_in_pieces does.
+    // The step is the box's (max|.| over the whole source, the same values),
+    // and a slot is the same r x rows block the raw path cuts, so the packed
+    // bytes are the ones the raw block would have given.
+    auto compress_streamed = [&](const FillSrcRef& it) -> bool {
+        const size_t r = static_cast<size_t>(it.r), nt = static_cast<size_t>(it.nt);
+        std::vector<const S*> mx_src;  // (the source in 256 MB pieces: one block an item)
+        std::vector<size_t> mx_n;
+        const size_t total = nt * r, step = (size_t{256} << 20) / sizeof(S);
+        for (size_t a = 0; a < total; a += step) {
+            mx_src.push_back(it.src + a);
+            mx_n.push_back(std::min(step, total - a));
+        }
+        const double box_max = fill_compressor_.max_abs(mx_src, mx_n, stream);
+        if (box_max < 0.0) return false;
+        srcs.clear();
+        elems.clear();
+        slot_rows.clear();
+        slot_box.clear();
+        group_of.clear();
+        std::vector<size_t> row0;
+        size_t row = 0;
+        for (int64_t c : *it.counts) {
+            const size_t rows = static_cast<size_t>(std::max<int64_t>(c, 0));
+            if (rows > 0) {
+                srcs.push_back(nullptr);  // (no raw block: the check is off for this box)
+                elems.push_back(rows * r);
+                slot_rows.push_back(static_cast<int>(rows));
+                slot_box.push_back(0);
+                row0.push_back(row);
+            }
+            row += rows;
+        }
+        if (srcs.empty()) return true;
+        group_of.push_back(GroupItem{it.st, 0, srcs.size()});
+        std::vector<char*> blocks;
+        auto give_back = [&] {
+            for (char* b : blocks) heap_.free(b);
+            blocks.clear();
+        };
+        std::vector<CompressedXnr> comp(srcs.size());
+        std::vector<ChunkRef> refs;
+        size_t at = 0;
+        while (at < srcs.size()) {
+            // (a quarter of the largest free range: the scratch and the
+            // staging, then the pieces' blocks and the packed block)
+            const size_t budget = std::max<size_t>(heap_.largest_free() / 4, 1);
+            size_t end = at, raw = 0;
+            while (end < srcs.size() && (end == at || raw + elems[end] * D <= budget)) raw += elems[end++] * D;
+            char* scratch = heap_.try_alloc(std::max<size_t>(raw, 1), ResidentKind::Codec);
+            if (scratch == nullptr) {
+                give_back();
+                return false;
+            }
+            std::vector<TransposeItemT<S>> tr;
+            std::vector<const S*> p_srcs;
+            std::vector<size_t> p_elems;
+            size_t off = 0;
+            int max_m = 0;
+            for (size_t i = at; i < end; ++i) {
+                S* dst = reinterpret_cast<S*>(scratch) + off;
+                tr.push_back(TransposeItemT<S>{it.src + row0[i], static_cast<int>(nt), dst, static_cast<int>(r),
+                                               slot_rows[i], static_cast<int>(r)});
+                max_m = std::max(max_m, slot_rows[i]);
+                p_srcs.push_back(dst);
+                p_elems.push_back(elems[i]);
+                off += elems[i];
+            }
+            const size_t list_bytes = tr.size() * sizeof(TransposeItemT<S>);
+            if (list_bytes > t2t_meta_device_.capacity()) {
+                check_cuda(cudaStreamSynchronize(stream), "fill source slots");  // the old list may still be read
+                t2t_meta_device_.reserve(list_bytes);
+            }
+            auto* d_tr = static_cast<TransposeItemT<S>*>(t2t_meta_device_.reserve(list_bytes));
+            check_cuda(cudaMemcpyAsync(d_tr, tr.data(), list_bytes, cudaMemcpyHostToDevice, stream), "fill source slots");
+            launch_transpose(d_tr, static_cast<int>(tr.size()), max_m, static_cast<int>(r), stream);
+            const std::vector<int> p_box(end - at, 0);
+            const std::vector<double> p_floor(end - at, box_max);
+            std::vector<CompressedXnr> p_comp;
+            if (!fill_compressor_.compress(p_srcs, p_elems, tolerance_ * fill_frac_, p_comp, stream, &p_box, nullptr,
+                                           &p_floor)) {
+                fill_compressor_.release();
+                heap_.free(scratch);
+                give_back();
+                return false;
+            }
+            const auto& cks = fill_compressor_.chunks();
+            size_t bytes = 0;
+            for (const auto& ck : cks) bytes += ck.stride;
+            char* blk = heap_.try_alloc(std::max<size_t>(bytes, 1), ResidentKind::Codec);
+            if (blk == nullptr) {
+                fill_compressor_.release();
+                heap_.free(scratch);
+                give_back();
+                return false;
+            }
+            blocks.push_back(blk);
+            std::vector<CopySpan> spans;
+            int64_t max_words = 0;
+            const size_t chunk_base = refs.size();
+            size_t boff = 0;
+            for (const auto& ck : cks) {
+                spans.push_back(CopySpan{fill_compressor_.staging() + ck.offset, blk + boff,
+                                         static_cast<int64_t>(ck.stride / 4)});
+                max_words = std::max(max_words, static_cast<int64_t>(ck.stride / 4));
+                refs.push_back(ChunkRef{blk + boff, ck.stride});
+                boff += ck.stride;
+            }
+            const size_t span_bytes = spans.size() * sizeof(CopySpan);
+            if (span_bytes > fill_meta_device_.capacity()) {
+                check_cuda(cudaStreamSynchronize(stream), "fill source slots");
+                fill_meta_device_.reserve(span_bytes);
+            }
+            auto* d_items = static_cast<CopySpan*>(fill_meta_device_.reserve(span_bytes));
+            check_cuda(cudaMemcpyAsync(d_items, spans.data(), span_bytes, cudaMemcpyHostToDevice, stream),
+                       "fill source slots");
+            launch_copy_spans(d_items, static_cast<int>(spans.size()), max_words, stream);
+            check_cuda(cudaStreamSynchronize(stream), "fill source slots");  // (the staging and scratch go back next)
+            heap_.free(scratch);
+            for (size_t i = at; i < end; ++i) {
+                comp[i] = p_comp[i - at];
+                comp[i].chunk0 += chunk_base;
+            }
+            fill_compressor_.release();
+            at = end;
+        }
+        account(comp);
+        ++(into_xnrt ? stats.xt_streamed : stats.fs_streamed);
+        srcs_streamed = true;
+        pack(comp, refs);  // (its gather is synchronized: the pieces' blocks can go)
+        srcs_streamed = false;
+        give_back();
+        return true;
+    };
+
     auto flush = [&]() {
         if (!srcs.empty()) {
             std::vector<CompressedXnr> comp;
@@ -11330,6 +11504,27 @@ void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_source_set(
     };
 
     for (const FillSrcRef& it : items) {
+        if (it.t2t == nullptr && it.src != nullptr && it.r > 0 && it.st != nullptr && it.counts != nullptr &&
+            !it.counts->empty()) {
+            flush();
+            const bool ok = compress_streamed(it);
+            srcs.clear();
+            elems.clear();
+            slot_rows.clear();
+            slot_box.clear();
+            group_of.clear();
+            group_raw = 0;
+            if (ok) continue;
+            // X_NR^T only feeds this wave's owner pass, which reads X_NR raw without it;
+            // temp2^T is a fill source, and without it the answer would quietly change
+            if (into_xnrt) {
+                ++stats.xt_short;
+                continue;
+            }
+            throw std::runtime_error("LevelEliminator: no room to compress a fill source slot by slot (box of " +
+                                     std::to_string(it.nt) + " x " + std::to_string(it.r) + ", largest free " +
+                                     std::to_string(heap_.largest_free()) + " bytes)");
+        }
         if (it.t2t == nullptr || it.r == 0 || it.st == nullptr || it.counts == nullptr || it.counts->empty()) continue;
         const size_t r = static_cast<size_t>(it.r);
         size_t bytes = 0;

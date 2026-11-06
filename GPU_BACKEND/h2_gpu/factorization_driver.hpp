@@ -1472,6 +1472,10 @@ public:
                             e.xt_stored_bytes > 0.0 ? e.xt_raw_bytes / e.xt_stored_bytes : 1.0,
                             static_cast<long long>(e.xt_slots), static_cast<long long>(e.xt_boxes),
                             e.xt_short > 0 ? " (some groups found no staging)" : "");
+                if (e.xt_streamed > 0) {
+                    std::printf("  [gpu] level %d X_NR^T store: %lld boxes transposed slot by slot (no room for the staging)\n",
+                                level.level, static_cast<long long>(e.xt_streamed));
+                }
             }
             if (e.os_groups > 0) {
                 std::printf("  [gpu] level %d owner source union: %.2f GB by the largest group, %.2f GB summed "
@@ -1780,6 +1784,9 @@ public:
                         static_cast<long long>(e.fs_waves_plain),
                         static_cast<long long>(e.fs_packed_short));
             if (e.fs_pieced > 0) std::printf(", %lld compressed in pieces", static_cast<long long>(e.fs_pieced));
+            if (e.fs_streamed > 0) {
+                std::printf(", %lld transposed slot by slot (no room for the raw block)", static_cast<long long>(e.fs_streamed));
+            }
             if (e.fs_check_tol > 0.0) {
                 std::printf("; round trip worst error %.3e against %.3e allowed%s", e.fs_check_err, e.fs_check_tol,
                             e.fs_check_err <= e.fs_check_tol ? " (ok)" : "  *** OVER TOLERANCE ***");
