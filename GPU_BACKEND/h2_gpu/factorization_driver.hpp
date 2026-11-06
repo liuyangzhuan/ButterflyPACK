@@ -1141,7 +1141,10 @@ public:
             // every rank of the transition can take part: the builders with
             // their blocks, the owners as receivers
             const bool mine = level.is_process_active ? (builds && blocks_ != nullptr) : parent_level.is_process_active;
-            int ok = mine && device_reduction_possible(level.level, parent_lvl, parents) ? 1 : 0;
+            // (a builder whose transition sent finished parents to the host:
+            // the host reduction for every rank)
+            const bool sent = blocks_ != nullptr && blocks_->on_host_in_part();
+            int ok = mine && !sent && device_reduction_possible(level.level, parent_lvl, parents) ? 1 : 0;
             {
                 // H2 8x (2026-10-11): the receivers' room.  A receiver holds the
                 // merged parent blocks raw; when what its senders hold would not
@@ -1234,6 +1237,7 @@ public:
                 for (const Box& p : parents) {
                     if (p.num_points > kEntryDestMask) fits = 0;
                 }
+                if (blocks_ != nullptr && blocks_->on_host_in_part()) fits = 0;   // (sent to the host in the transition)
                 MPI_Allreduce(MPI_IN_PLACE, &fits, 1, MPI_INT, MPI_MIN, level_comm);
                 keep = fits != 0;
             }
@@ -1261,6 +1265,12 @@ public:
                             "from the packed store beyond the chunk budget)\n",
                             level.level, static_cast<long long>(e.tr_parents_in_passes),
                             static_cast<long long>(e.tr_parents_in_passes + e.tr_source_passes));
+            }
+            if (e.tr_spills > 0) {
+                std::printf("  [gpu] level %d transition: finished parents' blocks to the host %lld times (%lld blocks, "
+                            "%.2f GB) for room under the hold limit\n",
+                            level.level, static_cast<long long>(e.tr_spills), static_cast<long long>(e.tr_spilled_blocks),
+                            e.tr_spilled_bytes / 1e9);
             }
             if (e.ghost_lu_bytes > 0) {
                 std::printf("  [gpu] level %d ghosts' LU held to the level's end (H2_CA_solve home): %.2f GB\n",

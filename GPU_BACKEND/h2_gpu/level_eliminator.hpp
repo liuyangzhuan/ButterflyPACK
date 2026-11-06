@@ -331,6 +331,9 @@ struct EliminatorStats {
     int64_t tr_buffer_pieced = 0;  // transition chunks whose G;P buffers went in pieces (no free block that large)
     int64_t tr_parents_in_passes = 0;  // parents whose packed fill sources took more than a chunk's budget ...
     int64_t tr_source_passes = 0;      // ... and the passes after their first, over ranges of those sources
+    int64_t tr_spills = 0;             // times a transition sent its finished parents' blocks to the host ...
+    int64_t tr_spilled_blocks = 0;     // ... those blocks
+    double tr_spilled_bytes = 0.0;     // ... and their bytes
     // the blocks of a level uploaded from the host that went packed into its
     // host region instead of onto the card (begin(), above half the hold limit)
     double ub_raw_bytes = 0.0;
@@ -475,10 +478,88 @@ struct DeviceLevelBlocksT {
     // block: 7099 separate blocks fragmented the heap badly enough that the
     // transition could not get its next buffer
     std::vector<char*> packed_owned;
+    // Blocks the device transition already copied to the host (its parents'
+    // blocks once final, when they were to leave the card anyway): the
+    // DeviceMatrix keeps its rows and columns with a null pointer, and
+    // download_level_blocks takes the data from here.
+    std::unordered_map<int64_t, std::vector<T>> schur_host;
+    std::unordered_map<uint64_t, std::vector<T>> edges_host;
+    bool on_host_in_part() const { return !schur_host.empty() || !edges_host.empty(); }
 };
 // The device blocks of a factorization's DataType (double or dcomplex elements).
 template<typename DataType>
 using DeviceLevelBlocks = DeviceLevelBlocksT<typename DeviceScalar<DataType>::type>;
+
+// The data of device blocks `pieces` on the host, in their order (the stream
+// waited for first).  The blocks go through two pinned ring slots of the
+// (then idle) level copier: one slot's copies overlap the host unpacking of
+// the other's, in parallel over blocks.  A block over a slot is copied on
+// its own.
+template<typename S>
+std::vector<std::vector<S>> download_block_data(const std::vector<const DeviceMatrixT<S>*>& pieces, cudaStream_t stream) {
+    std::vector<std::vector<S>> data(pieces.size());
+    check_cuda(cudaStreamSynchronize(stream), "download level blocks");
+    auto bytes_of = [&](size_t i) { return static_cast<size_t>(pieces[i]->rows) * pieces[i]->cols * sizeof(S); };
+    constexpr size_t slot_bytes = PinnedPool::kRingSlot;
+    char* slot[2] = {static_cast<char*>(pinned_pool().ring[0].reserve(slot_bytes)),
+                     static_cast<char*>(pinned_pool().ring[1].reserve(slot_bytes))};
+    cudaEvent_t copied[2] = {nullptr, nullptr};
+    for (auto& ev : copied) check_cuda(cudaEventCreateWithFlags(&ev, cudaEventDisableTiming), "cudaEventCreate");
+    // the pieces [first, last) in slot s, at consecutive offsets
+    auto unpack = [&](int s, size_t first, size_t last) {
+        check_cuda(cudaEventSynchronize(copied[s]), "download level blocks");
+        std::vector<size_t> offset(last - first + 1, 0);
+        for (size_t i = first; i < last; ++i) offset[i - first + 1] = offset[i - first] + bytes_of(i);
+        #pragma omp parallel for schedule(dynamic, 8)
+        for (int64_t i = static_cast<int64_t>(first); i < static_cast<int64_t>(last); ++i) {
+            const S* src = reinterpret_cast<const S*>(slot[s] + offset[static_cast<size_t>(i) - first]);
+            data[static_cast<size_t>(i)].assign(src, src + bytes_of(static_cast<size_t>(i)) / sizeof(S));
+        }
+    };
+    int s = 0;
+    bool pending = false;
+    size_t pending_first = 0, pending_last = 0;
+    size_t i = 0;
+    while (i < pieces.size()) {
+        if (bytes_of(i) > slot_bytes) {
+            data[i].resize(bytes_of(i) / sizeof(S));
+            check_cuda(cudaMemcpy(data[i].data(), pieces[i]->ptr, bytes_of(i), cudaMemcpyDeviceToHost),
+                       "download level blocks");
+            ++i;
+            continue;
+        }
+        const size_t first = i;
+        size_t used = 0;
+        while (i < pieces.size() && bytes_of(i) <= slot_bytes && used + bytes_of(i) <= slot_bytes) {
+            check_cuda(cudaMemcpyAsync(slot[s] + used, pieces[i]->ptr, bytes_of(i), cudaMemcpyDeviceToHost, stream),
+                       "download level blocks");
+            used += bytes_of(i);
+            ++i;
+        }
+        check_cuda(cudaEventRecord(copied[s], stream), "cudaEventRecord");
+        if (pending) unpack(1 - s, pending_first, pending_last);
+        pending = true;
+        pending_first = first;
+        pending_last = i;
+        s = 1 - s;
+    }
+    if (pending) unpack(1 - s, pending_first, pending_last);
+    for (auto& ev : copied) cudaEventDestroy(ev);
+    return data;
+}
+
+// Host elements of DataType from the device scalar's layout (the same bytes).
+template<typename DataType, typename S>
+std::vector<DataType> host_elements(std::vector<S>&& v) {
+    if constexpr (std::is_same_v<DataType, S>) {
+        return std::move(v);
+    } else {
+        static_assert(sizeof(DataType) == sizeof(S), "device and host elements share their layout");
+        std::vector<DataType> out(v.size());
+        if (!v.empty()) std::memcpy(static_cast<void*>(out.data()), v.data(), v.size() * sizeof(S));
+        return out;
+    }
+}
 
 // Handle of a level's eliminator, independent of the kernel type.
 template<typename CoordType, typename DataType>
@@ -13327,6 +13408,9 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
     std::vector<int64_t> pass_cuts;   // pass q takes the sources in [cut[q - 1], cut[q])
     size_t pass = 0;
     size_t p0 = 0;
+    // finished parents' blocks still on the card, (Schur?, morton or edge key),
+    // for the host when they leave the card anyway (below, at a chunk's end)
+    std::vector<std::pair<bool, uint64_t>> finished_raw;
     std::vector<const SourceCandidate*> sources;
     std::vector<int64_t> positions;
     int64_t fill_gemms = 0;
@@ -14209,6 +14293,57 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
             flush();
         }
 #endif
+        // A parent's raw blocks, final after its last pass, leave the card
+        // after the transition anyway where they are not packed (a process
+        // reduction or a level on the host follows): they go to the host as
+        // soon as the next parent, as large, and the chunk budget might not
+        // fit under the hold limit beside them (2026-11-05).  Held to the
+        // transition's end, GPTune's 900K RBF GP (K #3, 8 ranks) had parents
+        // of 10-12.5 GB on a rank whose level held 27.5 GB: its third parent
+        // met 61.8 GB of 66.4 in use and a fill source no room.
+        // download_level_blocks places these copies in its own order, so the
+        // result does not change.
+        if (last_pass && !pack_parents_) {
+            for (const ChunkRef& ref : chunk_refs) {
+                finished_raw.push_back({ref.schur, ref.schur ? static_cast<uint64_t>(ref.morton) : ref.key});
+            }
+            if (!finished_raw.empty() &&
+                static_cast<double>(heap_.used()) + static_cast<double>(chunk_block_bytes) + static_cast<double>(budget) >
+                    static_cast<double>(hold_limit())) {
+                if (copier_) free_copied_blocks(copier_->wait_all());  // (its pinned ring slots are the download's)
+                std::vector<const DeviceMatrix*> pieces;
+                std::vector<DeviceMatrix*> mats;
+                std::vector<std::pair<bool, uint64_t>> keys;
+                for (const auto& [is_schur, key] : finished_raw) {
+                    DeviceMatrix* m = nullptr;
+                    if (is_schur) {
+                        auto it = out->schur.find(static_cast<int64_t>(key));
+                        if (it != out->schur.end()) m = &it->second;
+                    } else {
+                        auto it = out->edges.find(key);
+                        if (it != out->edges.end()) m = &it->second;
+                    }
+                    if (m == nullptr || m->ptr == nullptr || m->rows <= 0 || m->cols <= 0) continue;
+                    pieces.push_back(m);
+                    mats.push_back(m);
+                    keys.push_back({is_schur, key});
+                }
+                std::vector<std::vector<S>> data = download_block_data(pieces, stream);   // (waits for the chunk)
+                for (size_t i = 0; i < mats.size(); ++i) {
+                    stats.tr_spilled_bytes += static_cast<double>(data[i].size() * sizeof(S));
+                    if (keys[i].first) {
+                        out->schur_host[static_cast<int64_t>(keys[i].second)] = std::move(data[i]);
+                    } else {
+                        out->edges_host[keys[i].second] = std::move(data[i]);
+                    }
+                    heap_.free(mats[i]->ptr);
+                    mats[i]->ptr = nullptr;
+                }
+                stats.tr_spilled_blocks += static_cast<int64_t>(mats.size());
+                ++stats.tr_spills;
+                finished_raw.clear();
+            }
+        }
         for (char* b : seg_ptr) heap_.free(b);  // later launches are ordered after this chunk
         heap_.free(d_raw);
         for (char* b : xrr_exp_blocks) heap_.free(b);  // (the chunk's P products read them; the next chunk rebuilds its own)
@@ -14400,66 +14535,30 @@ void download_level_blocks(DeviceLevelBlocks<DataType>& blocks, std::vector<BoxD
         }
         return boxes[static_cast<size_t>(idx)];
     };
-    check_cuda(cudaStreamSynchronize(stream), "download level blocks");
-
-    // every block's data on the host: the Schur blocks, then the edges
+    // every block's data on the host: the Schur blocks, then the edges (a
+    // block the transition already sent to the host is taken from there, in
+    // the same order)
     std::vector<const DeviceMatrixT<S>*> pieces;
     pieces.reserve(blocks.schur.size() + blocks.edges.size());
-    for (auto& kv : blocks.schur) pieces.push_back(&kv.second);
-    for (auto& kv : blocks.edges) pieces.push_back(&kv.second);
-    std::vector<std::vector<DataType>> data(pieces.size());
-    {
-        auto bytes_of = [&](size_t i) { return static_cast<size_t>(pieces[i]->rows) * pieces[i]->cols * sizeof(S); };
-        constexpr size_t slot_bytes = PinnedPool::kRingSlot;
-        char* slot[2] = {static_cast<char*>(pinned_pool().ring[0].reserve(slot_bytes)),
-                         static_cast<char*>(pinned_pool().ring[1].reserve(slot_bytes))};
-        cudaEvent_t copied[2] = {nullptr, nullptr};
-        for (auto& ev : copied) check_cuda(cudaEventCreateWithFlags(&ev, cudaEventDisableTiming), "cudaEventCreate");
-        // the pieces [first, last) in slot s, at consecutive offsets
-        auto unpack = [&](int s, size_t first, size_t last) {
-            check_cuda(cudaEventSynchronize(copied[s]), "download level blocks");
-            std::vector<size_t> offset(last - first + 1, 0);
-            for (size_t i = first; i < last; ++i) offset[i - first + 1] = offset[i - first] + bytes_of(i);
-            #pragma omp parallel for schedule(dynamic, 8)
-            for (int64_t i = static_cast<int64_t>(first); i < static_cast<int64_t>(last); ++i) {
-                const DataType* src = reinterpret_cast<const DataType*>(slot[s] + offset[static_cast<size_t>(i) - first]);
-                data[static_cast<size_t>(i)].assign(src, src + bytes_of(static_cast<size_t>(i)) / sizeof(S));
-            }
-        };
-        int s = 0;
-        bool pending = false;
-        size_t pending_first = 0, pending_last = 0;
-        size_t i = 0;
-        while (i < pieces.size()) {
-            if (bytes_of(i) > slot_bytes) {
-                data[i].resize(bytes_of(i) / sizeof(S));
-                check_cuda(cudaMemcpy(data[i].data(), pieces[i]->ptr, bytes_of(i), cudaMemcpyDeviceToHost),
-                           "download level blocks");
-                ++i;
-                continue;
-            }
-            const size_t first = i;
-            size_t used = 0;
-            while (i < pieces.size() && bytes_of(i) <= slot_bytes && used + bytes_of(i) <= slot_bytes) {
-                check_cuda(cudaMemcpyAsync(slot[s] + used, pieces[i]->ptr, bytes_of(i), cudaMemcpyDeviceToHost, stream),
-                           "download level blocks");
-                used += bytes_of(i);
-                ++i;
-            }
-            check_cuda(cudaEventRecord(copied[s], stream), "cudaEventRecord");
-            if (pending) unpack(1 - s, pending_first, pending_last);
-            pending = true;
-            pending_first = first;
-            pending_last = i;
-            s = 1 - s;
-        }
-        if (pending) unpack(1 - s, pending_first, pending_last);
-        for (auto& ev : copied) cudaEventDestroy(ev);
-    }
-
-    size_t piece = 0;
     for (auto& kv : blocks.schur) {
-        box_of(kv.first).schur_complement.set_owned(kv.second.rows, kv.second.cols, std::move(data[piece++]),
+        if (kv.second.ptr != nullptr) pieces.push_back(&kv.second);
+    }
+    for (auto& kv : blocks.edges) {
+        if (kv.second.ptr != nullptr) pieces.push_back(&kv.second);
+    }
+    std::vector<std::vector<S>> data = download_block_data(pieces, stream);
+    size_t piece = 0;
+    auto take = [&](auto& host, auto key, const DeviceMatrixT<S>& m) -> std::vector<DataType> {
+        if (m.ptr != nullptr) return host_elements<DataType>(std::move(data[piece++]));
+        auto it = host.find(key);
+        if (it == host.end()) throw std::runtime_error("download_level_blocks: a block neither on the device nor on the host");
+        std::vector<DataType> v = host_elements<DataType>(std::move(it->second));
+        host.erase(it);
+        return v;
+    };
+
+    for (auto& kv : blocks.schur) {
+        box_of(kv.first).schur_complement.set_owned(kv.second.rows, kv.second.cols, take(blocks.schur_host, kv.first, kv.second),
                                                     MatrixStorage<DataType>::FULL);
         heap.free(kv.second.ptr);
     }
@@ -14469,7 +14568,7 @@ void download_level_blocks(DeviceLevelBlocks<DataType>& blocks, std::vector<BoxD
     };
     for (auto& kv : blocks.edges) {
         const int64_t lo = static_cast<int64_t>(kv.first >> 32), hi = static_cast<int64_t>(kv.first & 0xffffffffu);
-        std::vector<DataType> block_data = std::move(data[piece++]);
+        std::vector<DataType> block_data = take(blocks.edges_host, kv.first, kv.second);
         if (blocks.directed) {
             // K(row, col) (row = the low half): the column box's A_NS[row], the
             // row box's A_SN[col]
@@ -14540,6 +14639,8 @@ void download_level_blocks(DeviceLevelBlocks<DataType>& blocks, std::vector<BoxD
     }
     blocks.schur.clear();
     blocks.edges.clear();
+    blocks.schur_host.clear();
+    blocks.edges_host.clear();
   }
 }
 
