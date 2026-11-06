@@ -9,7 +9,13 @@
 // of the work buffer where it is an output: the neighbors' updates of the
 // solve's forward and the multiply's backward step; elsewhere it is scratch
 // for x_N when x_N does not fit in shared memory) is compared bitwise with
-// its own single-column run.
+// its own single-column run.  Boxes beyond kSolveSharedLimit (one column a
+// block, in the card's opt-in shared memory) and beyond the card's shared
+// memory (global memory) are among them.  Then the global-memory kernels
+// against the shared-memory ones, bitwise: each launch again with box bounds
+// beyond the card's shared memory, its scratch as the solve sizes it
+// (solve_global_points) and one block a box (each block taking every column
+// in turn).
 //
 //   make h2_gpu_solve_columns
 //   srun -n 1 --gpus 1 ./h2_gpu_solve_columns
@@ -209,28 +215,48 @@ const char* name_of(Kernel k) {
     return "?";
 }
 
+// A launch's global memory (scratch, points: none when null) and the box
+// bounds it is sized for (0: the wave's own).  Bounds beyond the card's
+// shared memory send boxes that fit it through the global-memory kernels.
+// trans: A^T's diagonal steps (the boxes have no X_RS^T or X_RN^T for the
+// transposed sweeps).
 template<typename T>
-void launch(Kernel kind, const Wave<T>& w, T* vec, T* ghost, T* work, int nrhs, cudaStream_t stream) {
+struct Launch {
+    T* scratch = nullptr;
+    int64_t points = 0;
+    int max_n = 0, max_r = 0;
+    bool trans = false;
+};
+
+template<typename T>
+void launch(Kernel kind, const Wave<T>& w, T* vec, T* ghost, T* work, int nrhs, cudaStream_t stream,
+            const Launch<T>& how = Launch<T>{}) {
+    const int max_n = how.max_n > 0 ? how.max_n : w.max_n;
+    const int max_r = how.max_r > 0 ? how.max_r : w.max_r;
     switch (kind) {
         case Kernel::forward:
-            launch_solve_forward(w.d_boxes, w.d_wave, w.count, vec, work, nrhs, w.max_n, stream);
+            launch_solve_forward(w.d_boxes, w.d_wave, w.count, vec, work, nrhs, max_n, stream, false, how.scratch,
+                                 how.points);
             break;
         case Kernel::backward:
             launch_solve_backward(w.d_boxes, w.d_slots, w.d_wave, w.count, vec, static_cast<const T*>(ghost), work, nrhs,
-                                  w.max_n, w.max_ntot, stream);
+                                  max_n, w.max_ntot, stream, false, how.scratch, how.points);
             break;
         case Kernel::diagonal:
-            launch_solve_diagonal(w.d_boxes, w.d_wave, w.count, vec, nrhs, w.max_r, stream);
+            launch_solve_diagonal(w.d_boxes, w.d_wave, w.count, vec, nrhs, max_r, stream, how.trans, how.scratch,
+                                  how.points);
             break;
         case Kernel::mul_forward:
             launch_mul_forward(w.d_boxes, w.d_slots, w.d_wave, w.count, vec, static_cast<const T*>(ghost), work, nrhs,
-                               w.max_n, w.max_ntot, stream);
+                               max_n, w.max_ntot, stream, false, how.scratch, how.points);
             break;
         case Kernel::mul_diagonal:
-            launch_mul_diagonal(w.d_boxes, w.d_wave, w.count, vec, nrhs, w.max_r, stream);
+            launch_mul_diagonal(w.d_boxes, w.d_wave, w.count, vec, nrhs, max_r, stream, how.trans, how.scratch,
+                                how.points);
             break;
         case Kernel::mul_backward:
-            launch_mul_backward(w.d_boxes, w.d_wave, w.count, vec, work, nrhs, w.max_n, stream);
+            launch_mul_backward(w.d_boxes, w.d_wave, w.count, vec, work, nrhs, max_n, stream, false, how.scratch,
+                                how.points);
             break;
     }
     check_cuda(cudaStreamSynchronize(stream), name_of(kind));
@@ -260,11 +286,15 @@ long check(Kernel kind, const Wave<T>& w, int nrhs, std::mt19937_64& g) {
     const std::vector<T> ghost0 = random_vector(w.ghost_points * nrhs);
     const std::vector<T> work0 = random_vector(std::max<int64_t>(w.work_points, 1) * nrhs);
     std::vector<void*> allocs;
+    // boxes beyond the card's shared memory: their global memory, as the solve sizes it
+    Launch<T> how;
+    how.points = solve_global_points(w.count, w.max_n, nrhs, sizeof(T));
+    if (how.points > 0) how.scratch = upload(std::vector<T>(static_cast<size_t>(how.points)), allocs);
     // all the columns at once
     T* d_vec = upload(vec0, allocs);
     T* d_ghost = upload(ghost0, allocs);
     T* d_work = upload(work0, allocs);
-    launch(kind, w, d_vec, d_ghost, d_work, nrhs, stream);
+    launch(kind, w, d_vec, d_ghost, d_work, nrhs, stream, how);
     std::vector<T> vec_all(vec0.size()), work_all(work0.size());
     download(d_vec, vec_all);
     download(d_work, work_all);
@@ -275,7 +305,7 @@ long check(Kernel kind, const Wave<T>& w, int nrhs, std::mt19937_64& g) {
         T* v1 = upload(column(vec0, box_off, box_len, nrhs, c, w.points), one_allocs);
         T* g1 = upload(column(ghost0, ghost_off, ghost_len, nrhs, c, w.ghost_points), one_allocs);
         T* w1 = upload(column(work0, w.work_of, work_len, nrhs, c, std::max<int64_t>(w.work_points, 1)), one_allocs);
-        launch(kind, w, v1, g1, w1, 1, stream);
+        launch(kind, w, v1, g1, w1, 1, stream, how);
         std::vector<T> vec_one(static_cast<size_t>(w.points)), work_one(static_cast<size_t>(std::max<int64_t>(w.work_points, 1)));
         download(v1, vec_one);
         download(w1, work_one);
@@ -296,29 +326,108 @@ long check(Kernel kind, const Wave<T>& w, int nrhs, std::mt19937_64& g) {
     return differ;
 }
 
+// The launch with box bounds beyond the card's shared memory (the
+// global-memory kernels) against the launch as it is, bitwise: its scratch
+// as the solve sizes it, then one block a box.  Returns the launches that
+// differ (of two).
+template<typename T>
+long check_global(Kernel kind, const Wave<T>& w, int nrhs, bool trans, std::mt19937_64& g) {
+    cudaStream_t stream = Context::instance().stream();
+    const int beyond = static_cast<int>(solve_shared_limit() / sizeof(T)) + 1;
+    auto random_vector = [&](int64_t n) {
+        std::vector<T> h(static_cast<size_t>(n));
+        for (auto& x : h) x = random_value<T>(g);
+        return h;
+    };
+    const std::vector<T> vec0 = random_vector(w.points * nrhs);
+    const std::vector<T> ghost0 = random_vector(w.ghost_points * nrhs);
+    const std::vector<T> work0 = random_vector(std::max<int64_t>(w.work_points, 1) * nrhs);
+    auto run = [&](const Launch<T>& how, std::vector<T>& vec, std::vector<T>& work) {
+        std::vector<void*> allocs;
+        T* d_vec = upload(vec0, allocs);
+        T* d_ghost = upload(ghost0, allocs);
+        T* d_work = upload(work0, allocs);
+        launch(kind, w, d_vec, d_ghost, d_work, nrhs, stream, how);
+        vec.resize(vec0.size());
+        work.resize(work0.size());
+        download(d_vec, vec);
+        download(d_work, work);
+        for (void* p : allocs) cudaFree(p);
+    };
+    Launch<T> shared;
+    shared.trans = trans;
+    std::vector<T> vec_ref, work_ref;
+    run(shared, vec_ref, work_ref);
+    long differ = 0;
+    for (int variant = 0; variant < 2; ++variant) {
+        Launch<T> global = shared;
+        global.max_n = global.max_r = beyond;
+        global.points = variant == 0 ? solve_global_points(w.count, beyond, nrhs, sizeof(T))
+                                     : static_cast<int64_t>(w.count) * beyond;
+        std::vector<void*> allocs;
+        global.scratch = upload(std::vector<T>(static_cast<size_t>(global.points)), allocs);
+        std::vector<T> vec, work;
+        run(global, vec, work);
+        for (void* p : allocs) cudaFree(p);
+        const bool same_vec = std::memcmp(vec.data(), vec_ref.data(), vec.size() * sizeof(T)) == 0;
+        const bool same_work = !work_is_output(kind) || w.work_points == 0 ||
+                               std::memcmp(work.data(), work_ref.data(), work.size() * sizeof(T)) == 0;
+        if (!same_vec || !same_work) {
+            ++differ;
+            std::printf("    %s%s, nrhs %d: global memory (%s) differs from shared memory (%s%s)\n", name_of(kind),
+                        trans ? " (transposed)" : "", nrhs, variant == 0 ? "the solve's scratch" : "one block a box",
+                        same_vec ? "" : "vector ", same_work ? "" : "work");
+        }
+    }
+    return differ;
+}
+
 template<typename T>
 int test_type(const char* type, const std::vector<int>& counts, unsigned seed) {
     std::mt19937_64 g(seed);
+    // (elements of shared memory: kSolveSharedLimit, the card's opt-in limit)
+    const int pass = static_cast<int>(kSolveSharedLimit / sizeof(T));
+    const int card = static_cast<int>(solve_shared_limit() / sizeof(T));
     const Shape shapes[] = {
         {"small boxes (x_N in shared memory)", 64, 20, 64, 0.3, 2, 6},
         {"leaf-sized boxes (x_N in the work buffer)", 48, 180, 216, 0.2, 14, 24},
         {"large boxes (fewer columns a pass)", 12, 600, 1000, 0.15, 2, 5},
+        {"boxes beyond kSolveSharedLimit (one column a block)", 2, pass + 200, pass + 1200, 0.1, 1, 2},
+        {"boxes beyond the card's shared memory (global memory)", 1, card + card / 20, card + card / 10, 0.02, 1, 1},
     };
     const Kernel kernels[] = {Kernel::forward, Kernel::backward, Kernel::diagonal,
                               Kernel::mul_forward, Kernel::mul_diagonal, Kernel::mul_backward};
+    const std::vector<int> few = {2, 5};  // (the two shapes of large boxes)
     int failures = 0;
-    for (const Shape& s : shapes) {
+    for (size_t si = 0; si < std::size(shapes); ++si) {
+        const Shape& s = shapes[si];
+        const bool large = si >= 3;
         Wave<T> w;
         build(w, s, g);
         std::printf("%s, %s: %d boxes, max n %d, max r %d, max ntot %d\n", type, s.name, w.count, w.max_n, w.max_r,
                     w.max_ntot);
         for (Kernel k : kernels) {
             long bad = 0, total = 0;
-            for (int nrhs : counts) {
+            for (int nrhs : large ? few : counts) {
                 bad += check(k, w, nrhs, g);
                 total += nrhs;
             }
             std::printf("  %-18s %ld of %ld columns differ\n", name_of(k), bad, total);
+            if (bad != 0) ++failures;
+        }
+        if (large) continue;
+        // the same boxes on global memory
+        for (Kernel k : kernels) {
+            const bool diagonal = k == Kernel::diagonal || k == Kernel::mul_diagonal;
+            long bad = 0, total = 0;
+            for (int trans = 0; trans < (diagonal ? 2 : 1); ++trans) {
+                for (int nrhs : counts) {
+                    bad += check_global(k, w, nrhs, trans != 0, g);
+                    total += 2;
+                }
+            }
+            std::printf("  %-18s %ld of %ld global-memory launches differ from shared memory\n", name_of(k), bad,
+                        total);
             if (bad != 0) ++failures;
         }
     }
@@ -380,7 +489,8 @@ int main(int argc, char** argv) {
         MPI_Finalize();
         return 0;
     }
-    std::printf("solve columns: each column of a many-column launch against that column alone, bitwise\n");
+    std::printf("solve columns: each column of a many-column launch against that column alone, bitwise "
+                "(the card's shared memory a block: %zu bytes)\n", solve_shared_limit());
     int failures = 0;
     failures += test_type<double>("double", {2, 3, 8, 11, 17}, 12345);
     failures += test_type<dcomplex>("complex", {2, 3, 4, 5, 9}, 67890);

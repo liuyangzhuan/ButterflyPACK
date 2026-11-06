@@ -1952,6 +1952,7 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
         std::vector<double> level_need(static_cast<size_t>(leaf + 1), 0.0);
         std::vector<double> level_staged(static_cast<size_t>(leaf + 1), 0.0);  // ... of which staged kept factors (H2 8x)
         std::vector<int> host_only(static_cast<size_t>(leaf + 1), 0);  // CA levels factored on the host
+        int64_t largest = 0;  // points of the largest box (any size: solve_kernels.hpp)
         for (int level = 2; level <= leaf && reason.empty(); ++level) {
             auto& lvl = tree->levels[static_cast<size_t>(level)];
             if (!lvl.is_process_active) continue;
@@ -1977,10 +1978,7 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
             auto check = [&](const BoxData<CoordType, DataType>& box, bool kept_box) {
                 const int64_t n = box.num_points, k = static_cast<int64_t>(factor_skeleton(box).size()),
                               r = static_cast<int64_t>(box.redundant_indices.size());
-                if ((static_cast<size_t>(n) + kSolveChunkRows) * D > kSolveSharedLimit) {
-                    reason = "boxes too large";
-                    return;
-                }
+                largest = std::max(largest, n);
                 // (a kept box's LU may have no host copy; the kept one is an LU)
                 if (r > 0 && k > 0 && !(kept_box && !box.X_RR.is_allocated()) &&
                     box.X_RR.format != MatrixStorage<DataType>::LU_FACTORED) {
@@ -2018,6 +2016,7 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
         MPI_Allreduce(MPI_IN_PLACE, need_max.data(), leaf + 1, MPI_DOUBLE, MPI_MAX, tree->comm);
         MPI_Allreduce(MPI_IN_PLACE, host_only.data(), leaf + 1, MPI_INT, MPI_MAX, tree->comm);
         MPI_Allreduce(MPI_IN_PLACE, &room, 1, MPI_DOUBLE, MPI_MIN, tree->comm);
+        MPI_Allreduce(MPI_IN_PLACE, &largest, 1, MPI_INT64_T, MPI_MAX, tree->comm);
         std::vector<double> staged_max = level_staged;
         MPI_Allreduce(MPI_IN_PLACE, staged_max.data(), leaf + 1, MPI_DOUBLE, MPI_MAX, tree->comm);
         const double budget = room - static_cast<double>(size_t{256} << 20);
@@ -2163,6 +2162,14 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
                         room / 1e9, needs.c_str(),
                         streams.empty() ? "" : "; streamed through a ", streams.empty() ? "" : (std::to_string(stream_home / 1e9).substr(0, 5) + " GB home: levels ").c_str(),
                         streams.c_str(), all_ok ? "" : "; off: ", all_ok ? "" : (reason.empty() ? "another rank" : reason.c_str()));
+            std::fflush(stdout);
+        }
+        // a box beyond kSolveSharedLimit takes one column a block, in the
+        // card's opt-in shared memory or, beyond that, in global memory
+        if (rank == 0 && all_ok && (static_cast<size_t>(largest) + kSolveChunkRows) * D > kSolveSharedLimit) {
+            const bool global = (static_cast<size_t>(largest) + kSolveChunkRows) * D > solve_shared_limit();
+            std::printf("GPU solve: the largest box has %lld points: its sweeps take one column a block, in %s\n",
+                        static_cast<long long>(largest), global ? "global memory" : "the card's opt-in shared memory");
             std::fflush(stdout);
         }
         if (!all_ok) {
@@ -2824,6 +2831,10 @@ public:
     DeviceSolveRun(ParallelTree<CoordType, DataType>* tree, int nrhs, bool transposed = false)
         : tree_(tree), nrhs_(nrhs), trans_(transposed) {}
     ~DeviceSolveRun() {
+        if (global_ != nullptr) {
+            cudaStreamSynchronize(stream_);
+            heap_.free(global_);
+        }
         for (XnrSlot& s : xnr_slots_) {
             if (!s.made) continue;
             cudaEventDestroy(s.start);
@@ -3091,6 +3102,7 @@ public:
 
     // a level's vectors: host solve data -> device
     S* upload(DeviceSolveLevel& L, std::vector<SolveDataRequest<CoordType, DataType>>& data) {
+        ensure_global(L);
         const auto t0 = std::chrono::steady_clock::now();
         const size_t len = static_cast<size_t>(L.points) * nrhs_;
         S* d = heap_.alloc<S>(std::max<size_t>(len, 1) * sizeof(S));
@@ -3134,9 +3146,9 @@ public:
             prepare_wave_kept(L, wi, +1);
             for (size_t s = 0; s < W.segs.size(); ++s) {  // (H2 8x: the wave's segments, each through the scratch)
                 prepare_wave_xnr(L, W.seg0 + s, +1);
-                launch_solve_forward(L.d_boxes, L.d_order + W.order0 + W.segs[s].first, W.segs[s].count, vec, work, nrhs_, L.max_n, stream_, trans_);
+                launch_solve_forward(L.d_boxes, L.d_order + W.order0 + W.segs[s].first, W.segs[s].count, vec, work, nrhs_, L.max_n, stream_, trans_, global_, global_points_);
             }
-            if (L.streamed) launch_solve_diagonal(L.d_boxes, L.d_diag + W.diag0, W.ndiag, vec, nrhs_, L.max_r, stream_, trans_);  // (with its wave: H2 8x)
+            if (L.streamed) launch_solve_diagonal(L.d_boxes, L.d_diag + W.diag0, W.ndiag, vec, nrhs_, L.max_r, stream_, trans_, global_, global_points_);  // (with its wave: H2 8x)
             launch_solve_accum(L.d_items + W.item0, L.d_parts, W.nitems, W.max_count, nrhs_, vec, work, outbox, inbox,
                                stream_);
             if (L.peers.empty()) continue;
@@ -3156,7 +3168,7 @@ public:
     // H2_partial's backward solve: before its backward waves).
     void diagonal(DeviceSolveLevel& L, S* vec) {
         const auto t1 = std::chrono::steady_clock::now();
-        if (!L.streamed) launch_solve_diagonal(L.d_boxes, L.d_diag, L.ndiag, vec, nrhs_, L.max_r, stream_, trans_);
+        if (!L.streamed) launch_solve_diagonal(L.d_boxes, L.d_diag, L.ndiag, vec, nrhs_, L.max_r, stream_, trans_, global_, global_points_);
         check_cuda(cudaStreamSynchronize(stream_), "diagonal solves");
         times.diagonal += seconds_since(t1);
     }
@@ -3167,14 +3179,14 @@ public:
     void f22_forward(DeviceSolveLevel& L, S* vec) {
         const auto t0 = std::chrono::steady_clock::now();
         launch_solve_forward(L.d_f22_boxes, L.d_f22_list, L.nf22, vec, static_cast<S*>(nullptr), nrhs_, L.f22_max_n, stream_,
-                             false);
+                             false, global_, global_points_);
         check_cuda(cudaStreamSynchronize(stream_), "F22 step");
         times.f22 += seconds_since(t0);
     }
     void f22_backward(DeviceSolveLevel& L, S* vec) {
         const auto t0 = std::chrono::steady_clock::now();
         launch_solve_backward(L.d_f22_boxes, static_cast<const SolveSlot*>(nullptr), L.d_f22_list, L.nf22, vec,
-                              static_cast<const S*>(nullptr), static_cast<S*>(nullptr), nrhs_, L.f22_max_n, 0, stream_, false);
+                              static_cast<const S*>(nullptr), static_cast<S*>(nullptr), nrhs_, L.f22_max_n, 0, stream_, false, global_, global_points_);
         check_cuda(cudaStreamSynchronize(stream_), "F22 step");
         times.f22 += seconds_since(t0);
     }
@@ -3194,7 +3206,7 @@ public:
             for (size_t s = W.segs.size(); s-- > 0;) {  // (H2 8x: the wave's segments, in reverse)
                 prepare_wave_xnr(L, W.seg0 + s, -1);
                 launch_solve_backward(L.d_boxes, L.d_slots, L.d_rorder + W.order0 + (W.count - W.segs[s].first - W.segs[s].count), W.segs[s].count, vec, ghost, work, nrhs_, L.max_n,
-                                  W.max_ntot, stream_, trans_);
+                                  W.max_ntot, stream_, trans_, global_, global_points_);
             }
         }
         check_cuda(cudaStreamSynchronize(stream_), "backward sweep");
@@ -3221,9 +3233,9 @@ public:
             for (size_t s = 0; s < W.segs.size(); ++s) {  // (H2 8x: the wave's segments, each through the scratch)
                 prepare_wave_xnr(L, W.seg0 + s, +1);
                 launch_mul_forward(L.d_boxes, L.d_slots, L.d_order + W.order0 + W.segs[s].first, W.segs[s].count, vec, ghost, work, nrhs_, L.max_n,
-                               W.max_ntot, stream_, trans_);
+                               W.max_ntot, stream_, trans_, global_, global_points_);
             }
-            if (L.streamed) launch_mul_diagonal(L.d_boxes, L.d_diag + W.diag0, W.ndiag, vec, nrhs_, L.max_r, stream_, trans_);  // (with its wave: H2 8x)
+            if (L.streamed) launch_mul_diagonal(L.d_boxes, L.d_diag + W.diag0, W.ndiag, vec, nrhs_, L.max_r, stream_, trans_, global_, global_points_);  // (with its wave: H2 8x)
         }
         check_cuda(cudaStreamSynchronize(stream_), "multiply forward");
         free_points(work);
@@ -3232,7 +3244,7 @@ public:
         free_message(inbox);
         times.forward += seconds_since(t0);
         const auto t1 = std::chrono::steady_clock::now();
-        if (!L.streamed) launch_mul_diagonal(L.d_boxes, L.d_diag, L.ndiag, vec, nrhs_, L.max_r, stream_, trans_);
+        if (!L.streamed) launch_mul_diagonal(L.d_boxes, L.d_diag, L.ndiag, vec, nrhs_, L.max_r, stream_, trans_, global_, global_points_);
         check_cuda(cudaStreamSynchronize(stream_), "diagonal multiplies");
         times.diagonal += seconds_since(t1);
     }
@@ -3249,7 +3261,7 @@ public:
             prepare_wave_kept(L, static_cast<size_t>(w), -1);
             for (size_t s = W.segs.size(); s-- > 0;) {  // (H2 8x: the wave's segments, in reverse)
                 prepare_wave_xnr(L, W.seg0 + s, -1);
-                launch_mul_backward(L.d_boxes, L.d_rorder + W.order0 + (W.count - W.segs[s].first - W.segs[s].count), W.segs[s].count, vec, work, nrhs_, L.max_n, stream_, trans_);
+                launch_mul_backward(L.d_boxes, L.d_rorder + W.order0 + (W.count - W.segs[s].first - W.segs[s].count), W.segs[s].count, vec, work, nrhs_, L.max_n, stream_, trans_, global_, global_points_);
             }
             launch_solve_accum(L.d_items + W.item0, L.d_parts, W.nitems, W.max_count, nrhs_, vec, work, outbox, inbox,
                                stream_);
@@ -3271,6 +3283,7 @@ public:
     // The level vector with the local boxes' vectors (the ghosts' part is
     // filled by put_ca_halo).
     S* upload_ca_local(DeviceSolveLevel& L, std::vector<SolveDataRequest<CoordType, DataType>>& data) {
+        ensure_global(L);
         const auto t0 = std::chrono::steady_clock::now();
         const size_t nb = L.boxes.size() - L.ghost_box.size();
         S* d = heap_.alloc<S>(std::max<size_t>(static_cast<size_t>(L.points) * nrhs_, 1) * sizeof(S));
@@ -3390,9 +3403,9 @@ public:
             prepare_wave_kept(L, wi, +1);
             for (size_t s = 0; s < W.segs.size(); ++s) {  // (H2 8x: the wave's segments, each through the scratch)
                 prepare_wave_xnr(L, W.seg0 + s, +1);
-                launch_solve_forward(L.d_boxes, L.d_order + W.order0 + W.segs[s].first, W.segs[s].count, vec, work, nrhs_, L.max_n, stream_);
+                launch_solve_forward(L.d_boxes, L.d_order + W.order0 + W.segs[s].first, W.segs[s].count, vec, work, nrhs_, L.max_n, stream_, false, global_, global_points_);
             }
-            if (L.streamed) launch_solve_diagonal(L.d_boxes, L.d_diag + W.diag0, W.ndiag, vec, nrhs_, L.max_r, stream_);  // (with its wave: H2 8x)
+            if (L.streamed) launch_solve_diagonal(L.d_boxes, L.d_diag + W.diag0, W.ndiag, vec, nrhs_, L.max_r, stream_, false, global_, global_points_);  // (with its wave: H2 8x)
             launch_solve_accum(L.d_items + W.item0, L.d_parts, W.nitems, W.max_count, nrhs_, vec, work, static_cast<S*>(nullptr),
                                static_cast<const S*>(nullptr), stream_);
         }
@@ -3400,7 +3413,7 @@ public:
         free_points(work);
         times.forward += seconds_since(t0);
         const auto t1 = std::chrono::steady_clock::now();
-        if (!L.streamed) launch_solve_diagonal(L.d_boxes, L.d_diag, L.ndiag, vec, nrhs_, L.max_r, stream_);
+        if (!L.streamed) launch_solve_diagonal(L.d_boxes, L.d_diag, L.ndiag, vec, nrhs_, L.max_r, stream_, false, global_, global_points_);
         check_cuda(cudaStreamSynchronize(stream_), "diagonal solves");
         times.diagonal += seconds_since(t1);
         download_ca_local(L, vec, data);
@@ -3425,7 +3438,7 @@ public:
                 for (size_t s = W.segs.size(); s-- > 0;) {  // (H2 8x: the wave's segments, in reverse)
                     prepare_wave_xnr(L, W.seg0 + s, -1);
                     launch_solve_backward(L.d_boxes, L.d_slots, L.d_rorder + W.order0 + (W.count - W.segs[s].first - W.segs[s].count), W.segs[s].count, vec, area, work, nrhs_,
-                                      L.max_n, W.max_ntot, stream_);
+                                      L.max_n, W.max_ntot, stream_, false, global_, global_points_);
                 }
             }
             if (lvl.num_active_processes > 1 && ++done < groups) {
@@ -3466,16 +3479,16 @@ public:
             for (size_t s = 0; s < W.segs.size(); ++s) {  // (H2 8x: the wave's segments, each through the scratch)
                 prepare_wave_xnr(L, W.seg0 + s, +1);
                 launch_mul_forward(L.d_boxes, L.d_slots, L.d_order + W.order0 + W.segs[s].first, W.segs[s].count, vec, area, work, nrhs_, L.max_n,
-                               W.max_ntot, stream_);
+                               W.max_ntot, stream_, false, global_, global_points_);
             }
-            if (L.streamed) launch_mul_diagonal(L.d_boxes, L.d_diag + W.diag0, W.ndiag, vec, nrhs_, L.max_r, stream_);  // (with its wave: H2 8x)
+            if (L.streamed) launch_mul_diagonal(L.d_boxes, L.d_diag + W.diag0, W.ndiag, vec, nrhs_, L.max_r, stream_, false, global_, global_points_);  // (with its wave: H2 8x)
         }
         check_cuda(cudaStreamSynchronize(stream_), "multiply forward");
         free_points(work);
         free_points(area);
         times.forward += seconds_since(t0);
         const auto t1 = std::chrono::steady_clock::now();
-        if (!L.streamed) launch_mul_diagonal(L.d_boxes, L.d_diag, L.ndiag, vec, nrhs_, L.max_r, stream_);
+        if (!L.streamed) launch_mul_diagonal(L.d_boxes, L.d_diag, L.ndiag, vec, nrhs_, L.max_r, stream_, false, global_, global_points_);
         check_cuda(cudaStreamSynchronize(stream_), "diagonal multiplies");
         times.diagonal += seconds_since(t1);
         download_ca_local(L, vec, data);
@@ -3505,7 +3518,7 @@ public:
                 prepare_wave_kept(L, static_cast<size_t>(w), -1);
                 for (size_t s = W.segs.size(); s-- > 0;) {  // (H2 8x: the wave's segments, in reverse)
                     prepare_wave_xnr(L, W.seg0 + s, -1);
-                    launch_mul_backward(L.d_boxes, L.d_rorder + W.order0 + (W.count - W.segs[s].first - W.segs[s].count), W.segs[s].count, vec, work, nrhs_, L.max_n, stream_);
+                    launch_mul_backward(L.d_boxes, L.d_rorder + W.order0 + (W.count - W.segs[s].first - W.segs[s].count), W.segs[s].count, vec, work, nrhs_, L.max_n, stream_, false, global_, global_points_);
                 }
                 launch_solve_accum(L.d_items + W.item0, L.d_parts, W.nitems, W.max_count, nrhs_, vec, work, static_cast<S*>(nullptr),
                                    static_cast<const S*>(nullptr), stream_);
@@ -3536,6 +3549,28 @@ private:
     }
     S* alloc_points(int64_t points) {
         return points > 0 ? heap_.alloc<S>(static_cast<size_t>(points) * nrhs_ * sizeof(S)) : nullptr;
+    }
+    // A level with boxes beyond the card's shared memory: global memory for
+    // its per-box kernels (solve_global_points: for its largest launch - a
+    // wave's segment or a diagonal list - and its F22 steps), grown as the
+    // levels need more and kept for the run.
+    void ensure_global(const DeviceSolveLevel& L) {
+        int count = L.ndiag;
+        for (const auto& W : L.waves) {
+            count = std::max(count, W.ndiag);
+            for (const auto& seg : W.segs) count = std::max(count, seg.count);
+        }
+        const int64_t need = std::max(solve_global_points(count, L.max_n, nrhs_, sizeof(S)),
+                                      solve_global_points(L.nf22, L.f22_max_n, nrhs_, sizeof(S)));
+        if (need <= global_points_) return;
+        if (global_ != nullptr) {
+            check_cuda(cudaStreamSynchronize(stream_), "solve scratch");
+            heap_.free(global_);
+            global_ = nullptr;
+            global_points_ = 0;
+        }
+        global_ = heap_.alloc<S>(static_cast<size_t>(need) * sizeof(S));
+        global_points_ = need;
     }
     void free_points(S* p) {
         if (p != nullptr) heap_.free(p);
@@ -3645,6 +3680,10 @@ private:
     int nrhs_;
     bool trans_ = false;
     DeviceHeap& heap_ = DeviceHeap::instance();
+    // the per-box kernels' global memory (ensure_global; null: every box so
+    // far fit the card's shared memory)
+    S* global_ = nullptr;
+    int64_t global_points_ = 0;
     cudaStream_t stream_ = Context::instance().stream();
     PinnedBuffer& host_vec_ = device_solve_store().host_vec;
     PinnedBuffer& host_out_ = device_solve_store().host_out;

@@ -103,14 +103,29 @@ struct LogdetItem {
 template<typename T>
 void launch_logdet_lu(const LogdetItem* items, int count, double* out, int* bad, cudaStream_t stream);
 
-// Largest per-box dynamic shared memory the solve kernels may use.
+// Dynamic shared memory the per-box kernels size their passes of several
+// columns by (half of it a pass), and the most a block took before the
+// card's own limit (solve_shared_limit) was used.
 constexpr size_t kSolveSharedLimit = 96 * 1024;
 // Rows of x_N a chunked sweep stages in shared memory beside a box's n
-// entries: a box takes the device solve when (n + kSolveChunkRows) of its
-// elements fit kSolveSharedLimit (device_solve.hpp), which every solve and
-// multiply kernel then fits (the multiply's diagonal step with 2 r entries
-// when they fit, else with r).
+// entries.
 constexpr int kSolveChunkRows = 256;
+// The card's opt-in dynamic shared memory a block (at least
+// kSolveSharedLimit; 163 KB on an A100).  A box needing more than
+// kSolveSharedLimit takes one column a block in up to this much.  Launches
+// whose boxes need more - (max_n + kSolveChunkRows) elements over this -
+// run the same one-column kernels on global memory: each block's x_S and
+// x_R (the diagonal steps: x_R) in its own max_n (max_r) elements of a
+// scratch the caller passes (`scratch`, `scratch_points` elements), x_N in
+// the work buffer.  When the scratch holds fewer blocks than columns, each
+// block takes the columns gridDim.y apart.  The arithmetic is the
+// shared-memory kernels'.
+size_t solve_shared_limit();
+// The scratch elements those launches need, for up to `count` boxes of up
+// to max_n points and nrhs right-hand sides of elem bytes: 0 when they fit
+// the card's shared memory, else count * min(nrhs, max(1, 512 / count))
+// blocks of max_n.
+int64_t solve_global_points(int count, int max_n, int nrhs, size_t elem);
 
 // `transposed` (every sweep and diagonal step): A^T's step with A's factors
 // (a nonsymmetric matrix's 'T'): X_RS^T and X_RN^T where the step reads X_SR
@@ -119,17 +134,20 @@ constexpr int kSolveChunkRows = 256;
 // forward: x_R -= T^T x_S;  x_S += X_SR x_R;  work = X_NR x_R
 template<typename T>
 void launch_solve_forward(const SolveBox* boxes, const int* wave, int count, T* vec, T* work, int nrhs, int max_n,
-                          cudaStream_t stream, bool transposed = false);
+                          cudaStream_t stream, bool transposed = false, T* scratch = nullptr,
+                          int64_t scratch_points = 0);
 // backward: x_R += X_SR^T x_S + X_NR^T x_N;  x_S -= T x_R (x_N gathered into work)
 // (a nonsymmetric matrix: X_RS x_S + X_RN x_N, from xrs_t and xrn_t)
 template<typename T>
 void launch_solve_backward(const SolveBox* boxes, const SolveSlot* slots, const int* wave, int count, T* vec,
                            const T* ghost, T* work, int nrhs, int max_n, int max_ntot, cudaStream_t stream,
-                           bool transposed = false);
+                           bool transposed = false, T* scratch = nullptr,
+                           int64_t scratch_points = 0);
 // x_R = X_RR^{-1} x_R (the LU)
 template<typename T>
 void launch_solve_diagonal(const SolveBox* boxes, const int* list, int count, T* vec, int nrhs, int max_r,
-                           cudaStream_t stream, bool transposed = false);
+                           cudaStream_t stream, bool transposed = false, T* scratch = nullptr,
+                           int64_t scratch_points = 0);
 template<typename T>
 void launch_solve_accum(const SolveAccum* items, const SolvePart* parts, int count, int max_count, int nrhs, T* vec,
                         const T* work, T* outbox, const T* inbox, cudaStream_t stream);
@@ -154,15 +172,18 @@ void launch_patch_xnr(SolveBox* boxes, const int* idx, void* const* dsts, void* 
 template<typename T>
 void launch_mul_forward(const SolveBox* boxes, const SolveSlot* slots, const int* wave, int count, T* vec,
                         const T* ghost, T* work, int nrhs, int max_n, int max_ntot, cudaStream_t stream,
-                        bool transposed = false);
+                        bool transposed = false, T* scratch = nullptr,
+                        int64_t scratch_points = 0);
 // x_R = X_RR x_R (P L U)
 template<typename T>
 void launch_mul_diagonal(const SolveBox* boxes, const int* list, int count, T* vec, int nrhs, int max_r,
-                         cudaStream_t stream, bool transposed = false);
+                         cudaStream_t stream, bool transposed = false, T* scratch = nullptr,
+                         int64_t scratch_points = 0);
 // backward V:  x_S -= X_SR x_R;  work = -X_NR x_R;  x_R += T^T x_S
 template<typename T>
 void launch_mul_backward(const SolveBox* boxes, const int* wave, int count, T* vec, T* work, int nrhs, int max_n,
-                         cudaStream_t stream, bool transposed = false);
+                         cudaStream_t stream, bool transposed = false, T* scratch = nullptr,
+                         int64_t scratch_points = 0);
 
 }  // namespace gpu
 }  // namespace fmm
