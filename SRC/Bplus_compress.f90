@@ -187,15 +187,8 @@ contains
                flops =flops+flops1
             else
                n1 = MPI_Wtime()
-               nnz_loc=0
-               do index_ij = 1, nr*nc
-                  index_i_loc = (index_ij - 1)/nc + 1
-                  index_j_loc = mod(index_ij - 1, nc) + 1
-                  index_i = (index_i_loc - 1)*inc_r + idx_r
-                  index_j = (index_j_loc - 1)*inc_c + idx_c
-                  call BF_compress_NlogN_oneblock_R_sample(submats,blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij,level, nnz_loc, flops1)
-                  flops =flops+flops1
-               enddo
+               call sample_level('R', nnz_loc, flops1)
+               flops = flops + flops1
                n2 = MPI_Wtime()
                tph(1) = tph(1) + n2 - n1
                ! time_tmp = time_tmp + n2 - n1
@@ -377,15 +370,7 @@ contains
                submats(index_ij)%nr=0
                submats(index_ij)%nc=0
             enddo
-            nnz_loc=0
-            do index_ij = 1, nr*nc
-               index_j_loc = (index_ij - 1)/nr + 1
-               index_i_loc = mod(index_ij - 1, nr) + 1
-               index_i = (index_i_loc - 1)*inc_r + idx_r
-               index_j = (index_j_loc - 1)*inc_c + idx_c
-               call BF_compress_NlogN_oneblock_C_sample(submats,blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij, level, level_final, nnz_loc)
-            enddo
-            ! !$omp end parallel do
+            call sample_level('C', nnz_loc, flops1)
             n2 = MPI_Wtime()
             tph(1) = tph(1) + n2 - n1
             ! time_tmp = time_tmp + n2 - n1
@@ -538,6 +523,81 @@ contains
       if (c_bpack_env_trace('phase'//c_null_char) /= 0 .and. ptree%MyID == ptree%pgrp(blocks%pgno)%head) &
          write (*, '(A,5Es11.3)') ' BF_compress_NlogN (s): sample, entries, device rank-reveal, placement, level end', tph
       return
+
+   contains
+
+      !>**** One level's samples: the rows and columns each local block's
+      !> entries are taken at.  The blocks are independent, so they run as
+      !> tasks, of the team already running when there is one (STRUMPACK
+      !> factors a front on one thread of its team while the others wait at
+      !> its barrier, where a nested parallel do would get a single thread),
+      !> else of a team made here.  Masked blocks (Nboundall > 0) log memory
+      !> into stats, so they stay on the encountering thread.  nnz and flops
+      !> are summed in block order, as the serial loop summed them.
+      subroutine sample_level(half, nnz_level, flops_level)
+         character, intent(in) :: half
+         integer*8, intent(out) :: nnz_level
+         real(kind=8), intent(out) :: flops_level
+         integer*8, allocatable :: nnz_blk(:)
+         real(kind=8), allocatable :: flops_blk(:)
+         integer :: b
+
+         allocate (nnz_blk(nr*nc), flops_blk(nr*nc))
+         nnz_blk = 0
+         flops_blk = 0
+#ifdef HAVE_OPENMP
+         if (omp_in_parallel()) then
+            call sample_blocks(half, nnz_blk, flops_blk)
+         else
+            !$omp parallel default(shared)
+            !$omp single
+            call sample_blocks(half, nnz_blk, flops_blk)
+            !$omp end single
+            !$omp end parallel
+         endif
+#else
+         call sample_blocks(half, nnz_blk, flops_blk)
+#endif
+         nnz_level = 0
+         flops_level = 0
+         do b = 1, nr*nc
+            nnz_level = nnz_level + nnz_blk(b)
+            flops_level = flops_level + flops_blk(b)
+         enddo
+         deallocate (nnz_blk, flops_blk)
+      end subroutine sample_level
+
+      subroutine sample_blocks(half, nnz_blk, flops_blk)
+         character, intent(in) :: half
+         integer*8 :: nnz_blk(:)
+         real(kind=8) :: flops_blk(:)
+         integer :: b, bi, bj, gi, gj
+
+#ifdef HAVE_OPENMP
+         !$omp taskloop default(shared) private(b, bi, bj, gi, gj) if(Nboundall == 0)
+#endif
+         do b = 1, nr*nc
+            if (half == 'R') then
+               bi = (b - 1)/nc + 1
+               bj = mod(b - 1, nc) + 1
+            else
+               bj = (b - 1)/nr + 1
+               bi = mod(b - 1, nr) + 1
+            endif
+            gi = (bi - 1)*inc_r + idx_r
+            gj = (bj - 1)*inc_c + idx_c
+            if (half == 'R') then
+               call BF_compress_NlogN_oneblock_R_sample(submats, blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, stats, msh, ker, ptree, &
+                                                        gi, gj, b, level, nnz_blk(b), flops_blk(b))
+            else
+               call BF_compress_NlogN_oneblock_C_sample(submats, blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, stats, msh, ker, ptree, &
+                                                        gi, gj, b, level, level_final, nnz_blk(b))
+            endif
+         enddo
+#ifdef HAVE_OPENMP
+         !$omp end taskloop
+#endif
+      end subroutine sample_blocks
 
    end subroutine BF_compress_NlogN
 
@@ -1403,6 +1463,8 @@ contains
 
       integer, allocatable::jpvt(:)
       integer Nlayer, passflag, levelm, nrow, ncol,rank_new
+      integer, allocatable :: edges(:)
+      integer nbr, lo, hi
 
       integer, allocatable :: rankmax_for_butterfly(:), rankmin_for_butterfly(:), mrange(:), nrange(:), mrange1(:), nrange1(:), mmap(:), nmap(:)
       real(kind=8)::n2, n1,overrate
@@ -1465,26 +1527,33 @@ contains
       header_n = msh%basis_group(group_n)%head
       if (2*group_n + 1 <= size(msh%basis_group, 1)) header_n2 = msh%basis_group(2*group_n + 1)%head
       if (level /= level_butterfly + 1) then
+      allocate (edges(nn))
       do j = 1, nn
          if (level == 0) then
-            edge_n = header_n + j - 1
-         elseif (level < level_butterfly + 1) then
-            if (j <= nn1) then
-               edge_n = blocks%ButterflySkel(level - 1)%inds(index_ii_loc, index_jj_loc)%array(j) + header_n - 1
-            else
-               edge_n = blocks%ButterflySkel(level - 1)%inds(index_ii_loc, index_jj_loc + 1)%array(j - nn1) + header_n2 - 1
+            edges(j) = header_n + j - 1
+         elseif (j <= nn1) then
+            edges(j) = blocks%ButterflySkel(level - 1)%inds(index_ii_loc, index_jj_loc)%array(j) + header_n - 1
+         else
+            edges(j) = blocks%ButterflySkel(level - 1)%inds(index_ii_loc, index_jj_loc + 1)%array(j - nn1) + header_n2 - 1
+         endif
+      enddo
+      !>**** neighbour by neighbour: msh%nns is (Nunk, knn), so this reads down
+      !> its columns; the candidates' order is free, as remove_dup_int_range sorts
+      lo = msh%basis_group(group_m)%head
+      hi = msh%basis_group(group_m)%tail
+      do jjj = 1, option%knn
+         do j = 1, nn
+            nbr = msh%nns(edges(j), jjj)
+            if (nbr >= lo .and. nbr <= hi) then
+               rankmax_r1 = rankmax_r1 + 1
+               select_row(rankmax_r1) = nbr + 1 - header_m
             endif
-         endif
-         do jjj = 1, option%knn
-         if (msh%nns(edge_n, jjj) >= msh%basis_group(group_m)%head .and. msh%nns(edge_n, jjj) <= msh%basis_group(group_m)%tail) then
-            rankmax_r1 = rankmax_r1 + 1
-            select_row(rankmax_r1) = msh%nns(edge_n, jjj) + 1 - header_m
-         endif
          enddo
       enddo
+      deallocate (edges)
       endif
 
-      call remove_dup_int(select_row, rankmax_r1, rankmax_r)
+      call remove_dup_int_range(select_row, rankmax_r1, rankmax_r, mm)
 
       if (level == 0) then
 
@@ -3689,6 +3758,8 @@ do i_dim = 1,dims_row(dim)
 
       integer, allocatable::jpvt(:)
       integer Nlayer, levelm, group_m_mid, group_n_mid, idxstart, idxend, nrow, ncol
+      integer, allocatable :: edges(:)
+      integer nbr, lo, hi
       integer, allocatable :: rankmax_for_butterfly(:), rankmin_for_butterfly(:), mrange(:), nrange(:), mrange1(:), nrange1(:), mmap(:), nmap(:)
       integer::passflag = 0
       real(kind=8)::n2, n1,overrate
@@ -3753,27 +3824,33 @@ do i_dim = 1,dims_row(dim)
       header_n = msh%basis_group(group_n)%head
       if (2*group_m + 1 <= size(msh%basis_group, 1)) header_m2 = msh%basis_group(2*group_m + 1)%head
       if (level /= 0) then
+      allocate (edges(mm))
       do i = 1, mm
          if (level == level_butterfly + 1) then
-            edge_m = header_m + i - 1
-         elseif (level > 0) then
-            if (i <= mm1) then
-               edge_m = blocks%ButterflySkel(level + 1)%inds(index_ii_loc, index_jj_loc)%array(i) + header_m - 1
-            else
-               edge_m = blocks%ButterflySkel(level + 1)%inds(index_ii_loc + 1, index_jj_loc)%array(i - mm1) + header_m2 - 1
+            edges(i) = header_m + i - 1
+         elseif (i <= mm1) then
+            edges(i) = blocks%ButterflySkel(level + 1)%inds(index_ii_loc, index_jj_loc)%array(i) + header_m - 1
+         else
+            edges(i) = blocks%ButterflySkel(level + 1)%inds(index_ii_loc + 1, index_jj_loc)%array(i - mm1) + header_m2 - 1
+         endif
+      enddo
+      !>**** neighbour by neighbour, as in BF_compress_NlogN_oneblock_R_sample
+      lo = msh%basis_group(group_n)%head
+      hi = msh%basis_group(group_n)%tail
+      do iii = 1, option%knn
+         do i = 1, mm
+            nbr = msh%nns(edges(i), iii)
+            if (nbr >= lo .and. nbr <= hi) then
+               rankmax_c1 = rankmax_c1 + 1
+               select_column(rankmax_c1) = nbr + 1 - header_n
             endif
-         endif
-         do iii = 1, option%knn
-         if (msh%nns(edge_m, iii) >= msh%basis_group(group_n)%head .and. msh%nns(edge_m, iii) <= msh%basis_group(group_n)%tail) then
-            rankmax_c1 = rankmax_c1 + 1
-            select_column(rankmax_c1) = msh%nns(edge_m, iii) + 1 - header_n
-         endif
          enddo
       enddo
+      deallocate (edges)
       endif
 
 
-      call remove_dup_int(select_column, rankmax_c1, rankmax_c)
+      call remove_dup_int_range(select_column, rankmax_c1, rankmax_c, nn)
 
       if (level == level_butterfly + 1) then
          header_m = msh%basis_group(group_m)%head

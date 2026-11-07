@@ -3455,6 +3455,30 @@ contains
       enddo
    end subroutine remove_dup_int
 
+   !>**** remove_dup_int for values that lie in 1..nmax: the same sorted,
+   !> distinct output, by marking instead of a real(8) sort of all nin
+   subroutine remove_dup_int_range(array, nin, nout, nmax)
+      implicit none
+      integer nin, nout, nmax
+      integer array(nin)
+      logical, allocatable :: seen(:)
+      integer ii
+
+      allocate (seen(nmax))
+      seen = .false.
+      do ii = 1, nin
+         seen(array(ii)) = .true.
+      enddo
+      nout = 0
+      do ii = 1, nmax
+         if (seen(ii)) then
+            nout = nout + 1
+            array(nout) = ii
+         endif
+      enddo
+      deallocate (seen)
+   end subroutine remove_dup_int_range
+
    subroutine binary_search(N, x, val, mid)
 
       implicit none
