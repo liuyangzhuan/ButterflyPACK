@@ -1136,12 +1136,18 @@ void extract_compressed_blocks(
     const auto& rg = p.rg;
     const auto& cg = p.cg;
 
-    // ---- the source: each task on the owner of its row side's box, the
-    // values per task (on the device: task i's at packed + packed_at[i])
+    // ---- the source: each task on the owner of its row side's box, its
+    // values at packed + packed_at[i].  `packed` holds them grouped by the
+    // rank they go to (group r at [dest_start[r], dest_start[r + 1]), each in
+    // task order), so the route sends them from where they are: through
+    // per-rank buffers they were copied four times on the way (Poisson 400^3,
+    // 64 ranks: 3.4 GB a rank for one front's F22).  Not zero-filled: every
+    // value is written before it is sent.
     std::vector<std::vector<DataType>> values(tasks.size());
     bool on_device = false;
-    std::vector<DataType> packed;
+    fmm::HostBuffer<DataType> packed;
     std::vector<int64_t> packed_at;
+    std::vector<int64_t> dest_start(static_cast<size_t>(csize) + 1, 0);
     if (tree != nullptr) {
         auto& vectors = p.vectors;
         // ---- the column sides' vectors to the row sides' owners, by level
@@ -1187,6 +1193,29 @@ void extract_compressed_blocks(
         for (size_t i = 0; i < tasks.size(); ++i) {
             if (tasks[i].computer == srank) mine.push_back(i);
         }
+        // their places in `packed` (where a task's values land changes, not
+        // what is computed or in which order)
+        packed_at.assign(tasks.size(), -1);
+        std::vector<int64_t> at(mine.size());
+        for (size_t i : mine) {
+            const Task& task = tasks[i];
+            dest_start[static_cast<size_t>(owner[static_cast<size_t>(task.inter)]) + 1] +=
+                p.row_count(task.rgroup) * p.col_count(task.cgroup);
+        }
+        for (int r = 0; r < csize; ++r) dest_start[static_cast<size_t>(r) + 1] += dest_start[static_cast<size_t>(r)];
+        {
+            std::vector<int64_t> fill(dest_start.begin(), dest_start.end() - 1);
+            for (size_t q = 0; q < mine.size(); ++q) {
+                const Task& task = tasks[mine[q]];
+                int64_t& f = fill[static_cast<size_t>(owner[static_cast<size_t>(task.inter)])];
+                at[q] = f;
+                packed_at[mine[q]] = f;
+                f += p.row_count(task.rgroup) * p.col_count(task.cgroup);
+            }
+        }
+        const int64_t total = dest_start[static_cast<size_t>(csize)];
+        packed.resize(static_cast<size_t>(std::max<int64_t>(total, 1)));
+        (void)at;
 #ifdef H2_HAVE_GPU
         // Over several ranks, on the device unless H2_extract asks for the
         // host: the tasks' values from the blocks the compression kept there,
@@ -1194,16 +1223,6 @@ void extract_compressed_blocks(
         // these calls were 51 s of a rank's factorization, 9 of them the
         // host's compute).  One rank's calls took the device path above.
         if (extract_mode != 2 && csize > 1 && !mine.empty()) {
-            packed_at.assign(tasks.size(), -1);
-            std::vector<int64_t> at(mine.size());
-            int64_t total = 0;
-            for (size_t q = 0; q < mine.size(); ++q) {
-                const Task& task = tasks[mine[q]];
-                at[q] = total;
-                packed_at[mine[q]] = total;
-                total += p.row_count(task.rgroup) * p.col_count(task.cgroup);
-            }
-            packed.resize(static_cast<size_t>(std::max<int64_t>(total, 1)));
             std::string why;
             on_device = tasks_on_device(p, mine, remote, at, total, packed.data(), why);
             if (!on_device && extract_mode == 1 && srank == 0) {
@@ -1295,29 +1314,60 @@ void extract_compressed_blocks(
             }
         }
         if (failure) std::rethrow_exception(failure);
-        if (!on_device)
+        if (!on_device) {
             for (size_t i : mine) profile.entries_computed += static_cast<double>(values[i].size());
+            // (the host's values into their places, as the device writes them)
+            const int64_t nmine = static_cast<int64_t>(mine.size());
+#pragma omp parallel for schedule(dynamic)
+            for (int64_t q = 0; q < nmine; ++q) {
+                const size_t i = mine[static_cast<size_t>(q)];
+                std::copy(values[i].begin(), values[i].end(), packed.begin() + packed_at[i]);
+                std::vector<DataType>().swap(values[i]);
+            }
+        }
         lap(fmm::ExtractionProfile::kCompute);
     }
 
     // ---- the blocks to their owners: per task, its intersection, row and
-    // column groups, then its values
+    // column groups (in each group's order); the values from `packed`, each
+    // rank's group to it, this rank's own read where it is
     std::vector<std::vector<int64_t>> meta(static_cast<size_t>(csize));
-    std::vector<std::vector<DataType>> data(static_cast<size_t>(csize));
     for (size_t i = 0; i < tasks.size(); ++i) {
         const Task& task = tasks[i];
         if (task.computer != srank) continue;
         const int to = owner[static_cast<size_t>(task.inter)];
         meta[static_cast<size_t>(to)].insert(meta[static_cast<size_t>(to)].end(), {task.inter, task.rgroup, task.cgroup});
-        const size_t nv = on_device ? static_cast<size_t>(p.row_count(task.rgroup) * p.col_count(task.cgroup))
-                                    : values[i].size();
-        const DataType* v = on_device ? packed.data() + packed_at[i] : values[i].data();
-        data[static_cast<size_t>(to)].insert(data[static_cast<size_t>(to)].end(), v, v + nv);
-        profile.bytes_routed += static_cast<double>(nv * sizeof(DataType));
+        profile.bytes_routed +=
+            static_cast<double>(p.row_count(task.rgroup) * p.col_count(task.cgroup)) * sizeof(DataType);
     }
+    if (packed.empty()) packed.resize(1);  // (outside the source: nothing to send, from a valid buffer)
     lap(fmm::ExtractionProfile::kPack);
     const auto rmeta = exchange(caller_comm, meta, MPI_INT64_T, &profile.route_mpi);
-    const auto rdata = exchange(caller_comm, data, p.value_type, &profile.route_mpi);
+    // the values' counts follow from the records: every caller rank holds the
+    // same row and column groups
+    std::vector<int> sc(static_cast<size_t>(csize)), sd(static_cast<size_t>(csize)), rc(static_cast<size_t>(csize)),
+        rd(static_cast<size_t>(csize));
+    int64_t rtotal = 0;
+    for (int r = 0; r < csize; ++r) {
+        const size_t q = static_cast<size_t>(r);
+        sc[q] = r == crank ? 0 : checked_count(static_cast<size_t>(dest_start[q + 1] - dest_start[q]), "a message");
+        sd[q] = checked_count(static_cast<size_t>(dest_start[q]), "a send buffer");
+        int64_t c = 0;
+        if (r != crank) {
+            const auto& mv = rmeta[q];
+            for (size_t mi = 0; mi + 3 <= mv.size(); mi += 3) c += p.row_count(mv[mi + 1]) * p.col_count(mv[mi + 2]);
+        }
+        rc[q] = checked_count(static_cast<size_t>(c), "a message");
+        rd[q] = checked_count(static_cast<size_t>(rtotal), "a receive buffer");
+        rtotal += c;
+    }
+    fmm::HostBuffer<DataType> rbuf(static_cast<size_t>(std::max<int64_t>(rtotal, 1)));
+    {
+        const double t_mpi = MPI_Wtime();
+        MPI_Alltoallv(packed.data(), sc.data(), sd.data(), p.value_type, rbuf.data(), rc.data(), rd.data(), p.value_type,
+                      caller_comm);
+        profile.route_mpi += MPI_Wtime() - t_mpi;
+    }
     lap(fmm::ExtractionProfile::kRoute);
     std::vector<int64_t> base(static_cast<size_t>(ninter), -1);
     int64_t expected = 0;
@@ -1326,26 +1376,45 @@ void extract_compressed_blocks(
         base[static_cast<size_t>(n)] = expected;
         expected += static_cast<int64_t>(rowidx[n]) * colidx[n];
     }
-    int64_t written = 0;
+    // the records and where each one's values are, then a record at a time
+    // in parallel: each writes entries of its own
+    struct Received {
+        int64_t n, a, b;
+        const DataType* v;
+    };
+    std::vector<Received> received;
     for (int from = 0; from < csize; ++from) {
         const auto& mv = rmeta[static_cast<size_t>(from)];
-        const auto& dv = rdata[static_cast<size_t>(from)];
-        size_t di = 0;
+        const DataType* v = from == crank ? packed.data() + dest_start[static_cast<size_t>(crank)]
+                                          : rbuf.data() + rd[static_cast<size_t>(from)];
         for (size_t mi = 0; mi + 3 <= mv.size(); mi += 3) {
-            const int64_t n = mv[mi], a = mv[mi + 1], b = mv[mi + 2];
-            if (base[static_cast<size_t>(n)] < 0) throw std::logic_error("extract_compressed_blocks: a block for another rank");
-            const int64_t nr = p.row_count(a), nc = p.col_count(b);
-            for (int64_t j = 0; j < nc; ++j) {
-                const int64_t col = cg.perm[static_cast<size_t>(cg.start[static_cast<size_t>(b)] + j)] - p.col_offset[static_cast<size_t>(n)];
-                for (int64_t i = 0; i < nr; ++i) {
-                    const int64_t row = rg.perm[static_cast<size_t>(rg.start[static_cast<size_t>(a)] + i)] - p.row_offset[static_cast<size_t>(n)];
-                    alldat_loc[base[static_cast<size_t>(n)] + row + col * rowidx[n]] = dv[di + static_cast<size_t>(i + j * nr)];
-                }
-            }
-            di += static_cast<size_t>(nr * nc);
-            written += nr * nc;
+            received.push_back({mv[mi], mv[mi + 1], mv[mi + 2], v});
+            v += p.row_count(mv[mi + 1]) * p.col_count(mv[mi + 2]);
         }
     }
+    const int64_t nreceived = static_cast<int64_t>(received.size());
+    int64_t written = 0;
+    bool foreign = false;
+#pragma omp parallel for schedule(dynamic, 8) reduction(+ : written) reduction(|| : foreign)
+    for (int64_t k = 0; k < nreceived; ++k) {
+        const Received& rec = received[static_cast<size_t>(k)];
+        const int64_t n = rec.n, at = base[static_cast<size_t>(n)];
+        if (at < 0) {
+            foreign = true;
+            continue;
+        }
+        const int64_t nr = p.row_count(rec.a), nc = p.col_count(rec.b);
+        const int64_t r0 = rg.start[static_cast<size_t>(rec.a)], c0 = cg.start[static_cast<size_t>(rec.b)];
+        const int64_t ro = p.row_offset[static_cast<size_t>(n)], co = p.col_offset[static_cast<size_t>(n)];
+        const int64_t ld = rowidx[n];
+        for (int64_t j = 0; j < nc; ++j) {
+            DataType* out = alldat_loc + at + (cg.perm[static_cast<size_t>(c0 + j)] - co) * ld;
+            const DataType* in = rec.v + j * nr;
+            for (int64_t i = 0; i < nr; ++i) out[rg.perm[static_cast<size_t>(r0 + i)] - ro] = in[i];
+        }
+        written += nr * nc;
+    }
+    if (foreign) throw std::logic_error("extract_compressed_blocks: a block for another rank");
     if (written != expected) {
         throw std::logic_error("extract_compressed_blocks: " + std::to_string(written) + " of " +
                                std::to_string(expected) + " entries received");
