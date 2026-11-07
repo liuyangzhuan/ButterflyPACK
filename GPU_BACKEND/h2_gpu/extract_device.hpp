@@ -20,7 +20,10 @@
 //
 // One rank of the caller's communicator only (every intersection is then this
 // rank's, so there is no routing and the output image is written in place and
-// downloaded once).  That is the case the cost sits in: a STRUMPACK H2 front
+// downloaded once; or, for a caller that keeps its blocks on the device --
+// c_bpack_extractelement_device, a four-block STRUMPACK front's H2 F11 and
+// F22 -- each value added straight into its place there, nothing
+// downloaded).  That is the case the cost sits in: a STRUMPACK H2 front
 // builds its children's contribution blocks on self communicators, and those
 // calls are 32.1 s of the 65.2 s a rank the F22 compression takes at 200^3.
 // A call over several ranks falls back to the host path, which still routes
@@ -85,6 +88,10 @@ struct ExtractDeviceTask {
     int nr = 0, nc = 0;
     int64_t out_at = 0;  // the intersection's first entry of the output
     int64_t out_ld = 0;  // its rows
+    // a caller's device block instead (c_bpack_extractelement_device): the
+    // task's entries added there, out_ld its leading dimension, and orow /
+    // ocol already its rows and columns
+    void* out_ptr = nullptr;
     int rvec = -1;       // far: the row and column sides' vector blocks
     int cvec = -1;
     int64_t orow = 0, ocol = 0;  // the output's rows and columns
@@ -206,9 +213,12 @@ private:
 }  // namespace extract_device_detail
 
 // The request's values into `out` (the host's layout, request.entries of
-// them).  Returns false, having written nothing, when the store cannot serve
-// a task: the caller then runs the host path, and `why` says what stopped it
-// (an explicit H2_extract device must not fall back silently).
+// them), or, for the tasks with an out_ptr, added into the caller's device
+// blocks there (request.entries 0 and `out` unused when all of them have
+// one: nothing is downloaded).  Returns false, having written nothing, when
+// the store cannot serve a task: the caller then runs the host path, and
+// `why` says what stopped it (an explicit H2_extract device must not fall
+// back silently).
 template<typename CoordType, typename DataType>
 bool extract_compressed_blocks_device(ParallelTree<CoordType, DataType>* tree,
                                       const ExtractDeviceRequest<DataType>& request, DataType* out,
@@ -292,7 +302,8 @@ bool extract_compressed_blocks_device(ParallelTree<CoordType, DataType>* tree,
             const ExtractDeviceTask& task = request.tasks[q];
             if (!task.near || blocks[q].empty || task.nr == 0 || task.nc == 0) continue;
             BlockCopyItemT<S> it{};
-            it.out = d_out + task.out_at;
+            it.out = task.out_ptr != nullptr ? static_cast<S*>(task.out_ptr) : d_out + task.out_at;
+            it.add = task.out_ptr != nullptr ? 1 : 0;
             it.ors = 1;
             it.ocs = task.out_ld;
             it.out_rows = list(task.orow);
@@ -386,7 +397,8 @@ bool extract_compressed_blocks_device(ParallelTree<CoordType, DataType>* tree,
             apply.entries.push_back({reinterpret_cast<const DataType*>(ut), reinterpret_cast<const DataType*>(w),
                                      reinterpret_cast<DataType*>(g), task.nr, task.nc, rv.k, rv.k, rv.k, task.nr});
             BlockCopyItemT<S> it{};
-            it.out = d_out + task.out_at;
+            it.out = task.out_ptr != nullptr ? static_cast<S*>(task.out_ptr) : d_out + task.out_at;
+            it.add = task.out_ptr != nullptr ? 1 : 0;
             it.ors = 1;
             it.ocs = task.out_ld;
             it.out_rows = list(task.orow);

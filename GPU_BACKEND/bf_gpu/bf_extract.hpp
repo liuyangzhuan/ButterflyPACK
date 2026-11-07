@@ -80,6 +80,29 @@ struct ExtractScatter {
     int m = 0, n = 0;
 };
 
+// The same into a caller's device block instead (ExtractTargets): entry
+// (p, q) added into out[orow[p] + ocol[q] * ld], orow and ocol offsets in the
+// index array.  A block's entries in grid y's slices of it.
+struct ExtractScatterAdd {
+    int64_t src = 0;
+    void* out = nullptr;
+    int64_t ld = 0;
+    int64_t pos_r = 0, pos_c = 0, orow = 0, ocol = 0;
+    int m = 0, n = 0;
+};
+
+// Where a caller keeps its blocks on the device (c_bf_extractelement_device):
+// intersection k's block is added into out[k] (leading dimension ld[k]), its
+// row i into row rows[i] and its column j into column cols[j] there, rows and
+// cols stacked as the request's rows and columns are.
+template<typename T>
+struct ExtractTargets {
+    std::vector<T*> out;
+    std::vector<int64_t> ld;
+    const int* rows = nullptr;
+    const int* cols = nullptr;
+};
+
 // n elements from src + src_off to dst + dst_off: contiguous, or with
 // rows > 0 a rows x (n / rows) block into a matrix of leading dimension ld
 struct ExtractCopy {
@@ -97,6 +120,10 @@ void launch_extract_copies(const ExtractCopy* items, int count, const T* src, T*
 template<typename T>
 void launch_extract_scatter(const ExtractScatter* items, int count, const int* idx, const T* src, T* dst,
                             cudaStream_t stream);
+// (max_entries: the largest block's, which sizes the grid's y)
+template<typename T>
+void launch_extract_scatter_add(const ExtractScatterAdd* items, int count, int64_t max_entries, const int* idx,
+                                const T* src, cudaStream_t stream);
 
 // The leaves of a resident butterfly on one process: which leaf each row
 // and column is in and where each leaf starts.  Made at the first extraction
@@ -171,16 +198,18 @@ struct ExtractStage {
 
 // BF(I_k, J_k) for k < count: rowidx[k] rows from `rows` and colidx[k]
 // columns from `cols` (0-based, the butterfly's own order, stacked), into
-// `out` (host), the blocks stacked in order, each column major.  Returns
-// false when the device has no room for the partial products (nothing
-// written; the caller runs the host path).
+// `out` (host), the blocks stacked in order, each column major; or with
+// `targets` each block added into the caller's device block (out unused,
+// nothing downloaded).  Returns false when the device has no room for the
+// partial products (nothing written; the caller runs the host path).
 //
 // The planning is per intersection and runs in parallel over them: every
 // list below is flat, laid out by a counting pass and filled by a second.
 template<typename T>
 inline bool extract(const BfDevice<T>& bf, ExtractLeaves& leaves, int count, const int* rowidx, const int* colidx,
                     const int* rows, const int* cols, T* out, ExtractProfile& prof,
-                    fmm::gpu::MetaBuilder& meta, fmm::gpu::DeviceBuffer& meta_device) {
+                    fmm::gpu::MetaBuilder& meta, fmm::gpu::DeviceBuffer& meta_device,
+                    const ExtractTargets<T>* targets = nullptr) {
     using DataType = T;
     using ExtractStage = bf::gpu::ExtractStage<T>;
     using clock = std::chrono::steady_clock;
@@ -357,7 +386,7 @@ inline bool extract(const BfDevice<T>& bf, ExtractLeaves& leaves, int count, con
     for (int t = 1; t <= h + 1; ++t) dR[t] = take(R[t].total);
     for (int t = L + 1; t >= h + 1; --t) dW[t] = take(W[t].total);
     DataType* sorted = take(entries);
-    DataType* d_out = take(entries);
+    DataType* d_out = targets != nullptr ? nullptr : take(entries);
     if (!room) {
         for (auto& o : owned) heap.free(o.first);
         return false;
@@ -470,9 +499,11 @@ inline bool extract(const BfDevice<T>& bf, ExtractLeaves& leaves, int count, con
         u_at[k + 1] = u_at[k] + (ro[L][k + 1] - ro[L][k]);
     }
     const int nv = static_cast<int>(v_at[count]), nu = static_cast<int>(u_at[count]);
-    // the index array: V's local columns, U's local rows, pos_r, pos_c
+    // the index array: V's local columns, U's local rows, pos_r, pos_c (and
+    // with targets the caller's rows and columns)
     const int64_t idx_v = 0, idx_u = ncol, idx_pr = ncol + nrow, idx_pc = ncol + 2 * nrow;
-    const int64_t nindex = 2 * (nrow + ncol);
+    const int64_t idx_tr = 2 * (nrow + ncol), idx_tc = idx_tr + nrow;
+    const int64_t nindex = 2 * (nrow + ncol) + (targets != nullptr ? nrow + ncol : 0);
 
     // ---- the metadata image: laid out first (it may move while it grows),
     // then filled
@@ -486,7 +517,8 @@ inline bool extract(const BfDevice<T>& bf, ExtractLeaves& leaves, int count, con
     std::vector<Chunk> chunks;
     meta.clear();
     const size_t at_gather = meta.alloc(static_cast<size_t>(nv + nu) * sizeof(ExtractGather));
-    const size_t at_scatter = meta.alloc(static_cast<size_t>(count) * sizeof(ExtractScatter));
+    const size_t at_scatter = meta.alloc(static_cast<size_t>(count) *
+                                         (targets != nullptr ? sizeof(ExtractScatterAdd) : sizeof(ExtractScatter)));
     const size_t at_index = meta.alloc(static_cast<size_t>(nindex) * sizeof(int));
     for (size_t s = 0; s < stages.size(); ++s) {
         const int64_t n = static_cast<int64_t>(stages[s].size());
@@ -502,6 +534,7 @@ inline bool extract(const BfDevice<T>& bf, ExtractLeaves& leaves, int count, con
     }
     auto* gathers = reinterpret_cast<ExtractGather*>(meta.host(at_gather));
     auto* scatters = reinterpret_cast<ExtractScatter*>(meta.host(at_scatter));
+    auto* scatter_adds = reinterpret_cast<ExtractScatterAdd*>(meta.host(at_scatter));
     int* index = reinterpret_cast<int*>(meta.host(at_index));
 #pragma omp parallel for schedule(dynamic, 16)
     for (int k = 0; k < count; ++k) {
@@ -509,11 +542,13 @@ inline bool extract(const BfDevice<T>& bf, ExtractLeaves& leaves, int count, con
             const int64_t p = col_at[k] + q;
             index[idx_v + p] = scol[p] - leaves.col_head[cleaf[p]];
             index[idx_pc + p] = pos_c[p];
+            if (targets != nullptr) index[idx_tc + p] = targets->cols[p];
         }
         for (int64_t q = 0; q < rowidx[k]; ++q) {
             const int64_t p = row_at[k] + q;
             index[idx_u + p] = srow[p] - leaves.row_head[rleaf[p]];
             index[idx_pr + p] = pos_r[p];
+            if (targets != nullptr) index[idx_tr + p] = targets->rows[p];
         }
         int64_t g = v_at[k];
         for (int64_t ci = co[0][k]; ci < co[0][k + 1]; ++ci) {
@@ -537,13 +572,27 @@ inline bool extract(const BfDevice<T>& bf, ExtractLeaves& leaves, int count, con
             e.idx = idx_u + row_at[k] + run.start;
             gathers[g++] = e;
         }
-        ExtractScatter sc;
-        sc.src = sc.dst = out_at[k];
-        sc.m = rowidx[k];
-        sc.n = colidx[k];
-        sc.pos_r = idx_pr + row_at[k];
-        sc.pos_c = idx_pc + col_at[k];
-        scatters[k] = sc;
+        if (targets != nullptr) {
+            ExtractScatterAdd sa;
+            sa.src = out_at[k];
+            sa.out = targets->out[static_cast<size_t>(k)];
+            sa.ld = targets->ld[static_cast<size_t>(k)];
+            sa.m = rowidx[k];
+            sa.n = colidx[k];
+            sa.pos_r = idx_pr + row_at[k];
+            sa.pos_c = idx_pc + col_at[k];
+            sa.orow = idx_tr + row_at[k];
+            sa.ocol = idx_tc + col_at[k];
+            scatter_adds[k] = sa;
+        } else {
+            ExtractScatter sc;
+            sc.src = sc.dst = out_at[k];
+            sc.m = rowidx[k];
+            sc.n = colidx[k];
+            sc.pos_r = idx_pr + row_at[k];
+            sc.pos_c = idx_pc + col_at[k];
+            scatters[k] = sc;
+        }
     }
     double flops = 0.0;
 #pragma omp parallel for schedule(dynamic, 1) reduction(+ : flops)
@@ -600,9 +649,16 @@ inline bool extract(const BfDevice<T>& bf, ExtractLeaves& leaves, int count, con
             reinterpret_cast<DataType**>(pt + 2 * n), sz + 5 * (n + 1), static_cast<magma_int_t>(n), queue,
             c.max_m, c.max_n, std::max<magma_int_t>(c.max_k, 1));
     }
-    if (count > 0) launch_extract_scatter(reinterpret_cast<const ExtractScatter*>(dm + at_scatter), count,
-                                          reinterpret_cast<const int*>(dm + at_index), sorted, d_out, stream);
-    if (entries > 0) {
+    if (targets != nullptr) {
+        int64_t most = 0;
+        for (int k = 0; k < count; ++k) most = std::max(most, static_cast<int64_t>(rowidx[k]) * colidx[k]);
+        launch_extract_scatter_add(reinterpret_cast<const ExtractScatterAdd*>(dm + at_scatter), count, most,
+                                   reinterpret_cast<const int*>(dm + at_index), sorted, stream);
+    } else if (count > 0) {
+        launch_extract_scatter(reinterpret_cast<const ExtractScatter*>(dm + at_scatter), count,
+                               reinterpret_cast<const int*>(dm + at_index), sorted, d_out, stream);
+    }
+    if (targets == nullptr && entries > 0) {
         fmm::gpu::check_cuda(cudaMemcpyAsync(out, d_out, static_cast<size_t>(entries) * sizeof(DataType),
                                              cudaMemcpyDeviceToHost, stream), "bf extract download");
     }

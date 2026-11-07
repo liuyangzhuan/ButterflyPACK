@@ -1838,6 +1838,11 @@ struct ParallelTree {
     std::vector<CoordType> id_source_point_coords; ///< Retained global coordinates only for ID diagnostics
     std::vector<int64_t> id_source_point_order; ///< Global point indices in spatial Morton order
     std::vector<int64_t> id_source_leaf_offsets; ///< Point offsets for every finest-level Morton box
+    /// a compression-only H2's entry extraction (unstructured/extraction.hpp, plan_extraction): each local
+    /// leaf point's leaf box and its position there, by point id (-1: not on this rank); built at the first
+    /// extraction, as the leaf boxes do not change after the compression
+    std::vector<int64_t> extraction_leaf_box;
+    std::vector<int32_t> extraction_leaf_position;
 
     bool level_requests_CA(int level) const {
         return dimension != 1 &&

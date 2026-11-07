@@ -10,7 +10,9 @@
 #include <complex>
 #include <cstdint>
 #include <iostream>
+#include <climits>
 #include <limits>
+#include <stdexcept>
 #include <vector>
 #include <memory>
 #include <cstring>
@@ -2224,6 +2226,130 @@ void c_bpack_get_extraction_profile(double* vals) {
 #endif
 }
 
+#ifdef HAVE_MPI
+// For BF_extract_owned_gpu (BPACK_constr.f90): each intersection's rows
+// this rank computed - out: nloc[n] x nc[n], column major, stacked; local:
+// their positions among the intersection's nr[n] rows, stacked - to its
+// owner, rank owner[n] of comm, who places them in its block of alldat
+// (nr[n] x nc[n], column major, its own intersections' blocks in order).
+// Collective over comm.
+extern "C" void c_bf_route_owned_rows(int* fcomm, int* ninter, int* nr, int* nc, int* nloc, int* local, int* owner,
+                                      void* out, void* alldat) {
+  MPI_Comm comm = MPI_Comm_f2c(static_cast<MPI_Fint>(*fcomm));
+  try {  // (called from Fortran: nothing may unwind into it)
+  int P = 1, me = 0;
+  MPI_Comm_size(comm, &P);
+  MPI_Comm_rank(comm, &me);
+  const int64_t n = std::max(*ninter, 0);
+  const C_DT* vals = static_cast<const C_DT*>(out);
+  C_DT* dat = static_cast<C_DT*>(alldat);
+  // where each intersection's pieces are: its values in out, its local rows,
+  // and on its owner its block in alldat
+  std::vector<int64_t> out_at(static_cast<size_t>(n) + 1, 0), loc_at(out_at.size(), 0), blk_at(out_at.size(), -1);
+  int64_t own = 0;
+  for (int64_t k = 0; k < n; ++k) {
+    out_at[k + 1] = out_at[k] + static_cast<int64_t>(nloc[k]) * nc[k];
+    loc_at[k + 1] = loc_at[k] + nloc[k];
+    if (owner[k] == me) {
+      blk_at[k] = own;
+      own += static_cast<int64_t>(nr[k]) * nc[k];
+    }
+  }
+  // a piece's rows into its block: column j, row local[i] <- value (i, j)
+  auto place = [&](int64_t k, int m, const int* rows, const C_DT* v) {
+    C_DT* b = dat + blk_at[k];
+    const int64_t ld = nr[k];
+    for (int j = 0; j < nc[k]; ++j)
+      for (int i = 0; i < m; ++i) b[rows[i] + j * ld] = v[i + static_cast<int64_t>(j) * m];
+  };
+  // this rank's own pieces in place; the others' counted per destination
+  std::vector<int64_t> icnt(static_cast<size_t>(P), 0), vcnt(static_cast<size_t>(P), 0);
+  std::vector<int64_t> mine_k;
+  for (int64_t k = 0; k < n; ++k) {
+    if (nloc[k] == 0 || nc[k] == 0) continue;
+    if (owner[k] == me) mine_k.push_back(k);
+    else {
+      icnt[owner[k]] += 2 + nloc[k];
+      vcnt[owner[k]] += static_cast<int64_t>(nloc[k]) * nc[k];
+    }
+  }
+#pragma omp parallel for schedule(dynamic, 4)
+  for (size_t q = 0; q < mine_k.size(); ++q) {
+    const int64_t k = mine_k[q];
+    place(k, nloc[k], local + loc_at[k], vals + out_at[k]);
+  }
+  // the others: (intersection, rows, their positions) and the values, per
+  // destination in intersection order
+  std::vector<int64_t> isd(static_cast<size_t>(P) + 1, 0), vsd(isd.size(), 0);
+  for (int p = 0; p < P; ++p) {
+    isd[p + 1] = isd[p] + icnt[p];
+    vsd[p + 1] = vsd[p] + vcnt[p];
+  }
+  if (isd[P] > INT_MAX || vsd[P] > INT_MAX)
+    throw std::overflow_error("c_bf_route_owned_rows: a call's pieces exceed INT_MAX");
+  std::vector<int> ibuf(static_cast<size_t>(std::max<int64_t>(isd[P], 1)));
+  std::vector<C_DT> vbuf(static_cast<size_t>(std::max<int64_t>(vsd[P], 1)));
+  {
+    std::vector<int64_t> ip(isd.begin(), isd.end() - 1), vp(vsd.begin(), vsd.end() - 1);
+    for (int64_t k = 0; k < n; ++k) {
+      if (nloc[k] == 0 || nc[k] == 0 || owner[k] == me) continue;
+      const int d = owner[k];
+      ibuf[ip[d]++] = static_cast<int>(k);
+      ibuf[ip[d]++] = nloc[k];
+      std::copy(local + loc_at[k], local + loc_at[k + 1], ibuf.begin() + ip[d]);
+      ip[d] += nloc[k];
+      std::copy(vals + out_at[k], vals + out_at[k + 1], vbuf.begin() + vp[d]);
+      vp[d] += out_at[k + 1] - out_at[k];
+    }
+  }
+  std::vector<int> sc(P), sd(P), rc(P), rd(P), vsc(P), vsdi(P), vrc(P), vrd(P);
+  for (int p = 0; p < P; ++p) {
+    sc[p] = static_cast<int>(icnt[p]);
+    sd[p] = static_cast<int>(isd[p]);
+    vsc[p] = static_cast<int>(vcnt[p]);
+    vsdi[p] = static_cast<int>(vsd[p]);
+  }
+  MPI_Alltoall(sc.data(), 1, MPI_INT, rc.data(), 1, MPI_INT, comm);
+  MPI_Alltoall(vsc.data(), 1, MPI_INT, vrc.data(), 1, MPI_INT, comm);
+  int64_t ri = 0, rv = 0;
+  for (int p = 0; p < P; ++p) {
+    rd[p] = static_cast<int>(ri);
+    vrd[p] = static_cast<int>(rv);
+    ri += rc[p];
+    rv += vrc[p];
+  }
+  if (ri > INT_MAX || rv > INT_MAX) throw std::overflow_error("c_bf_route_owned_rows: received pieces exceed INT_MAX");
+  std::vector<int> irecv(static_cast<size_t>(std::max<int64_t>(ri, 1)));
+  std::vector<C_DT> vrecv(static_cast<size_t>(std::max<int64_t>(rv, 1)));
+  MPI_Datatype vt;
+  MPI_Type_contiguous(static_cast<int>(sizeof(C_DT)), MPI_BYTE, &vt);
+  MPI_Type_commit(&vt);
+  MPI_Alltoallv(ibuf.data(), sc.data(), sd.data(), MPI_INT, irecv.data(), rc.data(), rd.data(), MPI_INT, comm);
+  MPI_Alltoallv(vbuf.data(), vsc.data(), vsdi.data(), vt, vrecv.data(), vrc.data(), vrd.data(), vt, comm);
+  MPI_Type_free(&vt);
+  // the received pieces in place (each one's rows its own: no two write the
+  // same entry)
+  struct Piece { int64_t k, at_i, at_v; int m; };
+  std::vector<Piece> pieces;
+  for (int64_t a = 0, v = 0; a < ri;) {
+    const int64_t k = irecv[a], m = irecv[a + 1];
+    if (k < 0 || k >= n || owner[k] != me) throw std::logic_error("c_bf_route_owned_rows: a piece for another rank");
+    pieces.push_back({k, a + 2, v, static_cast<int>(m)});
+    a += 2 + m;
+    v += m * nc[k];
+  }
+#pragma omp parallel for schedule(dynamic, 4)
+  for (size_t q = 0; q < pieces.size(); ++q)
+    place(pieces[q].k, pieces[q].m, irecv.data() + pieces[q].at_i, vrecv.data() + pieces[q].at_v);
+  } catch (const std::exception& e) {
+    int rank = 0;
+    MPI_Comm_rank(comm, &rank);
+    std::cerr << "Error in c_bf_route_owned_rows on rank " << rank << ": " << e.what() << std::endl;
+    MPI_Abort(comm, 1);
+  }
+}
+#endif
+
 /* Inverse of c_bpack_input_to_internal, with the same batched layout. */
 void c_bpack_internal_to_input(
     F2Cptr* bmat, const int* nrhs,
@@ -3183,7 +3309,9 @@ void c_bpack_extractsketch_transpose_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* 
 }
 
 // c_bpack_extractelement_device: a partial factorization's blocks for a one-rank caller added into its device
-// outputs (extract_partial_blocks with PartialDeviceTargets); anything else declines (done = 0, nothing written).
+// outputs (extract_partial_blocks with PartialDeviceTargets), or a compression-only H2's built on the GPU
+// (extract_compressed_blocks_into_device; not with H2_extract 2, the host); anything else declines (done = 0,
+// nothing written).
 void c_bpack_extractelement_device(F2Cptr* bmat, F2Cptr* option, F2Cptr* ptree_caller, int* Ninter, int* Nallrows,
 	int* Nallcols, int* allrows, int* allcols, int* rowidx, int* colidx, void** dout, int64_t* ldo, int* drows,
 	int* dcols, void* stream, int* done) {
@@ -3198,13 +3326,49 @@ void c_bpack_extractelement_device(F2Cptr* bmat, F2Cptr* option, F2Cptr* ptree_c
   if (static_cast<int>(tmp) != 7) return;
   using H2Data = typename butterfly::fmm_data<C_DT>::type;
   butterfly::H2<double, H2Data>* h2 = h2_of<H2Data>(bmat);
-  if (h2 == nullptr || h2->build_state != butterfly::H2BuildState::RS_PARTIAL || h2->options.use_gpu == 0) return;
+  if (h2 == nullptr || h2->options.use_gpu == 0) return;
+  const bool compressed =
+    h2->build_state == butterfly::H2BuildState::H2_COMPRESSED && h2->options.unstructured == 1;
+  if (h2->build_state != butterfly::H2BuildState::RS_PARTIAL && !compressed) return;
   int fcomm = 0;
   c_bpack_get_comm(ptree_caller, &fcomm);
   MPI_Comm caller_comm = MPI_Comm_f2c(static_cast<MPI_Fint>(fcomm));
   int csize = 0;
   MPI_Comm_size(caller_comm, &csize);
   if (csize != 1) return;
+  if (compressed) {
+    const int mode = compressed_extract_of(option);
+    if (mode == 2) return;  // (H2_extract host: the caller's host path)
+    try {
+      const int ni = std::max(*Ninter, 0);
+      butterfly::color_unstructured::CompressedDeviceTargets<H2Data> tg;
+      tg.out.resize(static_cast<size_t>(ni));
+      tg.ld.assign(ldo, ldo + ni);
+      tg.row_off.assign(static_cast<size_t>(ni) + 1, 0);
+      tg.col_off.assign(static_cast<size_t>(ni) + 1, 0);
+      for (int n = 0; n < ni; ++n) {
+        tg.out[static_cast<size_t>(n)] = static_cast<H2Data*>(dout[n]);
+        tg.row_off[static_cast<size_t>(n) + 1] = tg.row_off[static_cast<size_t>(n)] + rowidx[n];
+        tg.col_off[static_cast<size_t>(n) + 1] = tg.col_off[static_cast<size_t>(n)] + colidx[n];
+      }
+      tg.rows.assign(drows, drows + tg.row_off.back());
+      tg.cols.assign(dcols, dcols + tg.col_off.back());
+      std::string why;
+      if (butterfly::color_unstructured::extract_compressed_blocks_into_device(h2, caller_comm, ni, allrows, allcols,
+                                                                              rowidx, colidx, tg, why)) {
+        *done = 1;
+      } else if (mode == 1) {
+        // an explicit request that cannot be served says so
+        std::printf("H2_extract device declined (device blocks), the caller's host path runs instead: %s\n",
+                    why.c_str());
+        std::fflush(stdout);
+      }
+    } catch (const std::exception& e) {
+      std::cerr << "Error in c_bpack_extractelement_device: " << e.what() << std::endl;
+      MPI_Abort(caller_comm, 1);
+    }
+    return;
+  }
   try {
     const int ni = std::max(*Ninter, 0);
     butterfly::color_unstructured::PartialDeviceTargets<H2Data> tg;

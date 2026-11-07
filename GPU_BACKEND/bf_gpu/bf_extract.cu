@@ -61,6 +61,27 @@ extract_scatter_kernel(const ExtractScatter* items, const int* idx, const DataTy
     }
 }
 
+// Thread blocks (x: the intersection, y: a slice of its entries): entry
+// (p, q) of the caller's block, the leaf-ordered one's (pos_r[p], pos_c[q]),
+// added into the caller's device block at (orow[p], ocol[q]).  Within a call
+// no two entries land on one place, so the adds need no atomics.
+template<typename DataType>
+__global__ void __launch_bounds__(kThreads)
+extract_scatter_add_kernel(const ExtractScatterAdd* items, const int* idx, const DataType* src) {
+    const ExtractScatterAdd s = items[blockIdx.x];
+    const int* pr = idx + s.pos_r;
+    const int* pc = idx + s.pos_c;
+    const int* tr = idx + s.orow;
+    const int* tc = idx + s.ocol;
+    DataType* out = static_cast<DataType*>(s.out);
+    const int64_t total = static_cast<int64_t>(s.m) * s.n;
+    const int64_t stride = static_cast<int64_t>(kThreads) * gridDim.y;
+    for (int64_t t = static_cast<int64_t>(blockIdx.y) * kThreads + threadIdx.x; t < total; t += stride) {
+        const int p = static_cast<int>(t % s.m), q = static_cast<int>(t / s.m);
+        out[tr[p] + static_cast<int64_t>(tc[q]) * s.ld] += src[s.src + pr[p] + static_cast<int64_t>(pc[q]) * s.m];
+    }
+}
+
 // One thread block per copy of n elements, contiguous or into a block.
 template<typename DataType>
 __global__ void __launch_bounds__(kThreads)
@@ -100,11 +121,25 @@ void launch_extract_scatter(const ExtractScatter* items, int count, const int* i
     check_launch("launch_extract_scatter");
 }
 
+template<typename DataType>
+void launch_extract_scatter_add(const ExtractScatterAdd* items, int count, int64_t max_entries, const int* idx,
+                                const DataType* src, cudaStream_t stream) {
+    if (count <= 0 || max_entries <= 0) return;
+    // a slice of 8 passes of a thread block each, up to grid y's limit
+    const int64_t per = static_cast<int64_t>(kThreads) * 8;
+    const unsigned slices = static_cast<unsigned>(std::min<int64_t>((max_entries + per - 1) / per, 65535));
+    extract_scatter_add_kernel<DataType><<<dim3(static_cast<unsigned>(count), slices), kThreads, 0, stream>>>(
+        items, idx, src);
+    check_launch("launch_extract_scatter_add");
+}
+
 // the double and the double complex libraries
 #define BF_EXTRACT_INSTANTIATE(T)                                                                                     \
     template void launch_extract_copies<T>(const ExtractCopy*, int, const T*, T*, cudaStream_t);                       \
     template void launch_extract_gather<T>(const ExtractGather*, int, const int*, const T*, T*, cudaStream_t);         \
-    template void launch_extract_scatter<T>(const ExtractScatter*, int, const int*, const T*, T*, cudaStream_t);
+    template void launch_extract_scatter<T>(const ExtractScatter*, int, const int*, const T*, T*, cudaStream_t);       \
+    template void launch_extract_scatter_add<T>(const ExtractScatterAdd*, int, int64_t, const int*, const T*,          \
+                                                cudaStream_t);
 BF_EXTRACT_INSTANTIATE(double)
 BF_EXTRACT_INSTANTIATE(fmm::gpu::dcomplex)
 #undef BF_EXTRACT_INSTANTIATE

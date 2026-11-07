@@ -4018,10 +4018,12 @@ contains
       call c_f_pointer(ker_Cptr, ker)
       !>**** a GPU evaluator registered for the butterfly (c_bf_set_gpu_*)
       !> gives its entries on the device: bound here, while the mesh still has
-      !> its points, and warmed up outside the construction's time
+      !> its points, and warmed up outside the construction's time.  Either
+      !> option asks for the GPU, as for BF_gpu_rankreveal_ok: a STRUMPACK H2
+      !> front's F12 and F21 carry H2_use_gpu and HODLR_use_gpu 0.
       ker%gpu_entries = c_null_ptr
       gpu_warm = 0
-      if (option%HODLR_use_gpu > 0 .and. BPACK_gpu_available()) then
+      if ((option%HODLR_use_gpu > 0 .or. option%H2_use_gpu > 0) .and. BPACK_gpu_available()) then
          if (allocated(msh%xyz)) then
             gpu_dim = size(msh%xyz, 1)
             call c_bf_gpu_entries(bf_Cptr, blocks%M, blocks%N, gpu_dim, c_loc(msh%xyz(1, lbound(msh%xyz, 2))), &
@@ -5367,6 +5369,22 @@ contains
          call c_bf_gpu_extract(block_Cptr, ptree_Cptr, Ninter, allrows, allcols, rowidx, colidx, pgidx, Npmap, &
                                pmaps, gpu_dat, Nalldat_loc, gpu_flops, gpu_info)
          if (gpu_info == 0) stats%Flop_Tmp = gpu_flops
+      endif
+      !>**** on several ranks, every intersection whole to one rank (1 x 1
+      !> grids): this rank's rows on the device, sent straight to the owners
+      !> (BF_extract_owned_gpu); the same choice on every rank of the group
+      if (gpu_info /= 0 .and. ptree%pgrp(blocks_o%pgno)%nproc > 1 .and. blocks_o%style /= 1) then
+         if (BF_gpu_extract_ok(blocks_o, option)) then
+            if (all(pmaps(:, 1) == 1) .and. all(pmaps(:, 2) == 1)) then
+               allocate (allrows1(max(sum(rowidx), 1)), allcols1(max(sum(colidx), 1)), pgidx1(max(Ninter, 1)))
+               if (sum(rowidx) > 0) allrows1(1:sum(rowidx)) = allrows(1:sum(rowidx))
+               if (sum(colidx) > 0) allcols1(1:sum(colidx)) = allcols(1:sum(colidx)) + blocks_o%M
+               if (Ninter > 0) pgidx1(1:Ninter) = pgidx(1:Ninter) + 1
+               call BF_extract_owned_gpu(blocks_o, ptree, msh, stats, Ninter, allrows1, allcols1, rowidx, colidx, &
+                                         pgidx1, Npmap, pmaps, alldat_loc, gpu_info)
+               deallocate (allrows1, allcols1, pgidx1)
+            endif
+         endif
       endif
 
       if (gpu_info /= 0) then

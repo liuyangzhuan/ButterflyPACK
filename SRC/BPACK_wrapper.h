@@ -185,8 +185,14 @@ void c_bpack_extractsketch_transpose_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* 
 void c_bpack_extractsketch_device(F2Cptr* bmat, F2Cptr* option, F2Cptr* ptree_caller, int* Nsketch, int* Nallrows, int* Nallcols, int64_t* Nallomega, int* allrows, int* allcols, int* rowidx, int* colidx, int* sketchdim, int* omegaidx, int* omega_row, int* omega_dest, double* omega_val, int* transposed, void** dout, int64_t* ldo, int* dcols, void* stream, int* done);
 // The same for a partial factorization's blocks (as c_bpack_extractelement_bridge, 1-based F22 indices): block n's
 // entry (i, j) added into dout[n] at (drows[r_n + i], dcols[c_n + j]) (0-based; r_n, c_n the earlier blocks' rowidx
-// and colidx summed).
+// and colidx summed).  A compression-only H2 built on the GPU serves it too (1-based indices of the matrix), unless
+// its H2_extract is 2 (the host).
 void c_bpack_extractelement_device(F2Cptr* bmat, F2Cptr* option, F2Cptr* ptree_caller, int* Ninter, int* Nallrows, int* Nallcols, int* allrows, int* allcols, int* rowidx, int* colidx, void** dout, int64_t* ldo, int* drows, int* dcols, void* stream, int* done);
+// A butterfly's blocks on one process (as c_bf_extractelement: 1-based rows 1..M and columns 1..N) added into a
+// caller's device blocks, as c_bpack_extractelement_device places them; done = 1 when added (complete on return), 0
+// when the device does not serve it (the GPU not asked for, a low-rank block, several processes, no device room;
+// nothing written).
+void c_bf_extractelement_device(F2Cptr* bf, F2Cptr* option, F2Cptr* ptree, int* Ninter, int* allrows, int* allcols, int* rowidx, int* colidx, void** dout, int64_t* ldo, int* drows, int* dcols, void* stream, int* done);
 void c_bpack_inv_mult_fortran(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* bmat,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);
 void c_bpack_inv_mult(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* bmat,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);
 /*

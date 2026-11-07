@@ -64,6 +64,7 @@ void c_bf_get_all2all_range(void* bf, void* ptree, int level, char mode_new, int
                             int* nr, int* idx_c, int* inc_c, int* nc);
 void c_bf_get_block_group(void* bf, void* ptree, int level, int index_i, int index_j, char mode,
                           int* nproc, int* comm, int* is_head);
+void c_bpack_getoption(void** option, char const* nam, double* val_d);
 }
 #endif
 
@@ -1855,6 +1856,70 @@ void c_bf_gpu_extract(void* bf, void* ptree, const int* ninter, const int* allro
   (void)pgidx; (void)npmap; (void)pmaps; (void)alldat_loc; (void)nalldat_loc;
   *flops = 0.0;
   *info = 1;
+#endif
+}
+
+// c_bf_extractelement_device (BPACK_wrapper.h): the entries of a list of
+// intersections of a butterfly on one process, added into a caller's device
+// blocks: block n into dout[n] (leading dimension ldo[n]), its row i into row
+// drows[.] and its column j into column dcols[.] there (stacked as allrows
+// and allcols, 0-based).  allrows / allcols: 1-based rows 1..M and columns
+// 1..N of the butterfly.  Complete on return.  *done 0, nothing written, when
+// the device does not serve it -- as C_BF_ExtractElement's own device path
+// (BF_gpu_extract_ok): the options do not ask for the GPU, a low-rank block,
+// a butterfly on several processes, or no device room -- and the caller
+// extracts on the host instead.
+void c_bf_extractelement_device(void** bf, void** option, void** ptree, int* ninter, int* allrows, int* allcols,
+                                int* rowidx, int* colidx, void** dout, int64_t* ldo, int* drows, int* dcols,
+                                void* stream, int* done) {
+  *done = 0;
+  (void)stream;  // (the backend's own stream, synchronized before return)
+#ifdef BPACK_BF_GPU_ENABLED
+  try {
+    if (bf == nullptr || *bf == nullptr || ptree == nullptr || *ptree == nullptr) return;
+    double h2gpu = 0.0, hodlrgpu = 0.0;
+    c_bpack_getoption(option, "H2_use_gpu", &h2gpu);
+    c_bpack_getoption(option, "HODLR_use_gpu", &hodlrgpu);
+    if (h2gpu <= 0.0 && hodlrgpu <= 0.0) return;
+    int is_head = 0, comm_f = 0, nproc = 1;
+    c_bf_get_sub_head(*bf, *ptree, &is_head, &comm_f, &nproc);
+    if (nproc != 1) return;
+    const int count = std::max(*ninter, 0);
+    int64_t nr = 0, nc = 0;
+    for (int k = 0; k < count; ++k) {
+      nr += rowidx[k];
+      nc += colidx[k];
+    }
+    bf::gpu::BfResident<BfScalar>* r = bf_resident(*bf, *ptree);
+    if (r == nullptr || r->dev.level_butterfly <= 0) return;
+    std::vector<int> rows(allrows, allrows + nr), cols(allcols, allcols + nc);
+    for (int& i : rows) i -= 1;
+    for (int& j : cols) j -= 1;
+    bf::gpu::ExtractTargets<BfScalar> tg;
+    tg.out.resize(static_cast<size_t>(count));
+    tg.ld.assign(ldo, ldo + count);
+    for (int k = 0; k < count; ++k) tg.out[static_cast<size_t>(k)] = static_cast<BfScalar*>(dout[k]);
+    tg.rows = drows;
+    tg.cols = dcols;
+    bf::gpu::ExtractProfile prof;
+    if (!bf::gpu::extract(r->dev, r->leaves, count, rowidx, colidx, rows.data(), cols.data(),
+                          static_cast<BfScalar*>(nullptr), prof, r->extract_meta, r->extract_meta_device, &tg)) {
+      return;  // no room on the device for the partial products
+    }
+    *done = 1;
+    if (fmm::env::trace("phase")) {
+      std::printf("BF GPU extract (device blocks): %d intersections, %lld entries, %lld GEMMs, %.3e flops: plan "
+                  "%.4f s, run %.4f s\n",
+                  count, static_cast<long long>(prof.entries), static_cast<long long>(prof.items), prof.flops,
+                  prof.plan, prof.run);
+      std::fflush(stdout);
+    }
+  } catch (const std::exception& e) {
+    gpu_fail("c_bf_extractelement_device", e.what());
+  }
+#else
+  (void)bf; (void)option; (void)ptree; (void)ninter; (void)allrows; (void)allcols; (void)rowidx; (void)colidx;
+  (void)dout; (void)ldo; (void)drows; (void)dcols;
 #endif
 }
 
