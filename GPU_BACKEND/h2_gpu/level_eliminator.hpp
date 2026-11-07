@@ -9612,6 +9612,15 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
     struct GenGroup { std::vector<size_t> gens; std::vector<size_t> off; size_t bytes = 0; size_t first_tr = 0; };
     std::vector<GenGroup> gen_groups;
     size_t gen_staging_max = 0;
+    // A symmetric generator too large to stage safely - above a group's
+    // budget and over half the largest free range, so its staging and its
+    // compression could not both be had - is transposed and compressed slot
+    // by slot straight from the received block instead (no staging, no raw
+    // copy; compress_fill_source_set's streamed path, the same packed bytes).
+    // The 900K Matern fit on raw coordinates, level 2 on 8 ranks: one 8.2 GB
+    // generator's staging took the room its compression needed, and the raw
+    // copy that follows found none (68.1 of 69.7 GB in use).
+    std::vector<size_t> streamed_gens;
     int max_tr_m = 0, max_tr_n = 0;
     for (size_t i = 0; i < gens.size(); ++i) {
         Gen& g = gens[i];
@@ -9674,8 +9683,12 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
         // One block a generator, all waiting on a single pass at the end, was
         // 1.18 GB of Color's level 4 at the peak.
         char* persist_t2t = nullptr;
+        const bool stream_it = compress_factors_ >= 1 && !nonsym_ && t_bytes > kFillStagingBudget &&
+                               2 * t_bytes > heap_.largest_free();
         if (compress_factors_ < 1) {
             persist_t2t = heap_.alloc_resident(std::max<size_t>(t_bytes, 1), ResidentKind::FillRaw);
+        } else if (stream_it) {
+            streamed_gens.push_back(i);
         } else {
             if (gen_groups.empty() || (gen_groups.back().bytes > 0 &&
                                        gen_groups.back().bytes + t_bytes > kFillStagingBudget)) {
@@ -9730,6 +9743,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
                                        static_cast<size_t>(g.r) * g.r * D, cudaMemcpyHostToDevice, stream),
                        "generator X_RR_full");
         }
+        if (stream_it) continue;  // (no transpose: its slots are transposed as they are compressed)
         transposes.push_back(TransposeItem{g.temp2, g.ntot, reinterpret_cast<S*>(persist_t2t), g.r, g.ntot, g.r});
         max_tr_m = std::max(max_tr_m, g.ntot);
         max_tr_n = std::max(max_tr_n, g.r);
@@ -10319,6 +10333,23 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
             heap_.free(gen_staging);
         }
         check_cuda(cudaStreamSynchronize(stream), "generator transposes");  // (the image is reused below)
+    }
+    // the streamed generators, now that the staging has gone back
+    if (!streamed_gens.empty()) {
+        std::vector<std::vector<int64_t>> counts(streamed_gens.size());
+        std::vector<FillSrcRef> items;
+        items.reserve(streamed_gens.size());
+        for (size_t si = 0; si < streamed_gens.size(); ++si) {
+            const Gen& g = gens[streamed_gens[si]];
+            if (g.st == nullptr || g.box == nullptr || g.r == 0 || g.ntot == 0) continue;
+            counts[si].assign(g.box->deferred_xnn_neighbor_point_counts.begin(),
+                              g.box->deferred_xnn_neighbor_point_counts.end());
+            FillSrcRef ref{nullptr, g.r, &counts[si], g.st};
+            ref.src = g.temp2;
+            ref.nt = g.ntot;
+            items.push_back(ref);
+        }
+        compress_fill_source_set(items, stream);  // (throws if one cannot be compressed even so)
     }
     if (nonsym_ && compress_factors_ >= 1) {
         // the generators packed in one store only (temp2^T found no room): a
