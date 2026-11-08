@@ -1974,7 +1974,19 @@ size_t build_ca_halo(ParallelTree<CoordType, DataType>* tree, int level, DeviceS
 template<typename CoordType, typename DataType>
 bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity, bool host_levels_allowed) {
     DeviceSolveStore& store = device_solve_store();
-    if (store.decided && store.tree == tree) return store.usable;
+    // Whether the set-up below is run is collective, not this rank's own
+    // business: begin_operator_build picks the operator it evicts from this
+    // rank's last_use and this rank's operator_bytes, both local, so two ranks
+    // of one operator can evict different operators and this store can be
+    // decided here and released there.  The set-up is collective on
+    // tree->comm (the Allreduces below), so a rank that returned at this
+    // guard while another ran it left that one waiting for a collective that
+    // never comes -- the first solve then hangs with no error, after the
+    // fronts whose ranks happened to agree have set up.  So agree first, and
+    // where any rank must redo it, every rank does.
+    int redo = (store.decided && store.tree == tree) ? 0 : 1;
+    MPI_Allreduce(MPI_IN_PLACE, &redo, 1, MPI_INT, MPI_MAX, tree->comm);
+    if (!redo) return store.usable;
     store.release_prepared();
     store.tree = tree;
     store.decided = true;
