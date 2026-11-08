@@ -3309,14 +3309,16 @@ void c_bpack_extractsketch_transpose_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* 
 }
 
 // c_bpack_inv_mult_device: c_bpack_inv_mult (format 7) on device vectors for
-// an H2 factorized on the GPU on one rank: xout = op(A)^{-1} xin, xin and xout
-// device memory (*Nloc x *Ncol at leading dimensions *ldx and *ldy, written
-// by the caller on `stream`; xout complete on return).  perm (may be null):
-// row i of the H2's input order is the caller's row perm[i] - 1 (1-based), of
-// xin and of xout.  done = 1 when solved, with the stats' Time_C_Mult, else
-// 0 and nothing written: several ranks, a partial or no factorization, no
-// device solve, 'C' of complex data.  The result is the host-vector call's
-// (fmm::gpu::device_vector_solve).
+// an H2 factorized on the GPU: xout = op(A)^{-1} xin, xin and xout device
+// memory (*Nloc x *Ncol at leading dimensions *ldx and *ldy, written by the
+// caller on `stream`; xout complete on return).  perm (may be null; the same
+// on every rank): row i of the H2's input order (global, 1-based entries) is
+// the caller's row perm[i] - 1, the caller's rows split over the ranks as the
+// input order's are, by rank (each rank's *Nloc).  Collective.  done = 1 when
+// solved, with the stats' Time_C_Mult (this rank's), else 0 on every rank and
+// nothing written: a partial or no factorization, no device solve, a
+// distributed64 handle on several ranks, 'C' of complex data.  The result is
+// the host-vector call's (fmm::gpu::device_vector_solve).
 void c_bpack_inv_mult_device(char const * trans, C_DT const * xin, int* ldx, C_DT* xout, int* ldy, int* Nloc,
 	int* Ncol, int const* perm, void* stream, F2Cptr* bmat, F2Cptr* option, F2Cptr* stats, F2Cptr* ptree,
 	int* done) {
@@ -3333,34 +3335,32 @@ void c_bpack_inv_mult_device(char const * trans, C_DT const * xin, int* ldx, C_D
   if (h2->build_state != butterfly::H2BuildState::RS_FACTORIZED) return;
   int csize = 0;
   MPI_Comm_size(h2->comm, &csize);
-  if (csize != 1 || *Ncol <= 0 || *Nloc < 0) return;
+  const auto* layout = h2->distributed_layout.get();
+  // (several ranks: the caller's ranks hold the internal order's counts, as
+  // a legacy handle's do; a distributed64 one's redistribution is declined)
+  if ((csize != 1 && layout != nullptr) || *Ncol <= 0 || *Nloc < 0) return;
   try {
     const char op = h2_trans_operation(trans, "c_bpack_inv_mult_device");
     if (op == 'C' && butterfly::is_complex_v<H2Data>) return;
     const double t0 = MPI_Wtime();
-    // the caller's row of each internal row
-    const auto* layout = h2->distributed_layout.get();
+    // one rank with a layout: the input slot of each internal row
     int64_t internal_nloc = *Nloc;
+    std::vector<int64_t> slots;
     if (layout != nullptr) {
       if (layout->size != 1 || layout->input_local_size != *Nloc) return;
       internal_nloc = layout->internal_local_size;
-    }
-    std::vector<int64_t> rows(static_cast<size_t>(internal_nloc));
-    if (layout != nullptr) {
       const auto& from = layout->forward_send_input_slots;
       const auto& to = layout->forward_recv_internal_slots;
       if (from.size() != to.size() || static_cast<int64_t>(to.size()) != internal_nloc) return;
-      for (size_t s = 0; s < to.size(); ++s) rows[static_cast<size_t>(to[s])] = from[s];
-    } else {
-      for (int64_t k = 0; k < internal_nloc; ++k) rows[static_cast<size_t>(k)] = k;
-    }
-    if (perm != nullptr) {
-      for (auto& r : rows) r = perm[r] - 1;
+      slots.resize(static_cast<size_t>(internal_nloc));
+      for (size_t s = 0; s < to.size(); ++s) slots[static_cast<size_t>(to[s])] = from[s];
     }
     std::string why;
     if (!fmm::gpu::device_vector_solve(h2->tree.get(), reinterpret_cast<const H2Data*>(xin), *ldx,
-                                       reinterpret_cast<H2Data*>(xout), *ldy, internal_nloc, *Ncol, rows,
-                                       h2_transposed(h2, op), static_cast<cudaStream_t>(stream), why)) {
+                                       reinterpret_cast<H2Data*>(xout), *ldy, internal_nloc, *Ncol, perm,
+                                       perm != nullptr ? static_cast<int64_t>(h2->options.N) : 0,
+                                       layout != nullptr ? &slots : nullptr, h2_transposed(h2, op),
+                                       static_cast<cudaStream_t>(stream), why)) {
       return;
     }
     double t = MPI_Wtime() - t0;

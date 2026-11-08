@@ -23,6 +23,9 @@
 // solve stay on the host: a level's vectors go to the device and back once
 // per sweep.  The arithmetic matches the host solve up to rounding (its
 // sums of neighbor updates follow the host's thread chunks).
+// device_vector_solve (at the end) runs the same sweeps on device vectors
+// instead: the hand-offs become row moves (other ranks' rows through the
+// pinned staging), and only the root's vector goes to the host.
 //
 // A replicated CA level (factored by the device's CA mode, GPU_CA_PLAN.md
 // M4b) runs the host CA solve's scheme instead: its level vector holds the
@@ -335,23 +338,47 @@ struct DeviceSolveStore {
     struct ResidentBlock { int level; int block; size_t pos, bytes; };
     std::vector<ResidentBlock> resident;             // what the ring holds now (a copy evicts what it overlaps)
     PinnedBuffer host_vec, host_out, host_in;  // staging of the solves (kept: pinning is slow)
-    // The solve on device vectors (device_vector_solve, one rank), from this
-    // preparation's layout: each level's vector length, the rows the level
-    // hand-offs move (up[l]: level l into l - 1 after its forward sweep;
+    // Rows that one hand-off of the solve on device vectors moves: those that
+    // stay on this rank (`local`), and those of other ranks: `pack` puts the
+    // rows this rank sends into its send buffer (d side: the peer's segment,
+    // to[q]'s at row sum(to_n[< q]), column stride to_n[q]), `unpack` takes
+    // the received ones from the receive buffer (s side: from[q]'s segment,
+    // laid out alike).  A matrix side (the caller's vectors) is the v side of
+    // a launch_solve_rows_matrix item, its row in pack_rows / local_rows.
+    struct RowExchange {
+        std::vector<int> to, from;
+        std::vector<int64_t> to_n, from_n;
+        int64_t nsend = 0, nrecv = 0;
+        SolveRowMove *local = nullptr, *pack = nullptr, *unpack = nullptr;
+        int64_t nlocal = 0, npack = 0, nunpack = 0;
+        int64_t *local_rows = nullptr, *pack_rows = nullptr;
+        // (the caller's rows only) the unpack items with their sides swapped:
+        // the output's pack, from the leaf into the send buffer
+        SolveRowMove* unpack_swapped = nullptr;
+    };
+    // The solve on device vectors (device_vector_solve), from this
+    // preparation's layout: each level's vector length (0 off its ranks),
+    // the level hand-offs (up[l]: level l into l - 1 after its forward sweep;
     // down[l]: l - 1 into l before its backward one), the leaf's rows in the
-    // internal order (their d sides), and the caller's row of each (the last
-    // call's, uploaded)
+    // internal order (the leaf vector's (vec, n, i) of each), the root when
+    // this rank holds it, and the caller's rows (`in`: the caller's input
+    // into the leaf; the output takes it backwards) for the caller's
+    // ordering last given (perm_host, slots_host: build_input_maps)
     struct VectorMaps {
-        bool built = false;
+        bool built = false, failed = false;
+        std::string why;  // (failed)
         std::vector<int64_t> points;
-        std::vector<SolveRowMove*> up, down;
-        std::vector<int64_t> nup, ndown;
-        SolveRowMove* leaf = nullptr;
-        int64_t nleaf = 0;
+        std::vector<RowExchange> up, down;
+        std::vector<SolveRowMove> leaf_rows;  // (host; d side the leaf vector)
+        bool root_here = false;
         int64_t root_n = 0, root_morton = 0;
-        std::vector<int64_t> rows_host;
-        int64_t* rows = nullptr;
-        std::vector<char*> blocks;  // (heap)
+        int64_t max_send = 0, max_recv = 0;  // the largest buffers, in rows
+        RowExchange in;
+        bool in_built = false;
+        std::vector<int64_t> starts;  // the ranks' first internal (and caller) rows
+        std::vector<int> perm_host;
+        std::vector<int64_t> slots_host;
+        std::vector<char*> blocks, in_blocks;  // (heap)
     } vmaps;
     // the kept factors into the operator's host boxes (materialize_host_factors,
     // set by the factorization that kept them): before an eviction
@@ -362,6 +389,7 @@ struct DeviceSolveStore {
     void release_prepared() {
         DeviceHeap& heap = DeviceHeap::instance();
         for (char* b : vmaps.blocks) heap.free(b);
+        for (char* b : vmaps.in_blocks) heap.free(b);
         vmaps = VectorMaps{};
         for (auto& lv : levels) {
             for (char* b : lv.blocks) heap.free(b);
@@ -3583,6 +3611,44 @@ public:
         check_cuda(cudaStreamSynchronize(stream_), "solve transfer");
         times.transfer += seconds_since(t0);
     }
+    // Rows between ranks (a device-vector hand-off): dsend's segments (to[q]:
+    // to_n[q] rows x nrhs, after those of to[< q]) to their ranks, written on
+    // the stream; the ranks' from[q] into drecv's, alike, queued on the
+    // stream on return.  Through the pinned staging, as the per-wave
+    // messages without CUDA-aware MPI (timed as their MPI).
+    void move_rows(const std::vector<int>& to, const std::vector<int64_t>& to_n, int64_t nsend, const S* dsend,
+                   const std::vector<int>& from, const std::vector<int64_t>& from_n, int64_t nrecv, S* drecv, int tag) {
+        const auto t0 = std::chrono::steady_clock::now();
+        S* h_out = static_cast<S*>(host_out_.reserve(std::max<int64_t>(nsend, 1) * nrhs_ * sizeof(S)));
+        S* h_in = static_cast<S*>(host_in_.reserve(std::max<int64_t>(nrecv, 1) * nrhs_ * sizeof(S)));
+        if (nsend > 0) {
+            check_cuda(cudaMemcpyAsync(h_out, dsend, static_cast<size_t>(nsend) * nrhs_ * sizeof(S),
+                                       cudaMemcpyDeviceToHost, stream_), "solve rows");
+        }
+        check_cuda(cudaStreamSynchronize(stream_), "solve rows");
+        std::vector<MPI_Request> reqs;
+        reqs.reserve(to.size() + from.size());
+        int64_t at = 0;
+        for (size_t q = 0; q < from.size(); ++q) {
+            reqs.emplace_back();
+            MPI_Irecv(h_in + at * nrhs_, static_cast<int>(from_n[q] * nrhs_ * kWords), MPI_DOUBLE, from[q], tag,
+                      tree_->comm, &reqs.back());
+            at += from_n[q];
+        }
+        at = 0;
+        for (size_t q = 0; q < to.size(); ++q) {
+            reqs.emplace_back();
+            MPI_Isend(h_out + at * nrhs_, static_cast<int>(to_n[q] * nrhs_ * kWords), MPI_DOUBLE, to[q], tag,
+                      tree_->comm, &reqs.back());
+            at += to_n[q];
+        }
+        MPI_Waitall(static_cast<int>(reqs.size()), reqs.data(), MPI_STATUSES_IGNORE);
+        if (nrecv > 0) {
+            check_cuda(cudaMemcpyAsync(drecv, h_in, static_cast<size_t>(nrecv) * nrhs_ * sizeof(S),
+                                       cudaMemcpyHostToDevice, stream_), "solve rows");
+        }
+        times.comm += seconds_since(t0);
+    }
 
     DeviceSolveTimes times;
 
@@ -4093,76 +4159,209 @@ bool run_device_solve(ParallelTree<CoordType, DataType>* tree,
 }
 
 // ---------------------------------------------------------------------------
-// The solve on device vectors (one rank)
+// The solve on device vectors
 // ---------------------------------------------------------------------------
 
-// A solve-data value that holds a position: (box << 32) + row, exact in a
-// double (boxes < 2^20).
+// A solve-data value that holds a position: (rank << 40) + (box << 20) + row,
+// exact in a double (ranks below 2^12, boxes and rows below 2^20).
+constexpr int kPositionBits = 20;
+
 template<typename DataType>
 double vector_code(const DataType& v) {
     if constexpr (std::is_same_v<DataType, double>) return v;
     else return v.real();
 }
 
-// The VectorMaps of the prepared store (one rank): the host solve's level
-// hand-offs (gather_skeleton_to_parent, scatter_solution_to_children) run once
-// on one column whose values are their own positions, so the device moves
-// are the host's rows by construction.  False, with `why`, when a level does
-// not fit them (an inactive level, a box count or size the device levels do
-// not have).
+inline double position_code(int rank, int64_t box, int64_t row) {
+    return static_cast<double>((static_cast<int64_t>(rank) << (2 * kPositionBits)) + (box << kPositionBits) + row);
+}
+
+struct SolvePosition {
+    int rank = 0;
+    int64_t box = 0, row = 0;
+};
+
+inline SolvePosition decode_position(double code) {
+    const int64_t c = static_cast<int64_t>(code);
+    const int64_t m = (int64_t{1} << kPositionBits) - 1;
+    return {static_cast<int>(c >> (2 * kPositionBits)), (c >> kPositionBits) & m, c & m};
+}
+
+// What this rank asks of each rank (asks[q]) in; what each rank asks of this
+// one out.  Collective over comm.
+inline std::vector<std::vector<int64_t>> swap_requests(MPI_Comm comm, const std::vector<std::vector<int64_t>>& asks) {
+    int size = 1;
+    MPI_Comm_size(comm, &size);
+    const size_t P = static_cast<size_t>(size);
+    std::vector<int> sc(P), rc(P), sd(P + 1, 0), rd(P + 1, 0);
+    for (size_t q = 0; q < P; ++q) sc[q] = static_cast<int>(asks[q].size());
+    MPI_Alltoall(sc.data(), 1, MPI_INT, rc.data(), 1, MPI_INT, comm);
+    for (size_t q = 0; q < P; ++q) {
+        sd[q + 1] = sd[q] + sc[q];
+        rd[q + 1] = rd[q] + rc[q];
+    }
+    std::vector<int64_t> sbuf(static_cast<size_t>(std::max(sd[P], 1))), rbuf(static_cast<size_t>(std::max(rd[P], 1)));
+    for (size_t q = 0; q < P; ++q) std::copy(asks[q].begin(), asks[q].end(), sbuf.begin() + sd[q]);
+    MPI_Alltoallv(sbuf.data(), sc.data(), sd.data(), MPI_INT64_T, rbuf.data(), rc.data(), rd.data(), MPI_INT64_T, comm);
+    std::vector<std::vector<int64_t>> asked(P);
+    for (size_t q = 0; q < P; ++q) asked[q].assign(rbuf.begin() + rd[q], rbuf.begin() + rd[q + 1]);
+    return asked;
+}
+
+// A hand-off's rows on the host: the local moves, the rows received (by
+// source rank: their d sides, in the order they come) and the rows sent (by
+// destination rank: their s sides, in the order the destination asked).
+struct RowExchangeHost {
+    std::vector<SolveRowMove> local;
+    std::vector<std::vector<SolveRowMove>> received, sent;
+    std::vector<int64_t> local_rows;
+    std::vector<std::vector<int64_t>> sent_rows;  // (the caller's rows only)
+    explicit RowExchangeHost(int size) : received(static_cast<size_t>(size)), sent(static_cast<size_t>(size)),
+                                         sent_rows(static_cast<size_t>(size)) {}
+};
+
+// Uploads a hand-off's rows into `ex` (RowExchange), the receive and send
+// buffers laid out by rank; the device arrays go to `blocks`.
+inline void upload_exchange(const RowExchangeHost& h, DeviceSolveStore::RowExchange& ex, std::vector<char*>& blocks,
+                            bool caller_rows) {
+    std::vector<SolveRowMove> pack, unpack;
+    std::vector<int64_t> pack_rows;
+    int64_t at = 0;
+    for (size_t q = 0; q < h.received.size(); ++q) {
+        const auto& r = h.received[q];
+        if (r.empty()) continue;
+        ex.from.push_back(static_cast<int>(q));
+        ex.from_n.push_back(static_cast<int64_t>(r.size()));
+        for (size_t k = 0; k < r.size(); ++k) {
+            SolveRowMove m = r[k];
+            m.svec = at;
+            m.sn = static_cast<int>(r.size());
+            m.si = static_cast<int>(k);
+            unpack.push_back(m);
+        }
+        at += static_cast<int64_t>(r.size());
+    }
+    ex.nrecv = at;
+    at = 0;
+    for (size_t q = 0; q < h.sent.size(); ++q) {
+        const auto& s = h.sent[q];
+        if (s.empty()) continue;
+        ex.to.push_back(static_cast<int>(q));
+        ex.to_n.push_back(static_cast<int64_t>(s.size()));
+        for (size_t k = 0; k < s.size(); ++k) {
+            SolveRowMove m = s[k];
+            m.dvec = at;
+            m.dn = static_cast<int>(s.size());
+            m.di = static_cast<int>(k);
+            pack.push_back(m);
+        }
+        if (caller_rows) pack_rows.insert(pack_rows.end(), h.sent_rows[q].begin(), h.sent_rows[q].end());
+        at += static_cast<int64_t>(s.size());
+    }
+    ex.nsend = at;
+    DeviceHeap& heap = DeviceHeap::instance();
+    auto put = [&](const void* data, size_t bytes) -> char* {
+        if (bytes == 0) return nullptr;
+        char* d = heap.alloc<char>(bytes);
+        blocks.push_back(d);
+        check_cuda(cudaMemcpy(d, data, bytes, cudaMemcpyHostToDevice), "device-vector solve maps");
+        return d;
+    };
+    ex.local = reinterpret_cast<SolveRowMove*>(put(h.local.data(), h.local.size() * sizeof(SolveRowMove)));
+    ex.pack = reinterpret_cast<SolveRowMove*>(put(pack.data(), pack.size() * sizeof(SolveRowMove)));
+    ex.unpack = reinterpret_cast<SolveRowMove*>(put(unpack.data(), unpack.size() * sizeof(SolveRowMove)));
+    ex.nlocal = static_cast<int64_t>(h.local.size());
+    ex.npack = static_cast<int64_t>(pack.size());
+    ex.nunpack = static_cast<int64_t>(unpack.size());
+    if (caller_rows) {
+        ex.local_rows = reinterpret_cast<int64_t*>(put(h.local_rows.data(), h.local_rows.size() * sizeof(int64_t)));
+        ex.pack_rows = reinterpret_cast<int64_t*>(put(pack_rows.data(), pack_rows.size() * sizeof(int64_t)));
+        std::vector<SolveRowMove> swapped(unpack.size());
+        for (size_t k = 0; k < unpack.size(); ++k) {
+            const SolveRowMove& m = unpack[k];
+            swapped[k] = {m.svec, m.dvec, m.sn, m.si, m.dn, m.di};
+        }
+        ex.unpack_swapped = reinterpret_cast<SolveRowMove*>(put(swapped.data(), swapped.size() * sizeof(SolveRowMove)));
+    }
+}
+
+// The VectorMaps of the prepared store: the host solve's level hand-offs
+// (gather_skeleton_to_parent, scatter_solution_to_children, with their
+// process reductions) run once on one column whose values are their own
+// positions (rank, box, row), so the device moves are the host's rows by
+// construction; a row from another rank is asked of it (swap_requests), so
+// both ends order it alike.  Collective over the tree's ranks, as the host
+// hand-offs are, and so is its outcome: false on every rank, with `why`
+// (and VectorMaps::failed, not tried again), when a level does not fit on
+// any (a CA or host level, a box count or size the device levels do not
+// have, too many ranks).
 template<typename CoordType, typename DataType>
 bool build_vector_maps(ParallelTree<CoordType, DataType>* tree, DeviceSolveStore& store, std::string& why) {
     auto& vm = store.vmaps;
     if (vm.built) return true;
-    const int nl = tree->num_levels, leaf = nl - 1;
-    if (nl < 1) {
-        why = "no levels";
+    if (vm.failed) {
+        why = vm.why;
         return false;
     }
-    std::vector<std::vector<SolveDataRequest<CoordType, DataType>>> sd(static_cast<size_t>(nl));
+    int me = 0, size = 1;
+    MPI_Comm_rank(tree->comm, &me);
+    MPI_Comm_size(tree->comm, &size);
+    const int nl = tree->num_levels, leaf = nl - 1;
+    std::string err;  // (this rank's first; the collective pattern runs on regardless)
+    auto fail = [&](const std::string& what) {
+        if (err.empty()) err = what;
+    };
+    const int64_t limit = int64_t{1} << kPositionBits;
+    if (nl < 1) fail("no levels");
+    if (size >= (1 << 12)) fail("over 4096 ranks");
+    for (int level = 2; level < nl; ++level) {
+        if (static_cast<size_t>(level) >= store.levels.size()) {
+            fail("a level without device tables");
+            break;
+        }
+        const DeviceSolveLevel& L = store.levels[static_cast<size_t>(level)];
+        if (L.ca || L.host) fail("a CA or host level");
+    }
+    const size_t NL = static_cast<size_t>(std::max(nl, 0));
+    std::vector<std::vector<SolveDataRequest<CoordType, DataType>>> sd(NL);
     for (int level = 0; level < nl; ++level) {
         auto& tl = tree->levels[static_cast<size_t>(level)];
-        if (!tl.is_process_active) {
-            why = "an inactive level";
-            return false;
-        }
-        if (tl.num_boxes_local >= (int64_t{1} << 20)) {
-            why = "over 2^20 boxes a level";
-            return false;
-        }
+        if (!tl.is_process_active) continue;
+        if (tl.num_boxes_local >= limit) fail("over 2^20 boxes a level");
         sd[static_cast<size_t>(level)].resize(static_cast<size_t>(tl.num_boxes_local));
         for (int64_t b = 0; b < tl.num_boxes_local; ++b) {
             const auto& box = tl.local_boxes[static_cast<size_t>(b)];
-            sd[static_cast<size_t>(level)][static_cast<size_t>(b)].initialize(box.morton_index, 0, box.num_points, 1);
+            if (box.num_points >= limit) fail("a box of over 2^20 points");
+            sd[static_cast<size_t>(level)][static_cast<size_t>(b)].initialize(box.morton_index, me, box.num_points, 1);
         }
     }
     // a level's layout: a device level's boxes (vec, n), else its boxes in order
-    std::vector<std::vector<int64_t>> vec(static_cast<size_t>(nl)), len(static_cast<size_t>(nl));
-    vm.points.assign(static_cast<size_t>(nl), 0);
-    auto layout = [&](int level) -> bool {
+    std::vector<std::vector<int64_t>> vec(NL), len(NL);
+    vm.points.assign(NL, 0);
+    auto layout = [&](int level) {
         auto& data = sd[static_cast<size_t>(level)];
         auto& v = vec[static_cast<size_t>(level)];
         auto& n = len[static_cast<size_t>(level)];
-        v.resize(data.size());
-        n.resize(data.size());
-        const bool device = level >= 2 && static_cast<size_t>(level) < store.levels.size();
-        if (device) {
+        v.assign(data.size(), 0);
+        n.assign(data.size(), 0);
+        if (level >= 2 && static_cast<size_t>(level) < store.levels.size() &&
+            tree->levels[static_cast<size_t>(level)].is_process_active) {
             const DeviceSolveLevel& L = store.levels[static_cast<size_t>(level)];
             if (L.boxes.size() != data.size()) {
-                why = "level " + std::to_string(level) + ": " + std::to_string(L.boxes.size()) + " device boxes for " +
-                      std::to_string(data.size());
-                return false;
+                fail("level " + std::to_string(level) + ": " + std::to_string(L.boxes.size()) + " device boxes for " +
+                     std::to_string(data.size()));
+                return;
             }
             for (size_t b = 0; b < data.size(); ++b) {
                 if (L.boxes[b].n != data[b].num_points) {
-                    why = "level " + std::to_string(level) + ": a device box of another size";
-                    return false;
+                    fail("level " + std::to_string(level) + ": a device box of another size");
+                    return;
                 }
                 v[b] = L.boxes[b].vec;
                 n[b] = L.boxes[b].n;
             }
             vm.points[static_cast<size_t>(level)] = L.points;
-            return true;
+            return;
         }
         int64_t at = 0;
         for (size_t b = 0; b < data.size(); ++b) {
@@ -4171,135 +4370,256 @@ bool build_vector_maps(ParallelTree<CoordType, DataType>* tree, DeviceSolveStore
             at += n[b];
         }
         vm.points[static_cast<size_t>(level)] = at;
-        return true;
     };
     auto encode = [&](int level) {
         auto& data = sd[static_cast<size_t>(level)];
         for (size_t b = 0; b < data.size(); ++b) {
             for (int64_t i = 0; i < data[b].num_points; ++i) {
-                data[b].left_side[static_cast<size_t>(i)] = DataType(static_cast<double>((static_cast<int64_t>(b) << 32) + i));
+                data[b].left_side[static_cast<size_t>(i)] = DataType(position_code(me, static_cast<int64_t>(b), i));
             }
         }
     };
-    auto decode = [](const DataType& v, int64_t& b, int64_t& i) {
-        const int64_t c = static_cast<int64_t>(vector_code(v));
-        b = c >> 32;
-        i = c & 0xffffffffll;
+    // a position decoded from a hand-off's output, checked against the
+    // levels it can name (`here`: the source level's boxes on this rank)
+    auto decode = [&](const DataType& x, const std::vector<int64_t>& here, SolvePosition& p) -> bool {
+        p = decode_position(vector_code(x));
+        if (p.rank < 0 || p.rank >= size || p.box < 0 || p.row < 0) return false;
+        if (p.rank == me && static_cast<size_t>(p.box) >= here.size()) return false;
+        return true;
     };
-    if (!layout(leaf)) return false;
-    std::vector<std::vector<SolveRowMove>> up(static_cast<size_t>(nl)), down(static_cast<size_t>(nl));
+    // the rows other ranks asked of this one: the s sides on `level`
+    auto serve = [&](const std::vector<std::vector<int64_t>>& asked, int level, RowExchangeHost& h) {
+        const auto& v = vec[static_cast<size_t>(level)];
+        const auto& n = len[static_cast<size_t>(level)];
+        for (size_t q = 0; q < asked.size(); ++q) {
+            for (int64_t code : asked[q]) {
+                const int64_t b = code >> kPositionBits, i = code & (limit - 1);
+                if (b < 0 || static_cast<size_t>(b) >= v.size() || i >= n[static_cast<size_t>(b)]) {
+                    fail("a row asked of no box");
+                    continue;
+                }
+                h.sent[q].push_back({0, v[static_cast<size_t>(b)], 0, 0, static_cast<int>(n[static_cast<size_t>(b)]),
+                                     static_cast<int>(i)});
+            }
+        }
+    };
+    if (nl >= 1) layout(leaf);
+    std::vector<RowExchangeHost> up, down;
+    for (int level = 0; level < nl; ++level) {
+        up.emplace_back(size);
+        down.emplace_back(size);
+    }
+    // forward: level into level - 1
     for (int level = leaf; level >= 1; --level) {
-        encode(level);
-        gather_skeleton_to_parent(tree->levels[static_cast<size_t>(level)], tree->levels[static_cast<size_t>(level - 1)],
-                                  sd[static_cast<size_t>(level)], sd[static_cast<size_t>(level - 1)], tree->dimension,
-                                  tree->comm);
-        if (!layout(level - 1)) return false;
+        auto& child = tree->levels[static_cast<size_t>(level)];
+        auto& parent = tree->levels[static_cast<size_t>(level - 1)];
+        if (child.is_process_active) encode(level);
+        gather_skeleton_to_parent(child, parent, sd[static_cast<size_t>(level)], sd[static_cast<size_t>(level - 1)],
+                                  tree->dimension, tree->comm);
+        layout(level - 1);
+        RowExchangeHost& h = up[static_cast<size_t>(level)];
+        std::vector<std::vector<int64_t>> asks(static_cast<size_t>(size));
         const auto& parents = sd[static_cast<size_t>(level - 1)];
         for (size_t p = 0; p < parents.size(); ++p) {
             for (int64_t j = 0; j < parents[p].num_points; ++j) {
-                int64_t b = 0, i = 0;
-                decode(parents[p].left_side[static_cast<size_t>(j)], b, i);
-                if (b < 0 || static_cast<size_t>(b) >= sd[static_cast<size_t>(level)].size()) {
-                    why = "a gathered row of no box";
-                    return false;
+                SolvePosition s;
+                if (!decode(parents[p].left_side[static_cast<size_t>(j)], vec[static_cast<size_t>(level)], s)) {
+                    fail("a gathered row of no box");
+                    continue;
                 }
-                up[static_cast<size_t>(level)].push_back(
-                    {vec[static_cast<size_t>(level - 1)][p], vec[static_cast<size_t>(level)][static_cast<size_t>(b)],
-                     static_cast<int>(len[static_cast<size_t>(level - 1)][p]), static_cast<int>(j),
-                     static_cast<int>(len[static_cast<size_t>(level)][static_cast<size_t>(b)]), static_cast<int>(i)});
+                SolveRowMove m{vec[static_cast<size_t>(level - 1)][p], 0,
+                               static_cast<int>(len[static_cast<size_t>(level - 1)][p]), static_cast<int>(j), 0, 0};
+                if (s.rank == me) {
+                    m.svec = vec[static_cast<size_t>(level)][static_cast<size_t>(s.box)];
+                    m.sn = static_cast<int>(len[static_cast<size_t>(level)][static_cast<size_t>(s.box)]);
+                    m.si = static_cast<int>(s.row);
+                    h.local.push_back(m);
+                } else {
+                    h.received[static_cast<size_t>(s.rank)].push_back(m);
+                    asks[static_cast<size_t>(s.rank)].push_back((s.box << kPositionBits) + s.row);
+                }
             }
         }
+        serve(swap_requests(tree->comm, asks), level, h);
     }
-    if (sd[0].size() != 1) {
-        why = std::to_string(sd[0].size()) + " root boxes";
-        return false;
+    vm.root_here = nl >= 1 && tree->levels[0].is_process_active && !tree->levels[0].local_boxes.empty();
+    if (vm.root_here) {
+        if (sd[0].size() != 1) {
+            fail(std::to_string(sd[0].size()) + " root boxes");
+        } else {
+            vm.root_n = sd[0][0].num_points;
+            vm.root_morton = sd[0][0].morton_index;
+        }
     }
-    vm.root_n = sd[0][0].num_points;
-    vm.root_morton = sd[0][0].morton_index;
+    // backward: level - 1 into level
     for (int level = 1; level <= leaf; ++level) {
-        encode(level - 1);
-        for (auto& c : sd[static_cast<size_t>(level)]) std::fill(c.left_side.begin(), c.left_side.end(), DataType(-1.0));
-        scatter_solution_to_children(tree->levels[static_cast<size_t>(level)], tree->levels[static_cast<size_t>(level - 1)],
-                                     sd[static_cast<size_t>(level)], sd[static_cast<size_t>(level - 1)], tree->dimension,
-                                     tree->comm);
+        auto& child = tree->levels[static_cast<size_t>(level)];
+        auto& parent = tree->levels[static_cast<size_t>(level - 1)];
+        if (parent.is_process_active) encode(level - 1);
+        if (child.is_process_active) {
+            for (auto& c : sd[static_cast<size_t>(level)]) std::fill(c.left_side.begin(), c.left_side.end(), DataType(-1.0));
+        }
+        if (child.is_process_active || parent.is_process_active) {
+            scatter_solution_to_children(child, parent, sd[static_cast<size_t>(level)],
+                                         sd[static_cast<size_t>(level - 1)], tree->dimension, tree->comm);
+        }
+        RowExchangeHost& h = down[static_cast<size_t>(level)];
+        std::vector<std::vector<int64_t>> asks(static_cast<size_t>(size));
         const auto& children = sd[static_cast<size_t>(level)];
         for (size_t b = 0; b < children.size(); ++b) {
             for (int64_t i = 0; i < children[b].num_points; ++i) {
                 const DataType& x = children[b].left_side[static_cast<size_t>(i)];
                 if (vector_code(x) < 0.0) continue;
-                int64_t p = 0, j = 0;
-                decode(x, p, j);
-                if (p < 0 || static_cast<size_t>(p) >= sd[static_cast<size_t>(level - 1)].size()) {
-                    why = "a scattered row of no box";
-                    return false;
+                SolvePosition s;
+                if (!decode(x, vec[static_cast<size_t>(level - 1)], s)) {
+                    fail("a scattered row of no box");
+                    continue;
                 }
-                down[static_cast<size_t>(level)].push_back(
-                    {vec[static_cast<size_t>(level)][b], vec[static_cast<size_t>(level - 1)][static_cast<size_t>(p)],
-                     static_cast<int>(len[static_cast<size_t>(level)][b]), static_cast<int>(i),
-                     static_cast<int>(len[static_cast<size_t>(level - 1)][static_cast<size_t>(p)]), static_cast<int>(j)});
+                SolveRowMove m{vec[static_cast<size_t>(level)][b], 0, static_cast<int>(len[static_cast<size_t>(level)][b]),
+                               static_cast<int>(i), 0, 0};
+                if (s.rank == me) {
+                    m.svec = vec[static_cast<size_t>(level - 1)][static_cast<size_t>(s.box)];
+                    m.sn = static_cast<int>(len[static_cast<size_t>(level - 1)][static_cast<size_t>(s.box)]);
+                    m.si = static_cast<int>(s.row);
+                    h.local.push_back(m);
+                } else {
+                    h.received[static_cast<size_t>(s.rank)].push_back(m);
+                    asks[static_cast<size_t>(s.rank)].push_back((s.box << kPositionBits) + s.row);
+                }
+            }
+        }
+        serve(swap_requests(tree->comm, asks), level - 1, h);
+    }
+    vm.leaf_rows.clear();
+    if (nl >= 1) {
+        for (size_t b = 0; b < sd[static_cast<size_t>(leaf)].size(); ++b) {
+            for (int64_t i = 0; i < sd[static_cast<size_t>(leaf)][b].num_points; ++i) {
+                vm.leaf_rows.push_back({vec[static_cast<size_t>(leaf)][b], 0,
+                                        static_cast<int>(len[static_cast<size_t>(leaf)][b]), static_cast<int>(i), 0, 0});
             }
         }
     }
-    std::vector<SolveRowMove> rows;
-    for (size_t b = 0; b < sd[static_cast<size_t>(leaf)].size(); ++b) {
-        for (int64_t i = 0; i < sd[static_cast<size_t>(leaf)][b].num_points; ++i) {
-            rows.push_back({vec[static_cast<size_t>(leaf)][b], 0, static_cast<int>(len[static_cast<size_t>(leaf)][b]),
-                            static_cast<int>(i), 0, 0});
+    int ok = err.empty() ? 1 : 0;
+    MPI_Allreduce(MPI_IN_PLACE, &ok, 1, MPI_INT, MPI_MIN, tree->comm);
+    if (ok == 0) {
+        vm.failed = true;
+        vm.why = err.empty() ? "a level that does not fit on another rank" : err;
+        why = vm.why;
+        return false;
+    }
+    const int64_t nleaf = static_cast<int64_t>(vm.leaf_rows.size());
+    vm.starts.assign(static_cast<size_t>(size) + 1, 0);
+    MPI_Allgather(&nleaf, 1, MPI_INT64_T, vm.starts.data() + 1, 1, MPI_INT64_T, tree->comm);
+    for (int q = 0; q < size; ++q) vm.starts[static_cast<size_t>(q) + 1] += vm.starts[static_cast<size_t>(q)];
+    vm.up.assign(NL, {});
+    vm.down.assign(NL, {});
+    vm.max_send = vm.max_recv = 0;
+    for (int level = 1; level <= leaf; ++level) {
+        upload_exchange(up[static_cast<size_t>(level)], vm.up[static_cast<size_t>(level)], vm.blocks, false);
+        upload_exchange(down[static_cast<size_t>(level)], vm.down[static_cast<size_t>(level)], vm.blocks, false);
+        for (const auto* ex : {&vm.up[static_cast<size_t>(level)], &vm.down[static_cast<size_t>(level)]}) {
+            vm.max_send = std::max(vm.max_send, ex->nsend);
+            vm.max_recv = std::max(vm.max_recv, ex->nrecv);
         }
     }
-    DeviceHeap& heap = DeviceHeap::instance();
-    auto put = [&](const std::vector<SolveRowMove>& items) -> SolveRowMove* {
-        if (items.empty()) return nullptr;
-        char* d = heap.alloc<char>(items.size() * sizeof(SolveRowMove));
-        vm.blocks.push_back(d);
-        check_cuda(cudaMemcpy(d, items.data(), items.size() * sizeof(SolveRowMove), cudaMemcpyHostToDevice),
-                   "device-vector solve maps");
-        return reinterpret_cast<SolveRowMove*>(d);
-    };
-    vm.up.assign(static_cast<size_t>(nl), nullptr);
-    vm.down.assign(static_cast<size_t>(nl), nullptr);
-    vm.nup.assign(static_cast<size_t>(nl), 0);
-    vm.ndown.assign(static_cast<size_t>(nl), 0);
-    for (int level = 1; level <= leaf; ++level) {
-        vm.up[static_cast<size_t>(level)] = put(up[static_cast<size_t>(level)]);
-        vm.nup[static_cast<size_t>(level)] = static_cast<int64_t>(up[static_cast<size_t>(level)].size());
-        vm.down[static_cast<size_t>(level)] = put(down[static_cast<size_t>(level)]);
-        vm.ndown[static_cast<size_t>(level)] = static_cast<int64_t>(down[static_cast<size_t>(level)].size());
-    }
-    vm.leaf = put(rows);
-    vm.nleaf = static_cast<int64_t>(rows.size());
-    char* r = heap.alloc<char>(std::max<size_t>(rows.size(), 1) * sizeof(int64_t));
-    vm.blocks.push_back(r);
-    vm.rows = reinterpret_cast<int64_t*>(r);
-    vm.rows_host.clear();
     vm.built = true;
     return true;
 }
 
-// Y = A^{-1} X (transposed: A^{-T} X) on device vectors, one rank: the
-// solve's levels as run_device_solve sweeps them (the same kernels on the
-// same vectors), each level's vector kept on the device, the hand-offs
-// between levels by the moves of build_vector_maps, and only the root's
-// vector through the host for its LAPACK solve (apply_diagonal_solve, as
-// the device solve has it).  X and Y: device memory, nloc x nrhs at leading
-// dimensions ldx and ldy, row k of the internal order at the caller's row
-// rows[k]; X is ready once `caller_stream`'s work is done, Y is complete on
-// return.  False, nothing written and `why` set, when it does not apply (the
-// caller takes the host path): several ranks, no device solve, a CA or host
-// level, the solve check on.
-template<typename CoordType, typename DataType>
-bool device_vector_solve(ParallelTree<CoordType, DataType>* tree, const DataType* X, int64_t ldx, DataType* Y,
-                         int64_t ldy, int64_t nloc, int nrhs, const std::vector<int64_t>& rows, bool transposed,
-                         cudaStream_t caller_stream, std::string& why) {
-    using S = typename DeviceScalar<DataType>::type;
-    int size = 1;
-    MPI_Comm_size(tree->comm, &size);
-    if (size != 1) {
-        why = "several ranks";
+// The caller's rows (VectorMaps::in) for its ordering: internal row k of
+// rank q is the input row t = starts[q] + (slots ? slots[k] : k) (slots: one
+// rank only), the caller's row c = perm[t] - 1 (t without perm), held by
+// the rank whose range of starts holds c (the caller's ranks hold as many
+// rows as the internal order's).  Every rank sees the whole ordering and
+// derives every rank's rows, so it takes no messages.  False, with `why`,
+// when it is not a permutation of the rows.
+inline bool build_input_maps(DeviceSolveStore& store, int me, const int* perm, int64_t nperm,
+                             const std::vector<int64_t>* slots, std::string& why) {
+    auto& vm = store.vmaps;
+    DeviceHeap& heap = DeviceHeap::instance();
+    for (char* b : vm.in_blocks) heap.free(b);
+    vm.in_blocks.clear();
+    vm.in = DeviceSolveStore::RowExchange{};
+    vm.in_built = false;
+    const int size = static_cast<int>(vm.starts.size()) - 1;
+    const int64_t N = vm.starts.back();
+    const int64_t mine = vm.starts[static_cast<size_t>(me)];
+    const int64_t nleaf = static_cast<int64_t>(vm.leaf_rows.size());
+    if ((perm != nullptr && nperm != N) || (slots != nullptr && (size != 1 || static_cast<int64_t>(slots->size()) != nleaf))) {
+        why = "an ordering of another size";
         return false;
     }
-    if (nrhs <= 0 || static_cast<int64_t>(rows.size()) != nloc) {
-        why = "the rows and the vectors' rows differ";
+    auto owner = [&](int64_t row) {
+        return static_cast<int>(std::upper_bound(vm.starts.begin(), vm.starts.end(), row) - vm.starts.begin()) - 1;
+    };
+    RowExchangeHost h(size);
+    std::vector<char> seen(static_cast<size_t>(std::max<int64_t>(N, 1)), 0);
+    int q = 0;
+    for (int64_t t = 0; t < N; ++t) {  // (the internal rows in order: rank q's k-th is starts[q] + k)
+        while (t >= vm.starts[static_cast<size_t>(q) + 1]) ++q;
+        const int64_t k = t - vm.starts[static_cast<size_t>(q)];
+        const int64_t input = slots != nullptr ? (*slots)[static_cast<size_t>(k)] : t;
+        if (input < 0 || input >= N) {
+            why = "an input row out of range";
+            return false;
+        }
+        const int64_t c = perm != nullptr ? static_cast<int64_t>(perm[input]) - 1 : input;
+        if (c < 0 || c >= N || seen[static_cast<size_t>(c)] != 0) {
+            why = "an ordering that is not a permutation";
+            return false;
+        }
+        seen[static_cast<size_t>(c)] = 1;
+        const int p = owner(c);
+        if (q == me) {
+            const SolveRowMove& leaf = vm.leaf_rows[static_cast<size_t>(k)];
+            if (p == me) {
+                h.local.push_back(leaf);
+                h.local_rows.push_back(c - mine);
+            } else {
+                h.received[static_cast<size_t>(p)].push_back(leaf);
+            }
+        } else if (p == me) {
+            h.sent[static_cast<size_t>(q)].push_back({0, 0, 0, 0, 0, 0});
+            h.sent_rows[static_cast<size_t>(q)].push_back(c - mine);
+        }
+    }
+    upload_exchange(h, vm.in, vm.in_blocks, true);
+    vm.max_send = std::max({vm.max_send, vm.in.nsend, vm.in.nrecv});
+    vm.max_recv = std::max({vm.max_recv, vm.in.nsend, vm.in.nrecv});
+    if (perm != nullptr) vm.perm_host.assign(perm, perm + nperm);
+    else vm.perm_host.clear();
+    if (slots != nullptr) vm.slots_host = *slots;
+    else vm.slots_host.clear();
+    vm.in_built = true;
+    return true;
+}
+
+// Y = A^{-1} X (transposed: A^{-T} X) on device vectors: the solve's levels
+// as run_device_solve sweeps them (the same kernels on the same vectors,
+// with their per-wave messages), each level's vector kept on the device,
+// the hand-offs between levels by the moves of build_vector_maps (another
+// rank's rows through the pinned staging, DeviceSolveRun::move_rows), and
+// only the root's vector through the host for its LAPACK solve
+// (apply_diagonal_solve, as the device solve has it).  X and Y: device
+// memory, nloc x nrhs at leading dimensions ldx and ldy, this rank's rows of
+// the caller's order (build_input_maps: perm, nperm and slots; the same
+// ordering on every rank); X is ready once `caller_stream`'s work is done,
+// Y is complete on return.  Collective over the tree's ranks.  False on
+// every rank, nothing written and `why` set, when it does not apply (the
+// caller takes the host path): no device solve, a CA or host level, the
+// solve check on.
+template<typename CoordType, typename DataType>
+bool device_vector_solve(ParallelTree<CoordType, DataType>* tree, const DataType* X, int64_t ldx, DataType* Y,
+                         int64_t ldy, int64_t nloc, int nrhs, const int* perm, int64_t nperm,
+                         const std::vector<int64_t>* slots, bool transposed, cudaStream_t caller_stream,
+                         std::string& why) {
+    using S = typename DeviceScalar<DataType>::type;
+    constexpr int kTagIn = 1290, kTagOut = 1291, kTagUp = 1300, kTagDown = 1400;
+    int rank = 0, size = 1;
+    MPI_Comm_rank(tree->comm, &rank);
+    MPI_Comm_size(tree->comm, &size);
+    if (nrhs <= 0 || (slots != nullptr && size != 1)) {
+        why = nrhs <= 0 ? "no columns" : "layout slots on several ranks";
         return false;
     }
     OperatorCall operator_call(tree);
@@ -4313,50 +4633,60 @@ bool device_vector_solve(ParallelTree<CoordType, DataType>* tree, const DataType
         return false;
     }
     DeviceSolveStore& store = device_solve_store();
-    const int nl = tree->num_levels, leaf = nl - 1;
-    for (int level = 2; level < nl; ++level) {
-        if (static_cast<size_t>(level) >= store.levels.size()) {
-            why = "a level without device tables";
-            return false;
-        }
-        const DeviceSolveLevel& L = store.levels[static_cast<size_t>(level)];
-        if (L.ca || L.host) {
-            why = "a CA or host level";
-            return false;
-        }
-    }
     if (!build_vector_maps(tree, store, why)) return false;
     auto& vm = store.vmaps;
-    if (vm.nleaf != nloc) {
-        why = "the leaf holds " + std::to_string(vm.nleaf) + " rows, the vectors " + std::to_string(nloc);
-        return false;
+    const int nl = tree->num_levels, leaf = nl - 1;
+    if (static_cast<int64_t>(vm.leaf_rows.size()) != nloc) {
+        throw std::runtime_error("device_vector_solve: the leaf holds " + std::to_string(vm.leaf_rows.size()) +
+                                 " rows, the vectors " + std::to_string(nloc));
     }
+    const bool same_order =
+        vm.in_built && (perm == nullptr ? vm.perm_host.empty()
+                                        : (static_cast<int64_t>(vm.perm_host.size()) == nperm &&
+                                           std::equal(perm, perm + nperm, vm.perm_host.begin()))) &&
+        (slots == nullptr ? vm.slots_host.empty() : vm.slots_host == *slots);
+    if (!same_order && !build_input_maps(store, rank, perm, nperm, slots, why)) return false;
     Context::instance().activate();
     require_color_levels(store, transposed);
     DeviceSolveRun<CoordType, DataType> run(tree, nrhs, transposed);
     const cudaStream_t st = run.stream();
-    if (vm.rows_host != rows) {
-        check_cuda(cudaMemcpy(vm.rows, rows.data(), rows.size() * sizeof(int64_t), cudaMemcpyHostToDevice),
-                   "device-vector solve rows");
-        vm.rows_host = rows;
-    }
     if (caller_stream != st) check_cuda(cudaStreamSynchronize(caller_stream), "device-vector solve input");
     std::vector<S*> V(static_cast<size_t>(nl), nullptr);
     for (int level = 0; level < nl; ++level) {
+        if (!tree->levels[static_cast<size_t>(level)].is_process_active) continue;
         V[static_cast<size_t>(level)] = level >= 2 ? run.level_vector(store.levels[static_cast<size_t>(level)])
                                                    : run.vector(vm.points[static_cast<size_t>(level)]);
     }
-    launch_solve_rows_matrix(vm.leaf, vm.rows, vm.nleaf, nrhs, const_cast<S*>(reinterpret_cast<const S*>(X)), ldx,
-                             V[static_cast<size_t>(leaf)], true, st);
-    for (int level = leaf; level >= 1; --level) {
-        if (level >= 2) run.forward(store.levels[static_cast<size_t>(level)], V[static_cast<size_t>(level)]);
-        launch_solve_rows(vm.up[static_cast<size_t>(level)], vm.nup[static_cast<size_t>(level)], nrhs,
-                          V[static_cast<size_t>(level)], V[static_cast<size_t>(level - 1)], st);
+    S* dsend = vm.max_send > 0 ? run.vector(vm.max_send) : nullptr;
+    S* drecv = vm.max_recv > 0 ? run.vector(vm.max_recv) : nullptr;
+    auto hand_off = [&](const DeviceSolveStore::RowExchange& ex, const S* src, S* dst, int tag) {
+        launch_solve_rows(ex.local, ex.nlocal, nrhs, src, dst, st);
+        if (ex.to.empty() && ex.from.empty()) return;
+        launch_solve_rows(ex.pack, ex.npack, nrhs, src, dsend, st);
+        run.move_rows(ex.to, ex.to_n, ex.nsend, dsend, ex.from, ex.from_n, ex.nrecv, drecv, tag);
+        launch_solve_rows(ex.unpack, ex.nunpack, nrhs, drecv, dst, st);
+    };
+    const auto& in = vm.in;
+    const bool in_remote = !in.to.empty() || !in.from.empty();
+    S* x = const_cast<S*>(reinterpret_cast<const S*>(X));
+    S* lv = V[static_cast<size_t>(leaf)];
+    launch_solve_rows_matrix(in.local, in.local_rows, in.nlocal, nrhs, x, ldx, lv, true, st);
+    if (in_remote) {
+        launch_solve_rows_matrix(in.pack, in.pack_rows, in.npack, nrhs, x, ldx, dsend, true, st);
+        run.move_rows(in.to, in.to_n, in.nsend, dsend, in.from, in.from_n, in.nrecv, drecv, kTagIn);
+        launch_solve_rows(in.unpack, in.nunpack, nrhs, drecv, lv, st);
     }
-    {  // the root's solve on the host
+    for (int level = leaf; level >= 1; --level) {
+        if (level >= 2 && tree->levels[static_cast<size_t>(level)].is_process_active) {
+            run.forward(store.levels[static_cast<size_t>(level)], V[static_cast<size_t>(level)]);
+        }
+        hand_off(vm.up[static_cast<size_t>(level)], V[static_cast<size_t>(level)], V[static_cast<size_t>(level - 1)],
+                 kTagUp + level);
+    }
+    if (vm.root_here) {  // the root's solve on the host
         auto& root = tree->levels[0];
         SolveDataRequest<CoordType, DataType> rd;
-        rd.initialize(vm.root_morton, 0, vm.root_n, nrhs);
+        rd.initialize(vm.root_morton, rank, vm.root_n, nrhs);
         const size_t count = static_cast<size_t>(vm.root_n) * nrhs;
         S* h = run.staging(count);
         run.transfer(h, V[0], count, cudaMemcpyDeviceToHost);
@@ -4366,14 +4696,23 @@ bool device_vector_solve(ParallelTree<CoordType, DataType>* tree, const DataType
         run.transfer(V[0], h, count, cudaMemcpyHostToDevice);
     }
     for (int level = 1; level <= leaf; ++level) {
-        launch_solve_rows(vm.down[static_cast<size_t>(level)], vm.ndown[static_cast<size_t>(level)], nrhs,
-                          V[static_cast<size_t>(level - 1)], V[static_cast<size_t>(level)], st);
-        if (level >= 2) run.backward(store.levels[static_cast<size_t>(level)], V[static_cast<size_t>(level)]);
+        hand_off(vm.down[static_cast<size_t>(level)], V[static_cast<size_t>(level - 1)], V[static_cast<size_t>(level)],
+                 kTagDown + level);
+        if (level >= 2 && tree->levels[static_cast<size_t>(level)].is_process_active) {
+            run.backward(store.levels[static_cast<size_t>(level)], V[static_cast<size_t>(level)]);
+        }
     }
-    launch_solve_rows_matrix(vm.leaf, vm.rows, vm.nleaf, nrhs, reinterpret_cast<S*>(Y), ldy,
-                             V[static_cast<size_t>(leaf)], false, st);
+    S* y = reinterpret_cast<S*>(Y);
+    launch_solve_rows_matrix(in.local, in.local_rows, in.nlocal, nrhs, y, ldy, lv, false, st);
+    if (in_remote) {  // (the input's moves backwards)
+        launch_solve_rows(in.unpack_swapped, in.nunpack, nrhs, lv, dsend, st);
+        run.move_rows(in.from, in.from_n, in.nrecv, dsend, in.to, in.to_n, in.nsend, drecv, kTagOut);
+        launch_solve_rows_matrix(in.pack, in.pack_rows, in.npack, nrhs, y, ldy, drecv, false, st);
+    }
     check_cuda(cudaStreamSynchronize(st), "device-vector solve");
     for (S* v : V) run.release(v);
+    run.release(dsend);
+    run.release(drecv);
     run.xnr_timers_drain();
     return true;
 }
