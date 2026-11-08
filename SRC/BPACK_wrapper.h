@@ -195,6 +195,9 @@ void c_bpack_extractelement_device(F2Cptr* bmat, F2Cptr* option, F2Cptr* ptree_c
 void c_bf_extractelement_device(F2Cptr* bf, F2Cptr* option, F2Cptr* ptree, int* Ninter, int* allrows, int* allcols, int* rowidx, int* colidx, void** dout, int64_t* ldo, int* drows, int* dcols, void* stream, int* done);
 void c_bpack_inv_mult_fortran(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* bmat,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);
 void c_bpack_inv_mult(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* bmat,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);
+// c_bpack_inv_mult on device vectors, one rank (xin, xout device memory at leading dimensions ldx, ldy; perm, may
+// be null: row i of the input order is the caller's row perm[i] - 1); done = 0 when it does not apply
+void c_bpack_inv_mult_device(char const * trans, C_DT const * xin, int* ldx, C_DT* xout, int* ldy, int* Nloc, int* Ncol, int const* perm, void* stream, F2Cptr* bmat, F2Cptr* option, F2Cptr* stats, F2Cptr* ptree, int* done);
 /*
  * The partial factorization (format 7, option H2_partial = the number of
  * leading input points forming F11; h2_parallel/unstructured/

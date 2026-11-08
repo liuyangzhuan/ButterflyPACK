@@ -800,15 +800,15 @@ __global__ void __launch_bounds__(kThreads) solve_backward_kernel(const SolveBox
     }
 }
 
-// LAPACK getrs ('N') with the 1-based interchanges of getrf.
-// Its column passes stay in series inside the block, unlike every other
-// per-box kernel here: measured, running them as concurrent blocks of the
-// grid's y dimension makes inv_mult 'N' wrong (a deterministic O(1) error --
-// residual 4e-16 -> 1.6e-01 at 76 columns, and already at 4 -- so the columns
-// of a box are not independent in this kernel, though they look it).  The same
-// 2-D grid with all the tiles done serially by the y == 0 block is exact, so it
-// is the concurrency and not the launch.  Worth 15.9 -> 13.6 ms of a 39.9 ms
-// solve if it is ever made safe; the sweeps below it are the other 2.5x.
+// LAPACK getrs ('N') with the 1-based interchanges of getrf, a column tile
+// a block (blockIdx.y, as the other per-box kernels): a box's r steps of the
+// triangular solves each wait at a barrier, so passes in series inside one
+// block took nrhs / cols times as long.  The tile is the pass loop started at
+// the block's tile, not for_tiles: through that lambda nvcc (CUDA 13.2) left
+// warp 0 diverged across the pass's barriers (the `tid < nc` interchanges'
+// reconvergence moved to the end of the body), which solved wrongly even
+// with one tile, and not the same way twice; this loop compiles as the serial
+// one did and gives its bits.
 template<typename T, int CB>
 __global__ void __launch_bounds__(kThreads) solve_diagonal_kernel(const SolveBox* boxes, const int* list, T* vec,
                                                                   int nrhs, int cols) {
@@ -817,7 +817,7 @@ __global__ void __launch_bounds__(kThreads) solve_diagonal_kernel(const SolveBox
     const T* lu = static_cast<const T*>(b.lu);
     const int r = b.r, tid = threadIdx.x;
     if (r == 0) return;
-    for (int c0 = 0; c0 < nrhs; c0 += cols) {
+    for (int c0 = static_cast<int>(blockIdx.y) * cols; c0 < nrhs; c0 += static_cast<int>(gridDim.y) * cols) {
         const int nc = min(cols, nrhs - c0);
         T* v0 = vec + b.vec * nrhs + static_cast<int64_t>(c0) * b.n;
         for (int q = 0; q < nc; ++q) {
@@ -1545,7 +1545,8 @@ void launch_solve_diagonal(const SolveBox* boxes, const int* list, int count, T*
         with_cols<T>(cols, [&](auto cb) {
             constexpr int CB = decltype(cb)::value;
             allow_shared(solve_diagonal_kernel<T, CB>, shared, "solve_diagonal_kernel", max_r);
-            solve_diagonal_kernel<T, CB><<<count, kThreads, shared, stream>>>(boxes, list, vec, nrhs, cols);
+            solve_diagonal_kernel<T, CB><<<dim3(static_cast<unsigned>(count), column_tiles(nrhs, cols)), kThreads, shared,
+                                           stream>>>(boxes, list, vec, nrhs, cols);
         });
     }
     check_launch("solve_diagonal_kernel");
@@ -1759,6 +1760,58 @@ void launch_mul_backward(const SolveBox* boxes, const int* wave, int count, T* v
     check_launch("mul_backward_kernel");
 }
 
+// The rows `items` moves, every column (the device-vector solve's level
+// hand-off): dst[dvec nrhs + c dn + di] = src[svec nrhs + c sn + si].
+template<typename T>
+__global__ void solve_rows_kernel(const SolveRowMove* items, int64_t count, int nrhs, const T* src, T* dst) {
+    const int64_t total = count * nrhs;
+    for (int64_t e = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x; e < total;
+         e += static_cast<int64_t>(gridDim.x) * blockDim.x) {
+        const int64_t c = e / count;
+        const SolveRowMove it = items[e - c * count];
+        dst[it.dvec * nrhs + c * it.dn + it.di] = src[it.svec * nrhs + c * it.sn + it.si];
+    }
+}
+
+// Rows between a matrix (leading dimension ld, row rows[k] of item k) and a
+// level vector (item k's d side): to_vec, vec <- mat; else mat <- vec.
+template<typename T>
+__global__ void solve_rows_matrix_kernel(const SolveRowMove* items, const int64_t* rows, int64_t count, int nrhs,
+                                         T* mat, int64_t ld, T* vec, bool to_vec) {
+    const int64_t total = count * nrhs;
+    for (int64_t e = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x; e < total;
+         e += static_cast<int64_t>(gridDim.x) * blockDim.x) {
+        const int64_t c = e / count, k = e - c * count;
+        const SolveRowMove it = items[k];
+        T* v = vec + it.dvec * nrhs + c * it.dn + it.di;
+        T* m = mat + rows[k] + c * ld;
+        if (to_vec) *v = *m;
+        else *m = *v;
+    }
+}
+
+namespace {
+unsigned rows_blocks(int64_t total) {
+    return static_cast<unsigned>(std::max<int64_t>(1, std::min<int64_t>((total + kThreads - 1) / kThreads, 4096)));
+}
+}  // namespace
+
+template<typename T>
+void launch_solve_rows(const SolveRowMove* items, int64_t count, int nrhs, const T* src, T* dst, cudaStream_t stream) {
+    if (count <= 0 || nrhs <= 0) return;
+    solve_rows_kernel<T><<<rows_blocks(count * nrhs), kThreads, 0, stream>>>(items, count, nrhs, src, dst);
+    check_launch("solve_rows_kernel");
+}
+
+template<typename T>
+void launch_solve_rows_matrix(const SolveRowMove* items, const int64_t* rows, int64_t count, int nrhs, T* mat,
+                              int64_t ld, T* vec, bool to_vec, cudaStream_t stream) {
+    if (count <= 0 || nrhs <= 0) return;
+    solve_rows_matrix_kernel<T><<<rows_blocks(count * nrhs), kThreads, 0, stream>>>(items, rows, count, nrhs, mat, ld,
+                                                                                  vec, to_vec);
+    check_launch("solve_rows_matrix_kernel");
+}
+
 template<typename T>
 void launch_solve_copy(const SolveCopy* items, int count, int max_n, int nrhs, const T* src, T* dst,
                        cudaStream_t stream) {
@@ -1778,6 +1831,9 @@ void launch_solve_copy(const SolveCopy* items, int count, int max_n, int nrhs, c
     template void launch_solve_accum<T>(const SolveAccum*, const SolvePart*, int, int, int, T*, const T*, T*,         \
                                         const T*, cudaStream_t);                                                      \
     template void launch_solve_copy<T>(const SolveCopy*, int, int, int, const T*, T*, cudaStream_t);                  \
+    template void launch_solve_rows<T>(const SolveRowMove*, int64_t, int, const T*, T*, cudaStream_t);              \
+    template void launch_solve_rows_matrix<T>(const SolveRowMove*, const int64_t*, int64_t, int, T*, int64_t, T*, bool, \
+                                              cudaStream_t);                                                          \
     template void launch_mul_forward<T>(const SolveBox*, const SolveSlot*, const int*, int, T*, const T*, T*, int,    \
                                         int, int, cudaStream_t, bool, T*, int64_t);                                   \
     template void launch_mul_diagonal<T>(const SolveBox*, const int*, int, T*, int, int, cudaStream_t, bool, T*,      \

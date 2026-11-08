@@ -3308,6 +3308,75 @@ void c_bpack_extractsketch_transpose_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* 
     alldat_loc, pgidx, Npmap, pmaps, true, "c_bpack_extractsketch_transpose_bridge");
 }
 
+// c_bpack_inv_mult_device: c_bpack_inv_mult (format 7) on device vectors for
+// an H2 factorized on the GPU on one rank: xout = op(A)^{-1} xin, xin and xout
+// device memory (*Nloc x *Ncol at leading dimensions *ldx and *ldy, written
+// by the caller on `stream`; xout complete on return).  perm (may be null):
+// row i of the H2's input order is the caller's row perm[i] - 1 (1-based), of
+// xin and of xout.  done = 1 when solved, with the stats' Time_C_Mult, else
+// 0 and nothing written: several ranks, a partial or no factorization, no
+// device solve, 'C' of complex data.  The result is the host-vector call's
+// (fmm::gpu::device_vector_solve).
+void c_bpack_inv_mult_device(char const * trans, C_DT const * xin, int* ldx, C_DT* xout, int* ldy, int* Nloc,
+	int* Ncol, int const* perm, void* stream, F2Cptr* bmat, F2Cptr* option, F2Cptr* stats, F2Cptr* ptree,
+	int* done) {
+  *done = 0;
+  (void)ptree;
+#if defined(HAVE_MPI) && defined(H2_HAVE_GPU) && defined(DAT) && (DAT == 0 || DAT == 1)
+  if (bmat == nullptr || *bmat == nullptr || option == nullptr || *option == nullptr) return;
+  double tmp = 0.0;
+  c_bpack_getoption(option, "format", &tmp);
+  if (static_cast<int>(tmp) != 7) return;
+  using H2Data = typename butterfly::fmm_data<C_DT>::type;
+  butterfly::H2<double, H2Data>* h2 = h2_of<H2Data>(bmat);
+  if (h2 == nullptr || h2->options.use_gpu == 0 || h2->options.unstructured != 1) return;
+  if (h2->build_state != butterfly::H2BuildState::RS_FACTORIZED) return;
+  int csize = 0;
+  MPI_Comm_size(h2->comm, &csize);
+  if (csize != 1 || *Ncol <= 0 || *Nloc < 0) return;
+  try {
+    const char op = h2_trans_operation(trans, "c_bpack_inv_mult_device");
+    if (op == 'C' && butterfly::is_complex_v<H2Data>) return;
+    const double t0 = MPI_Wtime();
+    // the caller's row of each internal row
+    const auto* layout = h2->distributed_layout.get();
+    int64_t internal_nloc = *Nloc;
+    if (layout != nullptr) {
+      if (layout->size != 1 || layout->input_local_size != *Nloc) return;
+      internal_nloc = layout->internal_local_size;
+    }
+    std::vector<int64_t> rows(static_cast<size_t>(internal_nloc));
+    if (layout != nullptr) {
+      const auto& from = layout->forward_send_input_slots;
+      const auto& to = layout->forward_recv_internal_slots;
+      if (from.size() != to.size() || static_cast<int64_t>(to.size()) != internal_nloc) return;
+      for (size_t s = 0; s < to.size(); ++s) rows[static_cast<size_t>(to[s])] = from[s];
+    } else {
+      for (int64_t k = 0; k < internal_nloc; ++k) rows[static_cast<size_t>(k)] = k;
+    }
+    if (perm != nullptr) {
+      for (auto& r : rows) r = perm[r] - 1;
+    }
+    std::string why;
+    if (!fmm::gpu::device_vector_solve(h2->tree.get(), reinterpret_cast<const H2Data*>(xin), *ldx,
+                                       reinterpret_cast<H2Data*>(xout), *ldy, internal_nloc, *Ncol, rows,
+                                       h2_transposed(h2, op), static_cast<cudaStream_t>(stream), why)) {
+      return;
+    }
+    double t = MPI_Wtime() - t0;
+    c_bpack_setstats(stats, "Time_C_Mult", &t);
+    c_bpack_setstats(stats, "Time_C_Mult_Wrapper", &t);
+    *done = 1;
+  } catch (const std::exception& e) {
+    std::cerr << "Error in c_bpack_inv_mult_device: " << e.what() << std::endl;
+    MPI_Abort(h2->comm, 1);
+  }
+#else
+  (void)trans; (void)xin; (void)ldx; (void)xout; (void)ldy; (void)Nloc; (void)Ncol; (void)perm; (void)stream;
+  (void)bmat; (void)option; (void)stats;
+#endif
+}
+
 // c_bpack_extractelement_device: a partial factorization's blocks for a one-rank caller added into its device
 // outputs (extract_partial_blocks with PartialDeviceTargets), or a compression-only H2's built on the GPU
 // (extract_compressed_blocks_into_device; not with H2_extract 2, the host); anything else declines (done = 0,

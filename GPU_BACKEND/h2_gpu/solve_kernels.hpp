@@ -82,6 +82,15 @@ struct SolveCopy {
     int n;
 };
 
+// A row of a level vector moved to another vector (every column): the d
+// side's element (i, c) is at dvec nrhs + c dn + di, the s side's likewise
+// (the device-vector solve's hand-off between levels, and its rows of the
+// caller's matrix).
+struct SolveRowMove {
+    int64_t dvec, svec;
+    int dn, di, sn, si;
+};
+
 // Contiguous words (4 bytes) copied on the device.
 struct CopySpan {
     const void* src;
@@ -151,6 +160,15 @@ void launch_solve_diagonal(const SolveBox* boxes, const int* list, int count, T*
 template<typename T>
 void launch_solve_accum(const SolveAccum* items, const SolvePart* parts, int count, int max_count, int nrhs, T* vec,
                         const T* work, T* outbox, const T* inbox, cudaStream_t stream);
+// dst's rows from src's (SolveRowMove), every column
+template<typename T>
+void launch_solve_rows(const SolveRowMove* items, int64_t count, int nrhs, const T* src, T* dst, cudaStream_t stream);
+// the d sides of items (a level vector `vec`) from or to rows `rows` of the
+// matrix `mat` (leading dimension ld): to_vec, vec <- mat
+template<typename T>
+void launch_solve_rows_matrix(const SolveRowMove* items, const int64_t* rows, int64_t count, int nrhs, T* mat,
+                              int64_t ld, T* vec, bool to_vec, cudaStream_t stream);
+
 template<typename T>
 void launch_solve_copy(const SolveCopy* items, int count, int max_n, int nrhs, const T* src, T* dst,
                        cudaStream_t stream);
