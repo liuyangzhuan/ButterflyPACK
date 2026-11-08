@@ -652,10 +652,14 @@ contains
             ! deallocate(ptree%pgrp(ii)%gd)
             ! ptree%pgrp(ii)%gd=>null()
             ! endif
+            ! (a one-process group's four contexts are one grid, CreatePtree: exited once)
             if (ptree%pgrp(ii)%ctxt /= -1) call blacs_gridexit_wrp(ptree%pgrp(ii)%ctxt)
-            if (ptree%pgrp(ii)%ctxt1D /= -1) call blacs_gridexit_wrp(ptree%pgrp(ii)%ctxt1D)
-            if (ptree%pgrp(ii)%ctxt1DCol /= -1) call blacs_gridexit_wrp(ptree%pgrp(ii)%ctxt1DCol)
-            if (ptree%pgrp(ii)%ctxt_head /= -1) call blacs_gridexit_wrp(ptree%pgrp(ii)%ctxt_head)
+            if (ptree%pgrp(ii)%ctxt1D /= -1 .and. ptree%pgrp(ii)%ctxt1D /= ptree%pgrp(ii)%ctxt) &
+               call blacs_gridexit_wrp(ptree%pgrp(ii)%ctxt1D)
+            if (ptree%pgrp(ii)%ctxt1DCol /= -1 .and. ptree%pgrp(ii)%ctxt1DCol /= ptree%pgrp(ii)%ctxt) &
+               call blacs_gridexit_wrp(ptree%pgrp(ii)%ctxt1DCol)
+            if (ptree%pgrp(ii)%ctxt_head /= -1 .and. ptree%pgrp(ii)%ctxt_head /= ptree%pgrp(ii)%ctxt) &
+               call blacs_gridexit_wrp(ptree%pgrp(ii)%ctxt_head)
             if (ptree%pgrp(ii)%Comm /= MPI_COMM_NULL) call MPI_Comm_free(ptree%pgrp(ii)%Comm, ierr)
          enddo
          deallocate (ptree%pgrp)
