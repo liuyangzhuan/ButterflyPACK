@@ -5479,6 +5479,16 @@ end subroutine TensorPermute
                call blacs_gridmap_wrp(ptree%pgrp(group)%ctxt, pmap, nprow, nprow, npcol)
                deallocate (pmap)
 
+               if (nproc == 1) then
+                  ! One process: the 1D, 1D-column and head grids are this same 1x1 grid, so they share
+                  ! its context (delete_proctree exits it once).  Each BLACS grid holds four communicators
+                  ! and MPICH allows about 4096 a process: hundreds of one-rank matrices on a rank (the
+                  ! sequential H2 fronts of a sparse solver) otherwise run out of them.
+                  ptree%pgrp(group)%ctxt1D = ptree%pgrp(group)%ctxt
+                  ptree%pgrp(group)%ctxt1DCol = ptree%pgrp(group)%ctxt
+                  ptree%pgrp(group)%ctxt_head = ptree%pgrp(group)%ctxt
+               else
+
                ! the context involving 1D grids non-cyclic row
                allocate (pmap(nproc, 1))
                do kk = 1, nproc
@@ -5504,6 +5514,8 @@ end subroutine TensorPermute
                pmap=0
                call blacs_gridmap_wrp(ptree%pgrp(group)%ctxt_head, pmap, 1, 1, 1)
                deallocate (pmap)
+
+               endif
 
                ! call MPI_barrier(ptree%pgrp(group)%Comm,ierr)
 

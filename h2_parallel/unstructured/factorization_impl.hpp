@@ -2290,6 +2290,12 @@ void hierarchical_factorization_unstructured(
         }
         }
 
+        // The root block is factored (X_RR; under H2_partial W, A21 and the
+        // CB too) and nothing reads it again.  Kept, it held a dense copy of
+        // every H2 front's root, F22 rows and columns included, for the
+        // front's life: 5.5 GB a rank of Poisson 200^3 on 4 ranks, min_sep 500.
+        root_box.schur_complement = MatrixStorage<DataType>{};
+
         // Mark root as skeleton only (no redundant DOFs at this level)
         root_box.skeleton_indices.resize(n);
         for (int64_t i = 0; i < n; ++i) {
@@ -2334,9 +2340,13 @@ void hierarchical_factorization_unstructured(
     destroy_dynamic_threading_context(dynamic_threading);
 
 
+    // What the factorization keeps: every level's boxes, the root's (its
+    // LU) included, and under H2_partial the root's W and A21 (the
+    // CB is the caller's, until c_bpack_partial_schur_release).  This is
+    // the Mem_Factor a sparse solver adds up over its fronts.
     size_t local_memory_usage = 0;
     size_t CA_halo_memory_usage = 0;
-    for (int current_level = leaf_level; current_level >= 1; current_level--) {
+    for (int current_level = leaf_level; current_level >= 0; current_level--) {
 
         auto& level = tree->levels[current_level];
         for (auto& box : level.local_boxes) {
@@ -2347,6 +2357,10 @@ void hierarchical_factorization_unstructured(
                 CA_halo_memory_usage += calculate_box_data_size(box);
             }
         }
+    }
+    if (tree->partial_root.active) {
+        local_memory_usage += (tree->partial_root.w.data.capacity() +
+                               tree->partial_root.a21.data.capacity()) * sizeof(DataType);
     }
     if (print_detail) {
         printf("factorization memory usage on rank %d: %.10f GB local + %.10f GB CA halo\n",

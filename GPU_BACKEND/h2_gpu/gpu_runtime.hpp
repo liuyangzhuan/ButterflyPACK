@@ -131,6 +131,19 @@ private:
     size_t capacity_ = 0;
 };
 
+// The size a grow-only pinned buffer takes to hold `bytes`: at least twice
+// what it held, as pinning costs about a second per GB, in 64 MB granules
+// when large and 64 KB ones when small.  Each operator keeps a few such
+// buffers (its solve's and partial factorization's staging, MetaBuilders)
+// until it is destroyed, and those mostly stage kB: rounded up to 64 MB they
+// held ~140 MB of pinned host memory a sequential H2 front of a sparse solver
+// (Poisson 200^3, 4 ranks, min_sep 500: 256 fronts a rank, 52 GB RSS).
+inline size_t pinned_growth(size_t bytes, size_t capacity) {
+    const size_t want = std::max(bytes, 2 * capacity);
+    const size_t granule = want >= (size_t{64} << 20) ? (size_t{64} << 20) : (size_t{64} << 10);
+    return (want + granule - 1) / granule * granule;
+}
+
 // Grow-only page-locked host allocation for asynchronous transfers.  Pinning
 // costs about a second per GB, so buffers grow geometrically and the
 // backend's buffers live in pinned_pool() for the whole run.
@@ -145,9 +158,8 @@ public:
 
     void* reserve(size_t bytes) {
         if (bytes > capacity_) {
+            const size_t grown = pinned_growth(bytes, capacity_);
             release();
-            constexpr size_t granule = size_t{64} << 20;
-            const size_t grown = (std::max(bytes, 2 * capacity_) + granule - 1) / granule * granule;
             check_cuda(cudaMallocHost(&ptr_, grown), "cudaMallocHost");
             capacity_ = grown;
         }
@@ -766,8 +778,7 @@ private:
     void ensure(size_t bytes) {
         if (bytes <= capacity_) return;
         wait_upload();
-        constexpr size_t granule = size_t{64} << 20;
-        const size_t grown = (std::max(bytes, 2 * capacity_) + granule - 1) / granule * granule;
+        const size_t grown = pinned_growth(bytes, capacity_);
         void* fresh = nullptr;
         check_cuda(cudaMallocHost(&fresh, grown), "cudaMallocHost");
         if (size_ > 0) std::memcpy(fresh, base_, size_);

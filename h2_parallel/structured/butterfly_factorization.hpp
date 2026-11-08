@@ -2211,8 +2211,12 @@ void hierarchical_factorization_parallel(
                     std::cout << "  ✓ Root matrix copied (no factorization)" << std::endl;
                 }
             }
-        
+
         }
+
+        // The root block is factored (X_RR) and nothing reads it again
+        // (as the unstructured path)
+        root_box.schur_complement = MatrixStorage<DataType>{};
 
         // Mark root as skeleton only (no redundant DOFs at this level)
         root_box.skeleton_indices.resize(n);
@@ -2258,9 +2262,11 @@ void hierarchical_factorization_parallel(
     destroy_dynamic_threading_context(dynamic_threading);
 
 
+    // What the factorization keeps: every level's boxes, the root's (its
+    // LU) included (the Mem_Factor a caller reads).
     size_t local_memory_usage = 0;
     size_t CA_halo_memory_usage = 0;
-    for (int current_level = leaf_level; current_level >= 1; current_level--) {
+    for (int current_level = leaf_level; current_level >= 0; current_level--) {
     
         auto& level = tree->levels[current_level];
         for (auto& box : level.local_boxes) {

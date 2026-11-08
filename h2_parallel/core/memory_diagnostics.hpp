@@ -455,6 +455,17 @@ public:
                 h2_diag_accumulate_box(box, true, snapshot.categories, true);
             }
         }
+        // H2_partial's root, outside the boxes: W and A21 couple its F11 and
+        // F22 points, the CB is the Schur complement the caller extracts
+        if (tree->partial_root.active) {
+            auto& c = snapshot.categories;
+            const auto& pr = tree->partial_root;
+            const size_t coupling = h2_diag_matrix_bytes(pr.w) + h2_diag_matrix_bytes(pr.a21);
+            const size_t cb = h2_diag_matrix_bytes(pr.cb);
+            c.local_factors += coupling + cb;
+            c.local_factor_near_coupling += coupling;
+            c.local_factor_schur += cb;
+        }
 
         const auto& host_staging_probe = h2_diag_host_staging_probe();
         snapshot.categories.gpu_host_staging =
