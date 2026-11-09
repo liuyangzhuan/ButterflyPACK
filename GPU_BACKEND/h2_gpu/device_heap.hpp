@@ -267,14 +267,26 @@ public:
     // Called when an allocation does not fit: frees what it can (blocks
     // whose background copies are done) and returns whether it freed any.
     void set_reclaimer(std::function<bool()> reclaimer) { reclaimer_ = std::move(reclaimer); }
+    // Called when an allocation still does not fit after the reclaimer:
+    // evicts an operator (evict_for_allocation) and returns whether it did.
+    void set_evictor(std::function<bool()> evictor) { evictor_ = std::move(evictor); }
 
     char* alloc_bytes(size_t bytes, bool resident, ResidentKind kind = ResidentKind::Other) {
         const OpTimer timer(op_timing_ ? &alloc_seconds_ : nullptr, alloc_calls_);
         ensure_initialized();
         const size_t size = std::max<size_t>(kAlign, (bytes + kAlign - 1) / kAlign * kAlign);
         size_t offset = 0;
+        int evicted = 0;
         while (!take(size, resident, offset)) {
-            if (!(reclaimer_ && reclaimer_())) {
+            if (reclaimer_ && reclaimer_()) {
+                ++reclaims_;
+                continue;
+            }
+            if (evictor_ && evictor_()) {
+                ++evicted;
+                continue;
+            }
+            {
                 std::ostringstream oss;
                 oss << "H2 GPU heap exhausted: request " << size << " bytes (" << resident_kind_name(kind)
                     << (resident ? ", resident" : ", transient") << "), in use " << used_ << " of "
@@ -294,7 +306,13 @@ public:
                 oss << " (resident+transient); " << free_.size() << " free ranges";
                 throw std::runtime_error(oss.str());
             }
-            ++reclaims_;
+        }
+        if (evicted > 0) {
+            std::printf("GPU: %d operator(s) this rank holds alone evicted for a %.2f GB %s allocation (kept "
+                        "factors to the host); %.2f of %.2f GB in use\n", evicted, static_cast<double>(size) / 1e9,
+                        resident ? "resident" : "transient", static_cast<double>(used_) / 1e9,
+                        static_cast<double>(capacity_) / 1e9);
+            std::fflush(stdout);
         }
         allocated_.emplace(offset, std::make_pair(size, resident));
         if (heap_trace_) {
@@ -681,6 +699,7 @@ private:
     std::unordered_map<size_t, std::pair<ResidentKind, size_t>> freed_kind_;
     std::unordered_map<size_t, std::pair<size_t, bool>> allocated_;   // offset -> length
     std::function<bool()> reclaimer_;
+    std::function<bool()> evictor_;
     int64_t reclaims_ = 0;
 };
 
@@ -845,6 +864,11 @@ struct OperatorContext {
     // far), and what was held when the current one began
     size_t build_need = 0, build_base = 0;
     bool build_open = false;
+    // the ranks of each operator built (begin_operator_build), the operator
+    // of the current build, and the H2 calls in progress (OperatorCall)
+    std::unordered_map<const void*, int> nranks;
+    const void* build_tree = nullptr;
+    std::vector<const void*> calls;
 };
 
 inline OperatorContext& operator_context() {
@@ -867,8 +891,14 @@ inline void activate_operator(const void* tree) {
 // on with its own stores afterwards - its kept records and factors.
 class OperatorCall {
 public:
-    explicit OperatorCall(const void* tree) : previous_(operator_context().active) { activate_operator(tree); }
-    ~OperatorCall() { operator_context().active = previous_; }
+    explicit OperatorCall(const void* tree) : previous_(operator_context().active) {
+        activate_operator(tree);
+        operator_context().calls.push_back(tree);
+    }
+    ~OperatorCall() {
+        operator_context().calls.pop_back();
+        operator_context().active = previous_;
+    }
     OperatorCall(const OperatorCall&) = delete;
     OperatorCall& operator=(const OperatorCall&) = delete;
 
@@ -900,7 +930,42 @@ inline void release_operator(const void* tree) {
     OperatorContext& c = operator_context();
     for (const auto& release : c.releasers) release(tree);
     c.last_use.erase(tree);
+    c.nranks.erase(tree);
+    if (c.build_tree == tree) c.build_tree = nullptr;
     if (c.active == tree) c.active = nullptr;
+}
+
+// An allocation that does not fit, after the reclaimer, evicts the least
+// recently used operator that this rank holds alone and that no H2 call in
+// progress uses (not the current build's operator, not one in a call within
+// it), and is tried again; returns whether it evicted one.  An operator of
+// one rank is evicted on all of its ranks, so its ranks stay on one path, as
+// begin_operator_build's collective eviction keeps them; an operator of
+// several ranks is left to that.  begin_operator_build makes room for what
+// the builds so far took, which a larger build exceeds: at 800^3 on 64
+// ranks, the top front of a rank's subtree (40,000 + 240,000 rows) found
+// 5.5 GB free behind 17.7 GB of the subtree's kept solve factors, the
+// largest free block 1.31 GB, and its children's entries took 1.36 GB.
+inline bool evict_for_allocation() {
+    OperatorContext& c = operator_context();
+    static bool busy = false;   // (a spill or a release that allocates does not evict again)
+    if (busy || c.evicting) return false;
+    const void* oldest = nullptr;
+    uint64_t oldest_use = 0;
+    for (const auto& [t, use] : c.last_use) {
+        if (t == c.build_tree || std::find(c.calls.begin(), c.calls.end(), t) != c.calls.end()) continue;
+        const auto r = c.nranks.find(t);
+        if (r == c.nranks.end() || r->second != 1 || operator_bytes(t) == 0) continue;
+        if (oldest == nullptr || use < oldest_use) {
+            oldest = t;
+            oldest_use = use;
+        }
+    }
+    if (oldest == nullptr) return false;
+    busy = true;
+    evict_operator(oldest);
+    busy = false;
+    return true;
 }
 
 // Start of a factorization or compression of operator `tree` (collective
@@ -914,7 +979,10 @@ inline void begin_operator_build(const void* tree, MPI_Comm comm, double exchang
     reserve_exchange_arena(nproc, share_device(comm), exchange_fraction);
     activate_operator(tree);
     OperatorContext& c = operator_context();
+    c.nranks[tree] = nproc;
+    c.build_tree = tree;
     DeviceHeap& heap = DeviceHeap::instance();
+    heap.set_evictor(evict_for_allocation);
     // the previous build is over: what it took
     if (c.build_open && heap.build_peak() > c.build_base) {
         c.build_need = std::max(c.build_need, heap.build_peak() - c.build_base);
