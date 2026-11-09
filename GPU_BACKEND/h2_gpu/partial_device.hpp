@@ -863,10 +863,14 @@ public:
     cudaStream_t stream() const { return stream_; }
     magma_queue_t queue() const { return queue_; }
     PartialDeviceStore& store() { return st_; }
-    // what a group of terms may take
+    // what a group of terms may take: a quarter of the free heap, at most
+    // 2 GB, and no more than its largest free block, since a block is one
+    // piece (at 800^3 on 64 ranks the heap had 25.5 GB free in 981 ranges,
+    // the largest 1.97 GB, and a 1.98 GB copy of out failed)
     size_t budget() const {
         const size_t free = heap_.capacity() > heap_.used() ? heap_.capacity() - heap_.used() : 0;
-        return std::max<size_t>(size_t{64} << 20, std::min<size_t>(size_t{2} << 30, free / 4));
+        return std::max<size_t>(size_t{64} << 20,
+                                std::min({size_t{2} << 30, free / 4, heap_.largest_free()}));
     }
 
 private:
