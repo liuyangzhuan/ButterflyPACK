@@ -220,7 +220,8 @@ public:
         return it == allocated_.end() ? 0 : it->second.first;
     }
     // A transient block if it fits now (no reclaim), else nullptr.
-    char* try_alloc(size_t bytes, ResidentKind kind = ResidentKind::Other) {
+    char* try_alloc(size_t bytes, ResidentKind kind = ResidentKind::Other,
+                    const char* file = __builtin_FILE(), int line = __builtin_LINE()) {
         if (base_ == nullptr) return nullptr;
         const size_t size = std::max<size_t>(kAlign, (bytes + kAlign - 1) / kAlign * kAlign);
         size_t offset = 0;
@@ -229,19 +230,22 @@ public:
         used_ += size;
         transient_used_ += size;
         note_transient(offset, size, kind);
+        note_site(offset, size, false, kind, file, line);
         note_peak();
         return base_ + offset;
     }
 
     // A per-wave (transient) block, from the top of the arena.
     template<typename T = char>
-    T* alloc(size_t bytes, ResidentKind kind = ResidentKind::Other) {
-        return reinterpret_cast<T*>(alloc_bytes(bytes, false, kind));
+    T* alloc(size_t bytes, ResidentKind kind = ResidentKind::Other,
+             const char* file = __builtin_FILE(), int line = __builtin_LINE()) {
+        return reinterpret_cast<T*>(alloc_bytes(bytes, false, kind, file, line));
     }
     // A resident block if it fits now (no reclaim), else nullptr: for a
     // caller that has a correct fallback, such as storing a fill source raw
     // when its compressed copy will not fit.
-    char* try_alloc_resident(size_t bytes, ResidentKind kind = ResidentKind::Other) {
+    char* try_alloc_resident(size_t bytes, ResidentKind kind = ResidentKind::Other,
+                             const char* file = __builtin_FILE(), int line = __builtin_LINE()) {
         if (base_ == nullptr) return nullptr;
         const size_t size = std::max<size_t>(kAlign, (bytes + kAlign - 1) / kAlign * kAlign);
         size_t offset = 0;
@@ -253,6 +257,7 @@ public:
         by_kind_[static_cast<size_t>(kind)] += size;
         ++alloc_n_[static_cast<size_t>(kind)];
         alloc_b_[static_cast<size_t>(kind)] += size;
+        note_site(offset, size, true, kind, file, line);
         note_peak();
         return base_ + offset;
     }
@@ -260,8 +265,9 @@ public:
     // A block that lives for a level or longer, from the bottom.  `kind` is
     // only for the resident breakdown.
     template<typename T = char>
-    T* alloc_resident(size_t bytes, ResidentKind kind = ResidentKind::Other) {
-        return reinterpret_cast<T*>(alloc_bytes(bytes, true, kind));
+    T* alloc_resident(size_t bytes, ResidentKind kind = ResidentKind::Other,
+                      const char* file = __builtin_FILE(), int line = __builtin_LINE()) {
+        return reinterpret_cast<T*>(alloc_bytes(bytes, true, kind, file, line));
     }
 
     // Called when an allocation does not fit: frees what it can (blocks
@@ -271,7 +277,8 @@ public:
     // evicts an operator (evict_for_allocation) and returns whether it did.
     void set_evictor(std::function<bool()> evictor) { evictor_ = std::move(evictor); }
 
-    char* alloc_bytes(size_t bytes, bool resident, ResidentKind kind = ResidentKind::Other) {
+    char* alloc_bytes(size_t bytes, bool resident, ResidentKind kind = ResidentKind::Other,
+                      const char* file = __builtin_FILE(), int line = __builtin_LINE()) {
         const OpTimer timer(op_timing_ ? &alloc_seconds_ : nullptr, alloc_calls_);
         ensure_initialized();
         const size_t size = std::max<size_t>(kAlign, (bytes + kAlign - 1) / kAlign * kAlign);
@@ -304,6 +311,33 @@ public:
                         << static_cast<double>(by_tkind_[k]) / 1e9 << " GB";
                 }
                 oss << " (resident+transient); " << free_.size() << " free ranges";
+                // What the "other" bucket actually is: the call sites that
+                // asked for a block and passed no kind, largest first.
+                // Without this an exhausted heap can report many GB under
+                // "other" and name nothing, which is exactly what NSTX
+                // order 3 rank 4 did: other 11.62+17.66 GB and no other
+                // kind above the cut at all.
+                {
+                    std::vector<std::pair<size_t, std::pair<const char*, int>>> sites;
+                    for (const auto& kv : other_by_site_) {
+                        const size_t total = kv.second.first + kv.second.second;
+                        if (total > (size_t{64} << 20)) sites.push_back({total, kv.first});
+                    }
+                    std::sort(sites.rbegin(), sites.rend());
+                    if (!sites.empty()) {
+                        oss << "; \"other\" by call site: ";
+                        for (size_t i = 0; i < sites.size() && i < 6; ++i) {
+                            const auto& key = sites[i].second;
+                            const char* f = key.first != nullptr ? key.first : "?";
+                            const char* slash = std::strrchr(f, '/');
+                            const auto& e = other_by_site_.at(key);
+                            oss << (i != 0 ? ", " : "") << (slash != nullptr ? slash + 1 : f) << ":" << key.second
+                                << " " << std::fixed << std::setprecision(2)
+                                << static_cast<double>(e.first) / 1e9 << "+"
+                                << static_cast<double>(e.second) / 1e9 << " GB";
+                        }
+                    }
+                }
                 throw std::runtime_error(oss.str());
             }
         }
@@ -330,6 +364,7 @@ public:
             transient_used_ += size;
             note_transient(offset, size, kind);
         }
+        note_site(offset, size, resident, kind, file, line);
         note_peak();
         return base_ + offset;
     }
@@ -391,6 +426,7 @@ public:
                 transient_kind_.erase(tit);
             }
         }
+        forget_site(offset, length, was_resident);
         auto next = free_.lower_bound(start);
         if (next != free_.begin()) {
             auto prev = std::prev(next);
@@ -417,6 +453,8 @@ public:
         resident_used_ = 0;
         transient_used_ = 0;
         resident_kind_.clear();
+        other_site_.clear();
+        other_by_site_.clear();
         by_kind_.fill(0);
         by_kind_at_peak_.fill(0);
         transient_kind_.clear();
@@ -524,6 +562,7 @@ public:
             ResidentKind kind = ResidentKind::Other;
             const auto& kind_of = was_resident ? resident_kind_ : transient_kind_;
             if (auto kit = kind_of.find(offset); kit != kind_of.end()) kind = kit->second;
+            const AllocSite site = site_of(offset);  // carried for the same reason
             size_t dest = offset;
             for (auto it = free_.begin(); it != free_.end() && it->first < offset; ++it) {
                 if (it->second >= size) {
@@ -560,6 +599,7 @@ public:
                 transient_used_ += size;
                 note_transient(dest, size, kind);
             }
+            note_site(dest, size, was_resident, kind, site.file, site.line);
             moves.push_back({blocks[i], base_ + dest, size});
             blocks[i] = base_ + dest;
         }
@@ -590,6 +630,36 @@ private:
         transient_at_peak_ = transient_used_;
         by_kind_at_peak_ = by_kind_;
         by_tkind_at_peak_ = by_tkind_;
+    }
+    // Untagged ("other") blocks, by the call site that asked for them.  The
+    // kind vocabulary covers what the backend knows it is holding; whatever
+    // is left lands in "other", and on NSTX order 3 rank 4 that was
+    // 11.62 resident + 17.66 GB transient with no kind above the cut, which
+    // no breakdown could explain.  Tracked for ResidentKind::Other only, so
+    // a tagged allocation pays nothing.
+    struct AllocSite {
+        const char* file = nullptr;
+        int line = 0;
+    };
+    void note_site(size_t offset, size_t size, bool resident, ResidentKind kind, const char* file, int line) {
+        if (kind != ResidentKind::Other || file == nullptr) return;
+        other_site_[offset] = AllocSite{file, line};
+        auto& e = other_by_site_[std::make_pair(file, line)];
+        (resident ? e.first : e.second) += size;
+    }
+    void forget_site(size_t offset, size_t size, bool resident) {
+        const auto it = other_site_.find(offset);
+        if (it == other_site_.end()) return;
+        const auto e = other_by_site_.find(std::make_pair(it->second.file, it->second.line));
+        if (e != other_by_site_.end()) {
+            size_t& v = resident ? e->second.first : e->second.second;
+            v = v > size ? v - size : 0;
+        }
+        other_site_.erase(it);
+    }
+    AllocSite site_of(size_t offset) const {
+        const auto it = other_site_.find(offset);
+        return it == other_site_.end() ? AllocSite{} : it->second;
     }
     void note_transient(size_t offset, size_t size, ResidentKind kind) {
         transient_kind_[offset] = kind;
@@ -697,6 +767,8 @@ private:
     std::array<size_t, static_cast<size_t>(ResidentKind::Count)> alloc_n_{}, alloc_b_{}, free_n_{}, free_b_{};
     std::array<size_t, static_cast<size_t>(ResidentKind::Count)> by_kind_at_peak_{};
     std::unordered_map<size_t, ResidentKind> transient_kind_;  // offset -> what it is for
+    std::unordered_map<size_t, AllocSite> other_site_;              // untagged block -> its call site
+    std::map<std::pair<const char*, int>, std::pair<size_t, size_t>> other_by_site_;  // site -> res,trans
     std::array<size_t, static_cast<size_t>(ResidentKind::Count)> by_tkind_{};
     std::array<size_t, static_cast<size_t>(ResidentKind::Count)> by_tkind_at_peak_{};
     size_t transient_used_ = 0;
