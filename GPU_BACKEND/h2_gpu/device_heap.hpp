@@ -505,9 +505,25 @@ public:
             if (alloc == allocated_.end()) throw std::runtime_error("H2 GPU heap: compaction of an unknown block");
             const size_t size = alloc->second.first;
             const bool was_resident = alloc->second.second;
-            // the move frees and re-registers the block, so carry its kind
+            // The move frees and re-registers the block, so carry its kind
+            // across.  A TRANSIENT block's kind lives in transient_kind_, not
+            // in resident_kind_, so consulting only the latter re-tagged every
+            // compacted transient block as "other" -- the tag was lost on each
+            // relocation, never restored, and the loss accumulated with the
+            // number of relocations.  That is why NSTX order 3 reported an
+            // exhausted heap as "other 11.79+17.90 GB" with no other kind
+            // above the 64 MB cut at all (job 61107264, heap fraction 0.80),
+            // while the same arm at 0.65 still named fill temp2^T, level
+            // Schur/edges, uploaded blocks and sketch P;W (job 61105873).
+            // The 0.80 run had compacted MORE, not less: it left 10 free
+            // ranges against 119, and coalescing free space is what
+            // compaction does, so few ranges is the signature of much
+            // compaction.  It also reached 148 fronts against 119, so it
+            // relocated more blocks over a longer run and lost more tags.
+            // Attribution only; no block moves differently because of this.
             ResidentKind kind = ResidentKind::Other;
-            if (auto kit = resident_kind_.find(offset); kit != resident_kind_.end()) kind = kit->second;
+            const auto& kind_of = was_resident ? resident_kind_ : transient_kind_;
+            if (auto kit = kind_of.find(offset); kit != kind_of.end()) kind = kit->second;
             size_t dest = offset;
             for (auto it = free_.begin(); it != free_.end() && it->first < offset; ++it) {
                 if (it->second >= size) {
