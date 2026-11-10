@@ -794,8 +794,15 @@ public:
 
     // transient device memory, freed by release() or at the end (the stream
     // keeps a later user of the same bytes behind the earlier kernels)
-    char* alloc(size_t bytes) {
-        char* p = heap_.alloc(std::max<size_t>(align_up(bytes), 256));
+    //
+    // Forward the CALLER's file and line to the heap rather than letting the
+    // heap's own defaults name this wrapper.  Every transient block of the
+    // partial factorization comes through here, so without this an exhausted
+    // heap blamed the whole lot on one line: NSTX order 3 rank 4 reported
+    // `partial_device.hpp:798 0.00+17.82 GB`, which identifies the wrapper
+    // and not which of its ~9 callers is holding the memory.
+    char* alloc(size_t bytes, const char* file = __builtin_FILE(), int line = __builtin_LINE()) {
+        char* p = heap_.alloc(std::max<size_t>(align_up(bytes), 256), ResidentKind::Other, file, line);
         held_.push_back(p);
         return p;
     }
