@@ -4608,9 +4608,81 @@ void partial_schur_blocks(fmm::ParallelTree<CoordType, DataType>& tree, int64_t 
                 checked_targets = *targets;
                 checked_targets.download = true;
             }
-            partial_schur_blocks_device(tree, ninter, rows, nrows, cols, ncols, out, roff, coff, layout, sketch,
-                                        targets != nullptr && check ? &checked_targets : targets,
-                                        replicate ? nullptr : dsum);
+            // The request goes to the device in batches of bounded size.
+            //
+            // partial_schur_blocks_device allocates ONE arena a level for the
+            // vp and wv of every chain, sized by the whole request: a chain's
+            // buffers are |ridx| x |members| and |wrows| x |members|, and a
+            // `member` is one requested POINT of one request block that lands
+            // in that box (PartialChainBlock::members, "indices into the
+            // side's distinct points").  So the peak grows with the requested
+            // points of the whole list and not at all with the number of ranks
+            // -- NSTX-U order 3 held 12.70 GB in that one arena (partial.hpp,
+            // the alloc below) on both 128 and 256 ranks, 17.82 against 17.92
+            // GB of untagged transient in total, which is why going from 32 to
+            // 64 nodes did not move the peak.  A level's arenas are released
+            // when the next level's are built, so a batch has to fit one
+            // level, not the whole sweep.
+            //
+            // The CB product already bounds itself this way -- it goes in
+            // passes of max_columns, which partial_device_ready sizes as a
+            // quarter of what is free and reduces with MPI_MIN so every rank
+            // agrees (partial_device.hpp, "columns a pass") -- while the
+            // extraction never consulted it.  Reuse that same bound: a member
+            // costs the |ridx|+|wrows| of one box where a column of the
+            // product costs per_column, the 2*points of a whole level, so
+            // spending one column of the budget on one member is conservative,
+            // and the bound is already collective.
+            //
+            // Cut on the points and not on the blocks: one block can hold
+            // thousands of points, so a cap on the block count would leave a
+            // single large block unsplit and bound nothing.  Batching is safe
+            // for the collectives inside because the request and the option
+            // are identical on every rank (see the comment above), roff/coff
+            // with them, and max_columns is reduced with MPI_MIN, so every
+            // rank cuts the list at the same places and makes the same number
+            // of calls.  Each batch's rows/cols are a window of the flat
+            // arrays, its roff/coff are rebased, and its out starts at
+            // ooff[k0]; a sketch's dims and omega_off are windowed too, while
+            // omega_off's values stay absolute into omega_pos/dest/val.
+            const bool batched = targets == nullptr && (replicate || dsum == nullptr);
+            const int64_t budget = std::max<int64_t>(1, fmm::gpu::partial_device_store().max_columns);
+            int64_t k0 = 0, nbatch = 0;
+            do {
+                int64_t nb = ninter - k0;  // device outputs / an external sum: one call, as before
+                if (batched && nb > 1) {
+                    int64_t pts = roff[static_cast<size_t>(k0) + 1] - roff[static_cast<size_t>(k0)] +
+                                  coff[static_cast<size_t>(k0) + 1] - coff[static_cast<size_t>(k0)];
+                    nb = 1;
+                    while (k0 + nb < ninter) {
+                        const int64_t p = roff[static_cast<size_t>(k0 + nb) + 1] - roff[static_cast<size_t>(k0 + nb)] +
+                                          coff[static_cast<size_t>(k0 + nb) + 1] - coff[static_cast<size_t>(k0 + nb)];
+                        if (pts + p > budget) break;
+                        pts += p;
+                        ++nb;
+                    }
+                }
+                std::vector<int64_t> roff_b(static_cast<size_t>(nb) + 1), coff_b(static_cast<size_t>(nb) + 1);
+                for (int64_t j = 0; j <= nb; ++j) {
+                    roff_b[static_cast<size_t>(j)] = roff[static_cast<size_t>(k0 + j)] - roff[static_cast<size_t>(k0)];
+                    coff_b[static_cast<size_t>(j)] = coff[static_cast<size_t>(k0 + j)] - coff[static_cast<size_t>(k0)];
+                }
+                PartialSketch sketch_b;
+                if (sketch != nullptr) {
+                    sketch_b = *sketch;
+                    sketch_b.dims = sketch->dims + k0;
+                    sketch_b.omega_off = sketch->omega_off + k0;
+                }
+                const PartialSketch* sk_b = sketch != nullptr ? &sketch_b : nullptr;
+                const PartialOutLayout layout_b = partial_out_layout(nb, nrows + k0, ncols + k0, sk_b);
+                partial_schur_blocks_device(tree, nb, rows + roff[static_cast<size_t>(k0)], nrows + k0,
+                                            cols + coff[static_cast<size_t>(k0)], ncols + k0,
+                                            out + ooff[static_cast<size_t>(k0)], roff_b, coff_b, layout_b, sk_b,
+                                            targets != nullptr && check ? &checked_targets : targets,
+                                            replicate ? nullptr : dsum);
+                ++nbatch;
+                k0 += std::max<int64_t>(nb, 1);
+            } while (k0 < ninter);
             if (check) {
                 const double t1 = MPI_Wtime();
                 std::vector<DataType> host(static_cast<size_t>(ooff.back()));
@@ -4624,10 +4696,11 @@ void partial_schur_blocks(fmm::ParallelTree<CoordType, DataType>& tree, int64_t 
                 }
                 MPI_Allreduce(MPI_IN_PLACE, sums, 2, MPI_DOUBLE, MPI_SUM, tree.comm);
                 if (me == 0) {
-                    std::printf("GPU partial CB %s check: |gpu - host| / |host| = %.3e (%lld entries in %lld blocks; "
-                                "device %.4f s, host %.4f s)\n",
+                    std::printf("GPU partial CB %s check: |gpu - host| / |host| = %.3e (%lld entries in %lld blocks, "
+                                "%lld device batches of at most %lld points; device %.4f s, host %.4f s)\n",
                                 sketch != nullptr ? "sketches" : "entries", sums[1] > 0.0 ? std::sqrt(sums[0] / sums[1]) : 0.0,
-                                static_cast<long long>(ooff.back()), static_cast<long long>(ninter), times[0], times[1]);
+                                static_cast<long long>(ooff.back()), static_cast<long long>(ninter),
+                                static_cast<long long>(nbatch), static_cast<long long>(budget), times[0], times[1]);
                     std::fflush(stdout);
                 }
             }
