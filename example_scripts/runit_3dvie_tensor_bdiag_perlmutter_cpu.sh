@@ -24,7 +24,8 @@
 # EXAMPLE/slowness_model3d_generator.py, see below), NSHAPE, SMIN, SMAX (ivelo 11: the generator's num_shapes,
 # slowness_min and slowness_max, which name the file), H2_UNSTRUCTURED (1: unstructured H2 blocks, needed when the
 # scatterer does not fill the box, as with ivelo 11),
-# IVELO9_GRAD_SCALE (factor on the ivelo 9 velocity gradient), CASE (h2 | none: no preconditioner), RPN, BLAS
+# IVELO9_GRAD_SCALE (factor on the ivelo 9 velocity gradient), LRLEVEL (the tensor's --lrlevel, default 5: tree levels
+# from it down use Tucker-ID blocks; 6 lets the tensor use up to 4096 ranks), CASE (h2 | none: no preconditioner), RPN, BLAS
 # (omp: the OpenMP-threaded OpenBLAS preloaded, 17% faster H2 blocks | seq: the build's sequential one),
 # EXTRA_ARGS, EXTRA_PRELOAD, WRAP (a launcher before the application, e.g. a perf wrapper), TAG, OUTDIR (logs and
 # field slices; default the submit directory), FROZEN (a directory with copies of cvie3d_t_so and
@@ -96,7 +97,7 @@ if [ "$IVELO" = 11 ]; then
 fi
 COMMON="--ivelo ${IVELO} ${IVELO11_ARGS} --ivelo9_grad_scale ${IVELO9_GRAD_SCALE:-1} --pad_s2s 1 --trans_invariant 2 --scaleGreen 1 \
  --omega ${OMEGA} --htensor_mvp_level_batch 1 --h ${H} \
- --x0max ${X0} --y0max ${X0} --z0max ${X0} --L ${X0} --H ${X0} --W ${X0} --vs 1 --shape 4 --knn 0 --lrlevel 5 --nbundle 8 \
+ --x0max ${X0} --y0max ${X0} --z0max ${X0} --L ${X0} --H ${X0} --W ${X0} --vs 1 --shape 4 --knn 0 --lrlevel ${LRLEVEL:-5} --nbundle 8 \
  --n_iter ${N_ITER} --format 6 --iter_solver ${ITER_SOLVER:-2} --gmres_restart ${GMRES_RESTART:-200} --baca_batch 8 --knn_near_para 20.0 --elem_extract 0 --near_para 2.1d0 \
  --use_zfp 1 --use_qtt 0 --xyzsort 1 --use_fft_circulant 1 --nmin_leaf 32 --sample_para_outer 0.8 --sample_para 0.8 \
  --rmax 4 --rankrate 2.0 --itermax 1 --tol_comp ${TOL_COMP:-1e-2} --tol_rand 1e-5 --tol_Rdetect 0.3e-5 --fastsample_tensor 2 \
