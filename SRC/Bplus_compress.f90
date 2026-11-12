@@ -1708,6 +1708,7 @@ contains
 
       if(option%fastsample_tensor==1)then ! uniform sampling the row dimension of the unfolded tensor
          subtensors(index_ij)%masks=0
+         subtensors(index_ij)%fiber_dim = dim ! the masks select fibers along column dimension dim
          dim_product = product(dims_row)
          do dim_i =1,Ndim
             if (dim/=dim_i) then
@@ -2086,6 +2087,18 @@ contains
       do dim_i=1,Ndim
          if(dim_i/=dim)rankmax_r = rankmax_r*dims_col(dim_i)
       enddo
+      if (subtensors(index_ij)%fiber_dim /= 0) then ! sampled fibers: the QR gets their rows only, not the zero rows of the rest of the grid
+         rankmax_r = 0
+         do j_dim = 1,dims_col(dim)
+            cnt = 0
+            do j = 1, product(dims_col)
+               call SingleIndexToMultiIndex(Ndim, dims_col, j, idx_n)
+               if(idx_n(dim)==j_dim) cnt = cnt + count(subtensors(index_ij)%masks(:,j)==1)
+            enddo
+            rankmax_r = max(rankmax_r, cnt)
+         enddo
+         rankmax_r = max(rankmax_r, 1)
+      endif
       allocate (core(rankmax_r, rankmax_c))
 core=0
       allocate (core_tmp(rankmax_r, rankmax_c))
@@ -2382,6 +2395,7 @@ do j_dim = 1,dims_col(dim)
 
       if(option%fastsample_tensor==1)then ! uniform sampling the row dimension of the unfolded tensor
          subtensors(index_ij)%masks=0
+         subtensors(index_ij)%fiber_dim = -dim ! the masks select fibers along row dimension dim
          dim_product = product(dims_col)
          do dim_i =1,Ndim
             if (dim/=dim_i) then
@@ -2591,6 +2605,18 @@ do j_dim = 1,dims_col(dim)
       do dim_i=1,Ndim
          if(dim_i/=dim)rankmax_c = rankmax_c*dims_row(dim_i)
       enddo
+      if (subtensors(index_ij)%fiber_dim /= 0) then ! sampled fibers: the QR gets their rows only, not the zero rows of the rest of the grid
+         rankmax_c = 0
+         do i_dim = 1,dims_row(dim)
+            cnt = 0
+            do i = 1, product(dims_row)
+               call SingleIndexToMultiIndex(Ndim, dims_row, i, idx_m)
+               if(idx_m(dim)==i_dim) cnt = cnt + count(subtensors(index_ij)%masks(i,:)==1)
+            enddo
+            rankmax_c = max(rankmax_c, cnt)
+         enddo
+         rankmax_c = max(rankmax_c, 1)
+      endif
       allocate (core(rankmax_c, rankmax_r))
 core=0
       allocate (core_tmp(rankmax_c, rankmax_r))

@@ -24876,6 +24876,57 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
 
 
+   !>**** the fibers selected by the masks of subtensor sub (sub%fiber_dim /= 0). For fibers along column dimension
+   ! d = fiber_dim > 0: the row index fi and the column index fj (index 1 along d) of every row and choice of the other column
+   ! indices whose fiber has a nonzero mask; for fibers along row dimension d = -fiber_dim the same with rows and columns
+   ! exchanged. Single indices as in sub%dat (dimension 1 fastest).
+   subroutine BF_MD_subtensor_fibers(Ndim, sub, nfib, fi, fj)
+
+      implicit none
+      integer Ndim, nfib, d, stride, nalong, i, j, pass
+      type(intersect_MD)::sub
+      integer, allocatable::fi(:), fj(:)
+
+      d = abs(sub%fiber_dim)
+      do pass = 1, 2
+         nfib = 0
+         if (sub%fiber_dim > 0) then
+            stride = product(sub%nc(1:d - 1))
+            nalong = sub%nc(d)
+            do j = 1, product(sub%nc)
+               if (mod((j - 1)/stride, nalong) /= 0) cycle
+               do i = 1, product(sub%nr)
+                  if (any(sub%masks(i, j:j + (nalong - 1)*stride:stride) /= 0)) then
+                     nfib = nfib + 1
+                     if (pass == 2) then
+                        fi(nfib) = i
+                        fj(nfib) = j
+                     endif
+                  endif
+               enddo
+            enddo
+         else
+            stride = product(sub%nr(1:d - 1))
+            nalong = sub%nr(d)
+            do j = 1, product(sub%nc)
+               do i = 1, product(sub%nr)
+                  if (mod((i - 1)/stride, nalong) /= 0) cycle
+                  if (any(sub%masks(i:i + (nalong - 1)*stride:stride, j) /= 0)) then
+                     nfib = nfib + 1
+                     if (pass == 2) then
+                        fi(nfib) = i
+                        fj(nfib) = j
+                     endif
+                  endif
+               enddo
+            enddo
+         endif
+         if (pass == 1) allocate (fi(nfib), fj(nfib))
+      enddo
+
+   end subroutine BF_MD_subtensor_fibers
+
+
    subroutine element_Zmn_tensorlist_user(Ndim, subtensors, Nsub, msh, option, ker, myflag, passflag, ptree, stats, zfpquants, qttquants)
 
 
@@ -24908,6 +24959,9 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       type(zfpquant),optional:: zfpquants(*)
       type(TTtype),optional:: qttquants(*)
       DT:: value_e
+      integer q, k, kk, d, stride, nalong, idx_m(Ndim), idx_n(Ndim)
+      integer, allocatable:: nreq_sub(:)
+      type(iarray), allocatable:: fibs_i(:), fibs_j(:)
 integer, save:: my_tid = 0
 #ifdef HAVE_OPENMP
 !$omp threadprivate(my_tid)
@@ -25036,39 +25090,92 @@ integer, save:: my_tid = 0
       else if (option%elem_extract == 2) then
 
          t1 = MPI_Wtime()
-         nr=0
-         nc=0
-         do nn=1,Nsub
-            nr = nr + subtensors(nn)%nr
-            nc = nc + subtensors(nn)%nc
-         enddo
         if(Nsub>0)then
-            allocate(rowidx(Ndim,Nsub))  ! rowidx
-            allocate(colidx(Ndim,Nsub))  ! colidx
+            ! the requests to the user: a subtensor whose masks select fibers along one dimension (fiber_dim /= 0, from the
+            ! fastsample_tensor=1 sampling) is requested fiber by fiber, so that only its sampled entries are evaluated; any
+            ! other subtensor is requested as a whole
+            allocate (fibs_i(Nsub), fibs_j(Nsub), nreq_sub(Nsub))
+            Ninter = 0
+            do nn = 1, Nsub
+               nreq_sub(nn) = 1
+               if (subtensors(nn)%fiber_dim /= 0 .and. allocated(subtensors(nn)%masks) .and. .not. (present(zfpquants) .or. present(qttquants))) &
+                  call BF_MD_subtensor_fibers(Ndim, subtensors(nn), nreq_sub(nn), fibs_i(nn)%dat, fibs_j(nn)%dat)
+               Ninter = Ninter + nreq_sub(nn)
+            enddo
+            allocate(rowidx(Ndim,max(Ninter,1)))  ! rowidx
+            allocate(colidx(Ndim,max(Ninter,1)))  ! colidx
+            q = 0
+            do nn = 1, Nsub
+               if (allocated(fibs_i(nn)%dat)) then
+                  d = abs(subtensors(nn)%fiber_dim)
+                  do k = 1, nreq_sub(nn)
+                     q = q + 1
+                     rowidx(:, q) = 1
+                     colidx(:, q) = 1
+                     if (subtensors(nn)%fiber_dim > 0) then
+                        colidx(d, q) = subtensors(nn)%nc(d)
+                     else
+                        rowidx(d, q) = subtensors(nn)%nr(d)
+                     endif
+                  enddo
+               else
+                  q = q + 1
+                  rowidx(:, q) = subtensors(nn)%nr
+                  colidx(:, q) = subtensors(nn)%nc
+               endif
+            enddo
+            nr=0
+            nc=0
+            idx_dat=0
+            do q = 1, Ninter
+               nr = nr + rowidx(:, q)
+               nc = nc + colidx(:, q)
+               idx_dat = idx_dat + product(int(rowidx(:, q), 8))*product(int(colidx(:, q), 8))
+            enddo
             allocate(allrows(maxval(nr),Ndim))             ! allrows
             allrows = -1
             allocate(allcols(maxval(nc),Ndim))             ! allcols
             allcols = -1
             Nrow_max=maxval(nr)
             Ncol_max=maxval(nc)
-            idx_dat=0
             nr=0
             nc=0
+            q = 0
             do nn=1,Nsub
-               do dim_i=1,Ndim
-                  allrows(nr(dim_i)+1:nr(dim_i)+subtensors(nn)%nr(dim_i),dim_i) = abs(msh(dim_i)%new2old(subtensors(nn)%rows(dim_i)%dat))
-                  allcols(nc(dim_i)+1:nc(dim_i)+subtensors(nn)%nc(dim_i),dim_i) = abs(msh(dim_i)%new2old(subtensors(nn)%cols(dim_i)%dat))
-               enddo
-               nr = nr + subtensors(nn)%nr
-               nc = nc + subtensors(nn)%nc
-               rowidx(:,nn) = subtensors(nn)%nr
-               colidx(:,nn) = subtensors(nn)%nc
-               idx_dat = idx_dat + product(subtensors(nn)%nr)*product(subtensors(nn)%nc)
+               if (allocated(fibs_i(nn)%dat)) then
+                  d = abs(subtensors(nn)%fiber_dim)
+                  do k = 1, nreq_sub(nn)
+                     q = q + 1
+                     call SingleIndexToMultiIndex(Ndim, subtensors(nn)%nr, fibs_i(nn)%dat(k), idx_m)
+                     call SingleIndexToMultiIndex(Ndim, subtensors(nn)%nc, fibs_j(nn)%dat(k), idx_n)
+                     do dim_i=1,Ndim
+                        if (subtensors(nn)%fiber_dim < 0 .and. dim_i == d) then
+                           allrows(nr(dim_i)+1:nr(dim_i)+rowidx(dim_i,q),dim_i) = abs(msh(dim_i)%new2old(subtensors(nn)%rows(dim_i)%dat))
+                        else
+                           allrows(nr(dim_i)+1,dim_i) = abs(msh(dim_i)%new2old(subtensors(nn)%rows(dim_i)%dat(idx_m(dim_i))))
+                        endif
+                        if (subtensors(nn)%fiber_dim > 0 .and. dim_i == d) then
+                           allcols(nc(dim_i)+1:nc(dim_i)+colidx(dim_i,q),dim_i) = abs(msh(dim_i)%new2old(subtensors(nn)%cols(dim_i)%dat))
+                        else
+                           allcols(nc(dim_i)+1,dim_i) = abs(msh(dim_i)%new2old(subtensors(nn)%cols(dim_i)%dat(idx_n(dim_i))))
+                        endif
+                     enddo
+                     nr = nr + rowidx(:, q)
+                     nc = nc + colidx(:, q)
+                  enddo
+               else
+                  q = q + 1
+                  do dim_i=1,Ndim
+                     allrows(nr(dim_i)+1:nr(dim_i)+subtensors(nn)%nr(dim_i),dim_i) = abs(msh(dim_i)%new2old(subtensors(nn)%rows(dim_i)%dat))
+                     allcols(nc(dim_i)+1:nc(dim_i)+subtensors(nn)%nc(dim_i),dim_i) = abs(msh(dim_i)%new2old(subtensors(nn)%cols(dim_i)%dat))
+                  enddo
+                  nr = nr + rowidx(:, q)
+                  nc = nc + colidx(:, q)
+               endif
             enddo
 
             !>***** Generate pmaps and pgidx for all intersections
             Npmap = 1
-            Ninter = Nsub
             allocate (pmaps(Npmap, 3))
             do pp = 1, Npmap
                pmaps(pp, 1) = 1
@@ -25085,7 +25192,9 @@ integer, save:: my_tid = 0
             call LogMemory(stats, SIZEOF(alldat_loc)/1024.0d3)
 
 
-            if (option%cpp == 1) then
+            if (Ninter == 0) then
+               ! the masks selected no fiber: nothing to request
+            elseif (option%cpp == 1) then
                call c_f_procpointer(ker%C_FuncZmnBlock_MD, proc_C)
                pgidx = pgidx - 1
                call proc_C(Ndim, Ninter, Nrow_max, Ncol_max, idx_dat, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps, ker%C_QuantApp)
@@ -25097,6 +25206,30 @@ integer, save:: my_tid = 0
             !>***** copy from alldat_loc to subtensors(nn)%dat, accouting for the zero masks
             idx = 0
             do nn=1,Nsub
+               if (allocated(fibs_i(nn)%dat)) then ! fibers along dimension d: only their entries were requested
+                  d = abs(subtensors(nn)%fiber_dim)
+                  if (subtensors(nn)%fiber_dim > 0) then
+                     stride = product(subtensors(nn)%nc(1:d - 1))
+                     nalong = subtensors(nn)%nc(d)
+                  else
+                     stride = product(subtensors(nn)%nr(1:d - 1))
+                     nalong = subtensors(nn)%nr(d)
+                  endif
+                  do k = 1, nreq_sub(nn)
+                     do kk = 0, nalong - 1
+                        idx = idx + 1
+                        i = fibs_i(nn)%dat(k)
+                        j = fibs_j(nn)%dat(k)
+                        if (subtensors(nn)%fiber_dim > 0) then
+                           j = j + kk*stride
+                        else
+                           i = i + kk*stride
+                        endif
+                        if (subtensors(nn)%masks(i, j) /= 0) subtensors(nn)%dat(i, j) = alldat_loc(idx)*option%scale_factor
+                     enddo
+                  enddo
+                  cycle
+               endif
                dims(1:Ndim) = subtensors(nn)%nr
                dims(1+Ndim:2*Ndim) = subtensors(nn)%nc
                dims8 = dims
@@ -25165,6 +25298,7 @@ integer, save:: my_tid = 0
             deallocate (rowidx)
             deallocate (pgidx)
             deallocate (pmaps)
+            deallocate (fibs_i, fibs_j, nreq_sub)
          endif
          passflag=2
          t2 = MPI_Wtime()

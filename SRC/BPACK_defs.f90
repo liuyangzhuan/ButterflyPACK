@@ -441,6 +441,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         ! integer::nr_loc
         type(iarray), allocatable:: idxmap(:) !< map based on masks from the nonzero indices to original indices
         integer, allocatable::masks(:,:) !< store mask of each entry that determine whether to skip the evaluation
+        integer:: fiber_dim = 0 !< 0: the whole subtensor is requested from the user; d>0 (d<0): masks select fibers along column (row) dimension |d|, which are requested one by one with option%elem_extract=2
         type(iarray), allocatable::rows(:)  !< store indices in bmat or global list of intersections
         type(iarray), allocatable::cols(:)  !< store indices in bmat or global list of intersections
         ! integer, allocatable::rows_loc(:) !< store indices in rows
@@ -831,7 +832,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer:: elem_extract !< 1: use user-defined element extraction 0: use user-defined formula
         integer:: cpp !< 1: use user-defined c/cpp functions 0: use user-defined fortran functions
         integer:: knn !< number of nearest neighbour points for each point
-        integer:: fastsample_tensor !< 0: uniformly sample each dimension. 1: uniformly sample the rows of the unfolded matrices on top of 0. 2: use translation invariance
+        integer:: fastsample_tensor !< 0: uniformly sample each dimension. 1: uniformly sample the rows of the unfolded matrices on top of 0; with elem_extract=2 the sampled fibers are requested one by one, so only rank-sized numbers of entries are evaluated. 2: use translation invariance
         integer:: trans_invariant !< 1: reuse HTENSOR blocks by relative offset; 2: reuse by squared offset distance
         integer:: htensor_mvp_level_batch !< number of HTENSOR levels grouped in one MVP call; 1 keeps level-by-level memory
         integer:: reduction_threshold !< 7: H2 process-reduction threshold
