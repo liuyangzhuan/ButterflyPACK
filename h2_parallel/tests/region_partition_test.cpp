@@ -286,6 +286,32 @@ int main() {
         for (const int32_t x : k.count) std::printf("%d ", x);
         std::printf("\n");
     }
+    // A long, thin domain (GPTune's space-time GP: 26 x 26 x 106 correlation
+    // lengths, every box of the x, y < 1/4 column occupied): levels 0-3 hold
+    // 1, 2, 4 and 32 boxes.  Keeping ranks, the coarse levels must stay
+    // spread (1 1 2 4 8 8), not all on one rank (1 1 1 1 8 8, which ran a GPU
+    // out of memory at level 3).
+    for (const int levels : {6, 7}) {
+        const int procs = 8, dim = 3;
+        const int h = region_weight_level(dim, levels, procs);
+        const int64_t side = int64_t{1} << h;
+        std::vector<int64_t> w(size_t{1} << (dim * h), 0);
+        for (size_t m = 0; m < w.size(); ++m) {
+            int64_t xyz[3] = {0, 0, 0};
+            for (int b = 0; b < h; ++b)
+                for (int q = 0; q < dim; ++q) xyz[q] |= ((static_cast<int64_t>(m) >> (dim * b + q)) & 1) << b;
+            if (4 * xyz[0] < side && 4 * xyz[1] < side) w[m] = 100;
+        }
+        const RegionPlan t = plan_regions(dim, levels, procs, threshold, RegionWeights::of_counts(h, w), true);
+        check_layout(t, "thin", dim, levels, procs);
+        std::printf("thin 26 x 26 x 106, %d levels, 8 ranks, keeping ranks: %3ld %.3f  ", levels,
+                    static_cast<long>(t.threshold), t.leaf_imbalance);
+        for (const int32_t x : t.count) std::printf("%d ", x);
+        std::printf("\n");
+        if (t.empty_region || t.count[2] != 2 || t.count[3] != 4 || t.count[4] != 8) {
+            fail("thin domain: coarse levels on more ranks", "thin", dim, levels, procs, 3);
+        }
+    }
     if (failures) {
         std::printf("%d failures\n", failures);
         return 1;

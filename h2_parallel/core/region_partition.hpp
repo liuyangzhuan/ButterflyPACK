@@ -300,8 +300,19 @@ inline void region_counts_above(int dimension, int level, int64_t threshold, std
 // level 2 of a 3D tree (groups of 3 under 2 level-1 boxes each), not 8
 // (groups of 1 and 2 under one box each: one leaf region 1.5x the mean) nor
 // the rule's 2.  Leaf first, each level's choice fixed before the next.
+//
+// `min_boxes` is the boxes a rank of a kept level must have (the caller's
+// reduction_threshold), apart from `threshold`, which places the reductions:
+// plan_regions raises the threshold only to take the first reduction a level
+// finer, and capping by the raised one allowed no more than one rank on every
+// level above it - a long, thin GP domain (26 x 26 x 106 correlation lengths)
+// put level 3, 32-128 boxes of ~5000 points, on one GPU (1 1 1 1 8 8, out of
+// device memory); by the caller's it keeps 1 1 2 4 8 8.  min_boxes <= 0: the
+// threshold, as before.
 inline std::vector<int32_t> region_counts_keeping_ranks(int dimension, int num_levels, int num_procs,
-                                                        int64_t threshold, const RegionWeights& weights) {
+                                                        int64_t threshold, const RegionWeights& weights,
+                                                        int64_t min_boxes = 0) {
+    if (min_boxes <= 0) min_boxes = threshold;
     const int32_t f = int32_t{1} << dimension;
     std::vector<int32_t> count = region_counts(dimension, num_levels, num_procs, threshold);
     for (int level = num_levels - 2; level >= 2; --level) {
@@ -320,7 +331,7 @@ inline std::vector<int32_t> region_counts_keeping_ranks(int dimension, int num_l
         double plain_imbalance = 0.0;
         bool plain_empty = false;
         std::vector<int32_t> chosen = layout(plain, plain_imbalance, plain_empty);
-        const int64_t cap = std::min<int64_t>(boxes / threshold, int64_t{1} << (dimension * (level - 1)));
+        const int64_t cap = std::min<int64_t>(boxes / min_boxes, int64_t{1} << (dimension * (level - 1)));
         int32_t tried = 0;
         for (int32_t k = 2; k < f; ++k) {
             const int32_t n = (prev + k - 1) / k;  // decreasing in k
@@ -356,7 +367,7 @@ struct RegionPlan {
 inline RegionPlan plan_regions(int dimension, int num_levels, int num_procs, int64_t threshold,
                                const RegionWeights& weights = RegionWeights{}, bool keep_ranks = false) {
     auto counts_at = [&](int64_t t) {
-        return keep_ranks ? region_counts_keeping_ranks(dimension, num_levels, num_procs, t, weights)
+        return keep_ranks ? region_counts_keeping_ranks(dimension, num_levels, num_procs, t, weights, threshold)
                           : region_counts(dimension, num_levels, num_procs, t);
     };
     const int64_t f = int64_t{1} << dimension;

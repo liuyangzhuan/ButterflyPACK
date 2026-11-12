@@ -3455,6 +3455,30 @@ contains
       enddo
    end subroutine remove_dup_int
 
+   !>**** remove_dup_int for values that lie in 1..nmax: the same sorted,
+   !> distinct output, by marking instead of a real(8) sort of all nin
+   subroutine remove_dup_int_range(array, nin, nout, nmax)
+      implicit none
+      integer nin, nout, nmax
+      integer array(nin)
+      logical, allocatable :: seen(:)
+      integer ii
+
+      allocate (seen(nmax))
+      seen = .false.
+      do ii = 1, nin
+         seen(array(ii)) = .true.
+      enddo
+      nout = 0
+      do ii = 1, nmax
+         if (seen(ii)) then
+            nout = nout + 1
+            array(nout) = ii
+         endif
+      enddo
+      deallocate (seen)
+   end subroutine remove_dup_int_range
+
    subroutine binary_search(N, x, val, mid)
 
       implicit none
@@ -5455,6 +5479,16 @@ end subroutine TensorPermute
                call blacs_gridmap_wrp(ptree%pgrp(group)%ctxt, pmap, nprow, nprow, npcol)
                deallocate (pmap)
 
+               if (nproc == 1) then
+                  ! One process: the 1D, 1D-column and head grids are this same 1x1 grid, so they share
+                  ! its context (delete_proctree exits it once).  Each BLACS grid holds four communicators
+                  ! and MPICH allows about 4096 a process: hundreds of one-rank matrices on a rank (the
+                  ! sequential H2 fronts of a sparse solver) otherwise run out of them.
+                  ptree%pgrp(group)%ctxt1D = ptree%pgrp(group)%ctxt
+                  ptree%pgrp(group)%ctxt1DCol = ptree%pgrp(group)%ctxt
+                  ptree%pgrp(group)%ctxt_head = ptree%pgrp(group)%ctxt
+               else
+
                ! the context involving 1D grids non-cyclic row
                allocate (pmap(nproc, 1))
                do kk = 1, nproc
@@ -5480,6 +5514,8 @@ end subroutine TensorPermute
                pmap=0
                call blacs_gridmap_wrp(ptree%pgrp(group)%ctxt_head, pmap, 1, 1, 1)
                deallocate (pmap)
+
+               endif
 
                ! call MPI_barrier(ptree%pgrp(group)%Comm,ierr)
 

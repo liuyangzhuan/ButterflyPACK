@@ -2393,8 +2393,11 @@ contains
          call assert(ho_bf1%levels(level_c)%BP(ii)%Lplus == 1, 'HODLR GPU construction requires LRlevel=0')
          blks(b)%p => ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)
          call assert(blks(b)%p%level_butterfly == 0, 'HODLR GPU construction: a block is not low rank')
-         call BPACK_require(IOwnPgrp(ptree, fgno) .and. &
-                            ho_bf1%levels(level_c)%BP_inverse((ii + 1)/2)%pgno == fgno, &
+         ! (one group, or one-rank groups: a one-rank group's two children are numbered apart, NumberingPtree,
+         ! when nproc is not a power of 2; they are this rank, and the prefetch has nothing to fetch for them)
+         pgno = ho_bf1%levels(level_c)%BP_inverse((ii + 1)/2)%pgno
+         call BPACK_require(IOwnPgrp(ptree, fgno) .and. IOwnPgrp(ptree, pgno) .and. &
+                            (pgno == fgno .or. (ptree%pgrp(pgno)%nproc == 1 .and. ptree%pgrp(fgno)%nproc == 1)), &
                             'HODLR GPU construction: the blocks of a rank in diagonal blocks of different groups')
       enddo
       call HODLR_gpu_addend_prefetch(ho_bf1%gpu, ker, blks, nb, option, ptree, fgno, nu0, nv0)
@@ -6100,6 +6103,7 @@ contains
       integer::Npmap, pmaps(Npmap, 3), flag2D
       type(iarray)::lst
       type(matrixblock), pointer::blocks_o
+      logical, allocatable::done(:)
 
       stats%Flop_Tmp = 0d0
 
@@ -6208,10 +6212,6 @@ contains
       enddo
 #endif
 
-#ifdef HAVE_TASKLOOP
-      !$omp parallel
-      !$omp single
-#endif
       ! construct intersections for each block from the block's lists
       cur => lstblk%head
       do ii = 1, lstblk%num_nods ! loop all blocks
@@ -6268,21 +6268,55 @@ contains
                call LogMemory(stats, SIZEOF(blocks%inters(nn)%dat_loc)/1024.0d3)
             enddo
 
-            ! extract entries on an array of intersections for each block
-
-            if (blocks%style == 1) then
-               call Full_block_extraction(blocks, inters, ptree, msh, stats, option)
-            else
-               if (blocks%level_butterfly == 0) then
-                  call LR_block_extraction(blocks, inters, ptree, msh, stats)
-               else
-                  call BF_block_extraction(blocks, inters, ptree, msh, stats)
-               endif
-            endif
-
             ! finalize the lists of lists of rows and columns for each block because they have been transferred to intersections
             call list_finalizer(blocks%lstr)
             call list_finalizer(blocks%lstc)
+         end select
+         cur => cur%next
+      enddo
+
+      ! a butterfly on several ranks: this rank's rows on the device when it
+      ! can (BF_block_extraction_gpu), outside the task region since it
+      ! threads its own planning; collective over the block's group, as
+      ! BF_block_extraction is
+      allocate (done(max(lstblk%num_nods, 1)))
+      done = .false.
+      cur => lstblk%head
+      do ii = 1, lstblk%num_nods
+         select type (ptr=>cur%item)
+         type is (block_ptr)
+            blocks => ptr%ptr
+            if (blocks%style /= 1 .and. blocks%level_butterfly > 0 .and. ptree%pgrp(blocks%pgno)%nproc > 1) then
+               if (BF_gpu_extract_ok(blocks, option)) then
+                  call BF_block_extraction_gpu(blocks, inters, ptree, msh, stats, info)
+                  done(ii) = info == 0
+               endif
+            endif
+         end select
+         cur => cur%next
+      enddo
+
+#ifdef HAVE_TASKLOOP
+      !$omp parallel
+      !$omp single
+#endif
+      ! extract entries on an array of intersections for each block
+      cur => lstblk%head
+      do ii = 1, lstblk%num_nods
+         select type (ptr=>cur%item)
+         type is (block_ptr)
+            blocks => ptr%ptr
+            if (.not. done(ii)) then
+               if (blocks%style == 1) then
+                  call Full_block_extraction(blocks, inters, ptree, msh, stats, option)
+               else
+                  if (blocks%level_butterfly == 0) then
+                     call LR_block_extraction(blocks, inters, ptree, msh, stats)
+                  else
+                     call BF_block_extraction(blocks, inters, ptree, msh, stats)
+                  endif
+               endif
+            endif
          end select
          cur => cur%next
       enddo
@@ -6290,6 +6324,7 @@ contains
       !$omp end single
       !$omp end parallel
 #endif
+      deallocate (done)
       n3 = MPI_Wtime()
       stats%Time_Entry_BF = stats%Time_Entry_BF + n3-n2
 
@@ -6362,6 +6397,212 @@ contains
       ! endif
 
    end subroutine BF_ExtractElement
+
+   !>**** BF_block_extraction on the device (c_bf_gpu_extract_dist,
+   !> GPU_BACKEND/bf_gpu/bf_extract.hpp): this rank's rows of every
+   !> intersection of a butterfly on a process group, into
+   !> blocks%inters(:)%dat_loc, for BF_ExtractElement's redistribution.  Each
+   !> row and column goes by its leaf and its place in it, each leaf by the
+   !> rank holding it (GetBlockPID; -1 for one several ranks share).
+   !> Collective over the block's group.  info 1: the device declined, on
+   !> every rank together, and dat_loc is as it was.
+   subroutine BF_block_extraction_gpu(blocks, inters, ptree, msh, stats, info)
+      implicit none
+      type(matrixblock), target::blocks
+      type(intersect)::inters(:)
+      type(proctree), target::ptree
+      type(mesh)::msh
+      type(Hstat)::stats
+      integer::info
+      integer::ninter, L, nn, nng, ii, jj, g, ir, ic, il, a, pgno_sub, nrow, ncol, nlocal, idx
+      integer(kind=8)::nout, at
+      integer, allocatable::nr(:), nc(:), row_leaf(:), row_pos(:), col_leaf(:), col_pos(:), nloc(:), local(:)
+      integer, allocatable::row_owner(:), col_owner(:)
+      DT, allocatable, target::out(:)
+      real(kind=8)::flops
+
+      info = 1
+      ninter = size(blocks%inters, 1)
+      L = blocks%level_butterfly
+      allocate (nr(max(ninter, 1)), nc(max(ninter, 1)), nloc(max(ninter, 1)))
+      nrow = 0
+      ncol = 0
+      nlocal = 0
+      nout = 0
+      do nn = 1, ninter
+         nr(nn) = blocks%inters(nn)%nr
+         nc(nn) = blocks%inters(nn)%nc
+         nloc(nn) = blocks%inters(nn)%nr_loc
+         nrow = nrow + nr(nn)
+         ncol = ncol + nc(nn)
+         nlocal = nlocal + nloc(nn)
+         nout = nout + int(nloc(nn), 8)*nc(nn)
+      enddo
+      allocate (row_leaf(max(nrow, 1)), row_pos(max(nrow, 1)), col_leaf(max(ncol, 1)), col_pos(max(ncol, 1)))
+      allocate (local(max(nlocal, 1)))
+      ir = 0
+      ic = 0
+      il = 0
+      do nn = 1, ninter
+         nng = blocks%inters(nn)%idx
+         do ii = 1, nr(nn)
+            ir = ir + 1
+            idx = inters(nng)%rows(blocks%inters(nn)%rows(ii))
+            g = findgroup(idx, msh, L, blocks%row_group)
+            row_leaf(ir) = g - blocks%row_group*2**L
+            row_pos(ir) = idx - msh%basis_group(g)%head
+         enddo
+         do jj = 1, nc(nn)
+            ic = ic + 1
+            idx = inters(nng)%cols(blocks%inters(nn)%cols(jj))
+            g = findgroup(idx, msh, L, blocks%col_group)
+            col_leaf(ic) = g - blocks%col_group*2**L
+            col_pos(ic) = idx - msh%basis_group(g)%head
+         enddo
+         do ii = 1, nloc(nn)
+            il = il + 1
+            local(il) = blocks%inters(nn)%rows_loc(ii) - 1
+         enddo
+      enddo
+      allocate (row_owner(2**L), col_owner(2**L))
+      do a = 1, 2**L
+         row_owner(a) = -1
+         call GetBlockPID(ptree, blocks%pgno, L + 1, L, a, 1, 'C', pgno_sub)
+         if (pgno_sub > 0) then
+            if (ptree%pgrp(pgno_sub)%nproc == 1) row_owner(a) = ptree%pgrp(pgno_sub)%head - ptree%pgrp(blocks%pgno)%head
+         endif
+         col_owner(a) = -1
+         call GetBlockPID(ptree, blocks%pgno, 0, L, 1, a, 'R', pgno_sub)
+         if (pgno_sub > 0) then
+            if (ptree%pgrp(pgno_sub)%nproc == 1) col_owner(a) = ptree%pgrp(pgno_sub)%head - ptree%pgrp(blocks%pgno)%head
+         endif
+      enddo
+      allocate (out(max(nout, 1_8)))
+      call c_bf_gpu_extract_dist(c_loc(blocks), c_loc(ptree), ninter, nr, nc, row_leaf, row_pos, col_leaf, col_pos, &
+                                 nloc, local, row_owner, col_owner, c_loc(out), flops, info)
+      if (info == 0) then
+         at = 0
+         do nn = 1, ninter
+            if (nloc(nn) > 0 .and. nc(nn) > 0) then
+               blocks%inters(nn)%dat_loc = reshape(out(at + 1:at + int(nloc(nn), 8)*nc(nn)), [nloc(nn), nc(nn)])
+            endif
+            at = at + int(nloc(nn), 8)*nc(nn)
+         enddo
+         stats%Flop_Tmp = stats%Flop_Tmp + flops
+      endif
+      deallocate (nr, nc, nloc, row_leaf, row_pos, col_leaf, col_pos, local, row_owner, col_owner, out)
+
+   end subroutine BF_block_extraction_gpu
+
+   !>**** C_BF_ExtractElement for a butterfly on several ranks whose every
+   !> intersection goes whole to one rank (1 x 1 grids), on the device: this
+   !> rank's rows of each intersection computed there (c_bf_gpu_extract_dist)
+   !> and sent straight to the intersection's owner, who places them in its
+   !> alldat_loc (c_bf_route_owned_rows) - not through BF_ExtractElement's
+   !> lists, intersections and redistribution, whose packing loops were most
+   !> of a STRUMPACK distributed front's Schur entries (Poisson 400^3, 64
+   !> ranks: 1.7 of 3.0 s a rank in a two-rank front).  allrows: the mesh's
+   !> rows (1..M), allcols its columns (M+1..M+N), pgidx 1-based.  Collective
+   !> over the block's group; info 1: the device declined, on every rank
+   !> together, and nothing was written.
+   subroutine BF_extract_owned_gpu(blocks, ptree, msh, stats, Ninter, allrows, allcols, rowidx, colidx, pgidx, &
+                                   Npmap, pmaps, alldat_loc, info)
+      implicit none
+      type(matrixblock), target::blocks
+      type(proctree), target::ptree
+      type(mesh)::msh
+      type(Hstat)::stats
+      integer::Ninter, Npmap, info
+      integer::allrows(:), allcols(:), rowidx(:), colidx(:), pgidx(:), pmaps(Npmap, 3)
+      DT, target::alldat_loc(:)
+      interface
+         subroutine c_bf_route_owned_rows(comm, ninter, nr, nc, nloc, local, owner, out, alldat) &
+            bind(c, name="c_bf_route_owned_rows")
+            import :: c_int, c_ptr
+            integer(c_int) :: comm, ninter
+            integer(c_int) :: nr(*), nc(*), nloc(*), local(*), owner(*)
+            type(c_ptr), value :: out, alldat
+         end subroutine c_bf_route_owned_rows
+      end interface
+      integer::L, nn, ii, jj, g, ir, ic, il, a, pp, head, tail, pgno_sub, idx, nrow, ncol, nlocal
+      integer(kind=8)::nout
+      integer, allocatable::nr(:), nc(:), row_leaf(:), row_pos(:), col_leaf(:), col_pos(:), nloc(:), local(:)
+      integer, allocatable::owner(:), row_owner(:), col_owner(:)
+      DT, allocatable, target::out(:)
+      real(kind=8)::flops
+      type(c_ptr)::pdat
+
+      info = 1
+      L = blocks%level_butterfly
+      pp = ptree%myid - ptree%pgrp(blocks%pgno)%head + 1
+      head = blocks%M_p(pp, 1) + blocks%headm - 1
+      tail = blocks%M_p(pp, 2) + blocks%headm - 1
+      nrow = sum(rowidx(1:Ninter))
+      ncol = sum(colidx(1:Ninter))
+      allocate (nr(max(Ninter, 1)), nc(max(Ninter, 1)), nloc(max(Ninter, 1)), owner(max(Ninter, 1)))
+      allocate (row_leaf(max(nrow, 1)), row_pos(max(nrow, 1)), col_leaf(max(ncol, 1)), col_pos(max(ncol, 1)))
+      nlocal = 0
+      do ir = 1, nrow
+         if (allrows(ir) >= head .and. allrows(ir) <= tail) nlocal = nlocal + 1
+      enddo
+      allocate (local(max(nlocal, 1)))
+      ! each row's and column's leaf and place in it, this rank's rows (as
+      ! BF_block_extraction_gpu takes them), and each intersection's owner
+      ir = 0
+      ic = 0
+      il = 0
+      nout = 0
+      do nn = 1, Ninter
+         nr(nn) = rowidx(nn)
+         nc(nn) = colidx(nn)
+         owner(nn) = pmaps(pgidx(nn), 3) - ptree%pgrp(blocks%pgno)%head
+         nloc(nn) = 0
+         do ii = 1, nr(nn)
+            ir = ir + 1
+            idx = allrows(ir)
+            g = findgroup(idx, msh, L, blocks%row_group)
+            row_leaf(ir) = g - blocks%row_group*2**L
+            row_pos(ir) = idx - msh%basis_group(g)%head
+            if (idx >= head .and. idx <= tail) then
+               il = il + 1
+               nloc(nn) = nloc(nn) + 1
+               local(il) = ii - 1
+            endif
+         enddo
+         do jj = 1, nc(nn)
+            ic = ic + 1
+            idx = allcols(ic)
+            g = findgroup(idx, msh, L, blocks%col_group)
+            col_leaf(ic) = g - blocks%col_group*2**L
+            col_pos(ic) = idx - msh%basis_group(g)%head
+         enddo
+         nout = nout + int(nloc(nn), 8)*nc(nn)
+      enddo
+      allocate (row_owner(2**L), col_owner(2**L))
+      do a = 1, 2**L
+         row_owner(a) = -1
+         call GetBlockPID(ptree, blocks%pgno, L + 1, L, a, 1, 'C', pgno_sub)
+         if (pgno_sub > 0) then
+            if (ptree%pgrp(pgno_sub)%nproc == 1) row_owner(a) = ptree%pgrp(pgno_sub)%head - ptree%pgrp(blocks%pgno)%head
+         endif
+         col_owner(a) = -1
+         call GetBlockPID(ptree, blocks%pgno, 0, L, 1, a, 'R', pgno_sub)
+         if (pgno_sub > 0) then
+            if (ptree%pgrp(pgno_sub)%nproc == 1) col_owner(a) = ptree%pgrp(pgno_sub)%head - ptree%pgrp(blocks%pgno)%head
+         endif
+      enddo
+      allocate (out(max(nout, 1_8)))
+      call c_bf_gpu_extract_dist(c_loc(blocks), c_loc(ptree), Ninter, nr, nc, row_leaf, row_pos, col_leaf, col_pos, &
+                                 nloc, local, row_owner, col_owner, c_loc(out), flops, info)
+      if (info == 0) then
+         stats%Flop_Tmp = stats%Flop_Tmp + flops
+         pdat = c_null_ptr
+         if (size(alldat_loc) > 0) pdat = c_loc(alldat_loc(1))
+         call c_bf_route_owned_rows(ptree%pgrp(blocks%pgno)%Comm, Ninter, nr, nc, nloc, local, owner, c_loc(out), pdat)
+      endif
+      deallocate (nr, nc, nloc, owner, row_leaf, row_pos, col_leaf, col_pos, local, row_owner, col_owner, out)
+
+   end subroutine BF_extract_owned_gpu
 
 
 !!!!!!! extract a list of intersections from a blockplus

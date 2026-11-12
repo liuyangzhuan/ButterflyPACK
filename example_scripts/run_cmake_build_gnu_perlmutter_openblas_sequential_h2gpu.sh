@@ -2,7 +2,12 @@
 # Perlmutter GPU build: sequential OpenBLAS (no LibSci), MPI, OpenMP, PaRSEC,
 # and the GPU backend of the H2 Color factorization (enable_h2_gpu, MAGMA on
 # A100).  Configures into ../build_gpu, next to the CPU build in ../build.
-module load PrgEnv-gnu cray-fftw cmake python cudatoolkit craype-accel-nvidia80
+# NCCL (optional, TPL_NCCL_*): the GPU butterfly's exchanges and the sums of a
+# partial factorization's Schur complement blocks over its ranks run on the
+# device; at run time load the same nccl module so that groups across nodes
+# use it too (runit_3dlaplace_perlmutter_h2_partial_gpu.sh).  Leave out the two
+# TPL_NCCL lines to build without it.
+module load PrgEnv-gnu cray-fftw cmake python cudatoolkit craype-accel-nvidia80 nccl/2.29.2-cu13
 module unload cray-libsci
 
 cd ..
@@ -42,6 +47,8 @@ cmake .. \
 	-DTPL_ZFP_INCLUDE="$ZFP_INSTALL_DIR/include" \
 	-DTPL_ZFP_LIBRARIES="$ZFP_INSTALL_DIR/lib64/libzFORp.so;$ZFP_INSTALL_DIR/lib64/libzfp.so" \
 	-DTPL_H2_MAGMA_INCLUDE_DIRS="$MAGMA_DIR/include" \
-	-DTPL_H2_MAGMA_LIBRARIES="$MAGMA_DIR/lib/libmagma.so"
+	-DTPL_H2_MAGMA_LIBRARIES="$MAGMA_DIR/lib/libmagma.so" \
+	-DTPL_NCCL_INCLUDE_DIRS="$NCCL_HOME/include" \
+	-DTPL_NCCL_LIBRARIES="$NCCL_HOME/lib/libnccl.so"
 
 make -j 32 claplace3d_h2 cmatern1d_h2 cmatern2d_h2 cvie3d_h2 cie3d

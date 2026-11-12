@@ -131,6 +131,19 @@ private:
     size_t capacity_ = 0;
 };
 
+// The size a grow-only pinned buffer takes to hold `bytes`: at least twice
+// what it held, as pinning costs about a second per GB, in 64 MB granules
+// when large and 64 KB ones when small.  Each operator keeps a few such
+// buffers (its solve's and partial factorization's staging, MetaBuilders)
+// until it is destroyed, and those mostly stage kB: rounded up to 64 MB they
+// held ~140 MB of pinned host memory a sequential H2 front of a sparse solver
+// (Poisson 200^3, 4 ranks, min_sep 500: 256 fronts a rank, 52 GB RSS).
+inline size_t pinned_growth(size_t bytes, size_t capacity) {
+    const size_t want = std::max(bytes, 2 * capacity);
+    const size_t granule = want >= (size_t{64} << 20) ? (size_t{64} << 20) : (size_t{64} << 10);
+    return (want + granule - 1) / granule * granule;
+}
+
 // Grow-only page-locked host allocation for asynchronous transfers.  Pinning
 // costs about a second per GB, so buffers grow geometrically and the
 // backend's buffers live in pinned_pool() for the whole run.
@@ -145,9 +158,8 @@ public:
 
     void* reserve(size_t bytes) {
         if (bytes > capacity_) {
+            const size_t grown = pinned_growth(bytes, capacity_);
             release();
-            constexpr size_t granule = size_t{64} << 20;
-            const size_t grown = (std::max(bytes, 2 * capacity_) + granule - 1) / granule * granule;
             check_cuda(cudaMallocHost(&ptr_, grown), "cudaMallocHost");
             capacity_ = grown;
         }
@@ -261,6 +273,29 @@ public:
         if (device_ < 0) check_cuda(cudaGetDevice(&device_), "pinned pool: device");
         while (static_cast<int>(ahead_.size()) < ahead_count_) {
             ahead_.emplace_back(ahead_size_, std::async(std::launch::async, &PinnedChunkPool::pin_chunk, ahead_size_, device_));
+        }
+    }
+    // Wait for every chunk pinned ahead and keep it idle.  Nothing ever
+    // destroys these futures by itself: the pool is deliberately leaked, so
+    // their std::async threads are still inside pin_chunk -- in cudaSetDevice
+    // -- while the CUDA runtime tears itself down at process exit, and about
+    // one run in fifteen segfaults there, after the program has printed
+    // everything and main has returned.  A phase that is finished with the
+    // pool drains it instead (ColorGpuDriver's destructor).  The chunks stay
+    // pinned and idle, so the next take() has them and the wait is the one it
+    // would have done anyway.
+    void drain() {
+        while (!ahead_.empty()) {
+            auto f = std::move(ahead_.front().second);
+            ahead_.pop_front();
+            try {
+                Chunk c = f.get();
+                pin_seconds_ += c.seconds;
+                pinned_ += c.bytes;
+                give(c);
+            } catch (const std::exception&) {
+                // a chunk that could not be pinned is one we do not need here
+            }
         }
     }
     // Idle chunks beyond `keep` bytes unpinned, largest first; returns the
@@ -743,8 +778,7 @@ private:
     void ensure(size_t bytes) {
         if (bytes <= capacity_) return;
         wait_upload();
-        constexpr size_t granule = size_t{64} << 20;
-        const size_t grown = (std::max(bytes, 2 * capacity_) + granule - 1) / granule * granule;
+        const size_t grown = pinned_growth(bytes, capacity_);
         void* fresh = nullptr;
         check_cuda(cudaMallocHost(&fresh, grown), "cudaMallocHost");
         if (size_ > 0) std::memcpy(fresh, base_, size_);
@@ -786,6 +820,7 @@ struct PinnedPool {
     PinnedBuffer result;       // sketches, factors, level-end blocks
     PinnedBuffer ring[4];      // fixed-size slots of chunked downloads (two per copier)
     PinnedBuffer staging[2];   // alternating uploads (restored fill sources)
+    PinnedBuffer image[2];     // alternating batch images of the collective evaluator
     static constexpr size_t kRingSlot = size_t{64} << 20;  // pinning costs ~1 s/GB
 };
 
@@ -803,6 +838,7 @@ inline size_t pinned_pool_host_bytes() {
                    p.result.capacity();
     for (const PinnedBuffer& b : p.ring) bytes += b.capacity();
     for (const PinnedBuffer& b : p.staging) bytes += b.capacity();
+    for (const PinnedBuffer& b : p.image) bytes += b.capacity();
     return bytes;
 }
 

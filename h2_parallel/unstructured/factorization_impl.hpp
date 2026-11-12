@@ -10,6 +10,7 @@
 #include "parent_transition.hpp"
 #include "owner_deferred.hpp"
 #include "verification.hpp"
+#include "partial.hpp"
 #include "h2_gpu/factorization_driver.hpp"
 #include "core/omp_region.hpp"
 
@@ -192,6 +193,7 @@ void hierarchical_factorization_unstructured(
     H2FactorizationMemoryDiagnostics memory_diagnostics;
 #ifdef H2_HAVE_GPU
     if (color_gpu_enabled()) gpu::begin_operator_build(tree, tree->comm);
+    else gpu::activate_operator(tree);  // (the stores invalidated below are this operator's)
     gpu::invalidate_device_solve();  // the device copies of the previous factors
 #endif
     DynamicThreadingContext dynamic_threading =
@@ -340,12 +342,15 @@ void hierarchical_factorization_unstructured(
     gpu_options.is_symmetric = is_symmetric;
     gpu_options.is_hermitian = is_hermitian;
     gpu_options.occupancy = true;
-    gpu_options.compress_factors = compress_factors;
+    // (H2_partial: the F22 records instead, tree->partial_compress_records;
+    // the F22 step reads the near blocks raw)
+    gpu_options.compress_factors = tree->partial() ? 0 : compress_factors;
     gpu::ColorGpuDriver<CoordType, DataType, KernelType> gpu_driver(tree, kernel, gpu_options);
     {
-        // as the full-grid loop: before the first level (the kernels and
-        // exchanges of the process's first factorization, the application's
-        // evaluator before its first use), and not in the factor time
+        // as the full-grid loop: before the first level (the kernels of the
+        // process's first factorization, the exchanges of the operator's
+        // first, the application's evaluator before its first use), and not
+        // in the factor time
         const double kernels = gpu_driver.warm_up();
         const double buffers = gpu_driver.warm_up_buffers();
         const double exchanges = gpu_driver.warm_up_exchange();
@@ -360,6 +365,12 @@ void hierarchical_factorization_unstructured(
     }
 #endif
 
+    if (tree->partial()) {
+        // H2_partial (partial.hpp): the levels see the split, the root state starts clean
+        for (auto& lvl : tree->levels) lvl.partial_count = tree->partial_count;
+        tree->partial_root = fmm::PartialRootFactor<DataType>{};
+        tree->partial_solve_data.clear();
+    }
     for (int current_level = leaf_level; current_level >= 1; current_level--) {
         auto level_start = std::chrono::high_resolution_clock::now();
 #ifdef H2_HAVE_GPU
@@ -1331,6 +1342,10 @@ void hierarchical_factorization_unstructured(
                     std::exception_ptr mirror_exception;
                     std::mutex mirror_exception_mutex;
                     std::atomic<bool> mirror_failed{false};
+                    if (!is_symmetric) {
+                        prepare_unstructured_owner_deferred_xnn_mirror_nonsymmetric(
+                            level, wave_xnn_mirror_targets);
+                    }
 
                     omp_parallel_if(wave_xnn_candidate_boxes.size() > 1, [&] {
                         #pragma omp for schedule(static)
@@ -1519,6 +1534,32 @@ void hierarchical_factorization_unstructured(
 #endif
 
             const auto occupied_indices = occupied_local_indices(level);
+            if (tree->partial() && current_level > 1) {
+                // H2_partial (partial.hpp): the F22 parts skeletonized and
+                // sparsified, the live sets reduced to S11, S22 (on a device
+                // level its boxes' steps on the device)
+                const auto f22_start = clock::now();
+#ifdef H2_HAVE_GPU
+                if (gpu_driver.f22_on_device()) {
+                    const std::function<void(std::vector<PartialF22Work<DataType>>&)> ids_on_device =
+                        [&](std::vector<PartialF22Work<DataType>>& works) { gpu_driver.f22_ids(works); };
+                    const std::function<void(std::vector<PartialF22Work<DataType>>&)> records_on_device =
+                        [&](std::vector<PartialF22Work<DataType>>& works) { gpu_driver.f22_records(works); };
+                    const std::function<void(const PartialF22Kept&)> blocks_back =
+                        [&](const PartialF22Kept& kept) { gpu_driver.end_partial_level(kept); };
+                    partial_f22_phase(tree, level, kernel, tolerance, occupied_indices,
+                                      print_detail && rank == level_print_rank, level_comm, ids_on_device,
+                                      records_on_device, blocks_back);
+                } else
+#endif
+                partial_f22_phase(tree, level, kernel, tolerance, occupied_indices,
+                                  print_detail && rank == level_print_rank, level_comm);
+                if (print_detail && rank == level_print_rank) {
+                    std::cout << "  F22 phase time: "
+                              << std::chrono::duration<double, std::milli>(clock::now() - f22_start).count()
+                              << " ms" << std::endl;
+                }
+            }
             for (int64_t local_index : occupied_indices) {
                 const auto& box =
                     level.local_boxes[static_cast<size_t>(local_index)];
@@ -1861,13 +1902,28 @@ void hierarchical_factorization_unstructured(
         const bool sends_parent_boxes =
             reduction_occurred && level.is_process_active && level.parent_level_owner != rank;
 
+        // A sender's parent boxes go in groups of at most kReductionGroupBytes
+        // serialized bytes (a larger box alone), each group's boxes released
+        // once it is sent, and the receiver takes one group at a time.  One
+        // serialized image of all of them held a second copy of the boxes on
+        // both sides: a GPU level routed through the host (26.96 GB sent to a
+        // rank holding 21.43) took the receiver past half of a node's memory.
+        // Each group goes as {bytes, groups still to come} on tag 0 and its
+        // bytes on tag 1.
+        constexpr size_t kReductionGroupBytes = size_t{1} << 30;
         std::vector<char> send_buffer;
-        int64_t send_buffer_size = 0;
+        std::vector<size_t> send_box_sizes;
+        std::vector<size_t> send_cuts;
         if (sends_parent_boxes) {
-            // Pre-pack parent boxes before the synchronization point so the
-            // communication timer excludes sender-side serialization work.
-            send_buffer = serialize_boxes(parent_boxes);
-            send_buffer_size = static_cast<int64_t>(send_buffer.size());
+            send_box_sizes.resize(parent_boxes.size());
+            for (size_t i = 0; i < parent_boxes.size(); ++i) {
+                send_box_sizes[i] = get_serialized_size(parent_boxes[i]);
+            }
+            send_cuts = box_group_cuts(send_box_sizes, kReductionGroupBytes);
+            // Pre-pack the first group (all the boxes, when they are one group)
+            // before the synchronization point so the communication timer
+            // excludes sender-side serialization work.
+            serialize_box_range(parent_boxes, send_box_sizes, send_cuts[0], send_cuts[1], send_buffer);
         }
 
         if (memory_diagnostics.enabled()) {
@@ -1891,6 +1947,7 @@ void hierarchical_factorization_unstructured(
             }
         } else if (parent_level.is_process_active) {
             std::vector<BoxData<CoordType, DataType>> all_parent_boxes;
+            std::vector<char> recv_buffer;  // one group at a time
 
             for (int child_rank : parent_level.children_senders) {
                 if (keep_local_parent_boxes && child_rank == rank) {
@@ -1902,43 +1959,46 @@ void hierarchical_factorization_unstructured(
                     continue;
                 }
 
-                std::vector<char> recv_buffer;
-                int64_t buffer_size = 0;
-                MPI_Status status;
-                segment_start = clock::now();
-                MPI_Recv(&buffer_size, 1, MPI_INT64_T, child_rank, 0, tree->comm, &status);
+                for (int64_t groups_left = 1; groups_left > 0;) {
+                    int64_t group_meta[2] = {0, 0};  // {bytes, groups still to come}
+                    MPI_Status status;
+                    segment_start = clock::now();
+                    MPI_Recv(group_meta, 2, MPI_INT64_T, child_rank, 0, tree->comm, &status);
+                    const int64_t buffer_size = group_meta[0];
+                    groups_left = group_meta[1];
 
-                recv_buffer.resize(buffer_size);
-                MPI_Recv_large(recv_buffer.data(), buffer_size, MPI_CHAR, child_rank, 1, tree->comm, &status);
-                level_reduction += (clock::now() - segment_start);
+                    recv_buffer.resize(static_cast<size_t>(buffer_size));
+                    MPI_Recv_large(recv_buffer.data(), buffer_size, MPI_CHAR, child_rank, 1, tree->comm, &status);
+                    level_reduction += (clock::now() - segment_start);
 
-                if (memory_diagnostics.enabled()) {
-                    memory_diagnostics.record(
-                        tree, current_level, use_CA_level ? "CA" : "color",
-                        "parent_receive_buffer", 0, 0,
-                        h2_diag_box_vector_bytes(parent_boxes) +
-                            h2_diag_box_vector_bytes(all_parent_boxes),
-                        h2_diag_vector_bytes(recv_buffer));
+                    if (memory_diagnostics.enabled()) {
+                        memory_diagnostics.record(
+                            tree, current_level, use_CA_level ? "CA" : "color",
+                            "parent_receive_buffer", 0, 0,
+                            h2_diag_box_vector_bytes(parent_boxes) +
+                                h2_diag_box_vector_bytes(all_parent_boxes),
+                            h2_diag_vector_bytes(recv_buffer));
+                    }
+
+                    std::vector<BoxData<CoordType, DataType>> child_parent_boxes =
+                        deserialize_boxes<CoordType, DataType>(recv_buffer);
+
+                    if (memory_diagnostics.enabled()) {
+                        memory_diagnostics.record(
+                            tree, current_level, use_CA_level ? "CA" : "color",
+                            "parent_deserialized", 0, 0,
+                            h2_diag_box_vector_bytes(parent_boxes) +
+                                h2_diag_box_vector_bytes(all_parent_boxes) +
+                                h2_diag_box_vector_bytes(child_parent_boxes),
+                            h2_diag_vector_bytes(recv_buffer));
+                    }
+
+                    all_parent_boxes.insert(
+                        all_parent_boxes.end(),
+                        std::make_move_iterator(child_parent_boxes.begin()),
+                        std::make_move_iterator(child_parent_boxes.end())
+                    );
                 }
-
-                std::vector<BoxData<CoordType, DataType>> child_parent_boxes =
-                    deserialize_boxes<CoordType, DataType>(recv_buffer);
-
-                if (memory_diagnostics.enabled()) {
-                    memory_diagnostics.record(
-                        tree, current_level, use_CA_level ? "CA" : "color",
-                        "parent_deserialized", 0, 0,
-                        h2_diag_box_vector_bytes(parent_boxes) +
-                            h2_diag_box_vector_bytes(all_parent_boxes) +
-                            h2_diag_box_vector_bytes(child_parent_boxes),
-                        h2_diag_vector_bytes(recv_buffer));
-                }
-
-                all_parent_boxes.insert(
-                    all_parent_boxes.end(),
-                    std::make_move_iterator(child_parent_boxes.begin()),
-                    std::make_move_iterator(child_parent_boxes.end())
-                );
             }
 
             parent_level.local_boxes = std::move(all_parent_boxes);
@@ -1951,12 +2011,21 @@ void hierarchical_factorization_unstructured(
 
         if (sends_parent_boxes) {
             // This process does NOT own the parent - send to parent_level_owner
-            segment_start = clock::now();
-            MPI_Send(&send_buffer_size, 1, MPI_INT64_T, level.parent_level_owner, 0, tree->comm);
-
-            // Send data
-            MPI_Send_large(send_buffer.data(), send_buffer_size, MPI_CHAR, level.parent_level_owner, 1, tree->comm);
-            level_reduction += (clock::now() - segment_start);
+            const size_t send_groups = send_cuts.size() - 1;
+            for (size_t g = 0; g < send_groups; ++g) {
+                if (g > 0) {
+                    serialize_box_range(parent_boxes, send_box_sizes, send_cuts[g], send_cuts[g + 1], send_buffer);
+                }
+                const int64_t group_meta[2] = {static_cast<int64_t>(send_buffer.size()),
+                                               static_cast<int64_t>(send_groups - 1 - g)};
+                segment_start = clock::now();
+                MPI_Send(group_meta, 2, MPI_INT64_T, level.parent_level_owner, 0, tree->comm);
+                MPI_Send_large(send_buffer.data(), send_buffer.size(), MPI_CHAR, level.parent_level_owner, 1, tree->comm);
+                level_reduction += (clock::now() - segment_start);
+                for (size_t i = send_cuts[g]; i < send_cuts[g + 1]; ++i) {
+                    parent_boxes[i] = BoxData<CoordType, DataType>{};
+                }
+            }
 
             // This process will become inactive at parent level
             parent_level.local_boxes.clear();
@@ -2063,7 +2132,18 @@ void hierarchical_factorization_unstructured(
         bool root_on_device = false;
         int64_t n = root_box.num_points;
 #ifdef H2_HAVE_GPU
-        if (gpu_driver.holds_root_block()) {
+        if (gpu_driver.holds_root_block() && tree->partial()) {
+            // H2_partial: the partial root on the device, its factors to the host
+            const auto root_start = clock::now();
+            partial_root_setup(*tree, root_box);
+            root_on_device = gpu_driver.partial_root(root_box, tree->partial_root);
+            if (print_detail && rank == root_print_rank) {
+                std::cout << "  ✓ Root partial LU complete (GPU): F11 " << tree->partial_root.n11 << ", F22 "
+                          << tree->partial_root.n22 << " ("
+                          << std::chrono::duration<double, std::milli>(clock::now() - root_start).count() << " ms)"
+                          << std::endl;
+            }
+        } else if (gpu_driver.holds_root_block()) {
             // root block assembled on the device by the level-1 transition
             root_on_device = gpu_driver.factor_root(
                 root_box, print_detail && rank == root_print_rank);
@@ -2073,7 +2153,9 @@ void hierarchical_factorization_unstructured(
         // At level 0, the assembled matrix is just the schur complement
         if (!root_box.schur_complement.is_allocated()) {
             throw std::runtime_error(
-                "hierarchical_factorization_parallel: Root box schur complement not allocated");
+                "hierarchical_factorization_parallel: root box Schur complement not "
+                "allocated; the level-1 transition assembles it, so an H2 tree of one "
+                "level never does (see require_h2_tree_depth)");
         }
 
         n = root_box.schur_complement.rows;
@@ -2084,7 +2166,7 @@ void hierarchical_factorization_unstructured(
 
 #ifdef H2_HAVE_GPU
         // LU of the host-assembled root on the device when the heap has room
-        root_on_device = gpu_driver.factor_root(root_box, false);
+        if (!tree->partial()) root_on_device = gpu_driver.factor_root(root_box, false);
         if (root_on_device && print_detail && rank == root_print_rank) {
             std::cout << "  ✓ Root LU factorization complete (GPU)" << std::endl;
         }
@@ -2122,6 +2204,17 @@ void hierarchical_factorization_unstructured(
                 std::cout << "  ✓ Root Cholesky factorization complete" << std::endl;
             }
 
+        } else if (factorization_method == FactorizationMethod::LU && tree->partial()) {
+            // H2_partial: A11's LU into X_RR, W, A21 and the Schur complement
+            // on the F22 points (unstructured/partial.hpp)
+            const auto root_start = clock::now();
+            partial_root_factorize(*tree, root_box);
+            if (print_detail && rank == root_print_rank) {
+                std::cout << "  ✓ Root partial LU complete: F11 " << tree->partial_root.n11
+                          << ", F22 " << tree->partial_root.n22 << " ("
+                          << std::chrono::duration<double, std::milli>(clock::now() - root_start).count() << " ms)"
+                          << std::endl;
+            }
         } else if (factorization_method == FactorizationMethod::LU) {
             root_box.X_RR.data = root_box.schur_complement.data;
             root_box.X_RR_pivots.resize(static_cast<size_t>(n));
@@ -2133,13 +2226,11 @@ void hierarchical_factorization_unstructured(
 
             int nn = n;
             int info = 0;
-
-            if constexpr (std::is_same_v<DataType, double>) {
-                dgetrf_(&nn, &nn, root_box.X_RR.data.data(), &nn,
-                        root_box.X_RR_pivots.data(), &info);
-            } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-                zgetrf_(&nn, &nn, root_box.X_RR.data.data(), &nn,
-                        root_box.X_RR_pivots.data(), &info);
+            // the process's team over the sequential BLAS
+            if constexpr (std::is_same_v<DataType, double> ||
+                          std::is_same_v<DataType, std::complex<double>>) {
+                parallel_getrf(nn, root_box.X_RR.data.data(), nn,
+                               root_box.X_RR_pivots.data(), &info);
             }
 
             if (info != 0) {
@@ -2199,6 +2290,12 @@ void hierarchical_factorization_unstructured(
         }
         }
 
+        // The root block is factored (X_RR; under H2_partial W, A21 and the
+        // CB too) and nothing reads it again.  Kept, it held a dense copy of
+        // every H2 front's root, F22 rows and columns included, for the
+        // front's life: 5.5 GB a rank of Poisson 200^3 on 4 ranks, min_sep 500.
+        root_box.schur_complement = MatrixStorage<DataType>{};
+
         // Mark root as skeleton only (no redundant DOFs at this level)
         root_box.skeleton_indices.resize(n);
         for (int64_t i = 0; i < n; ++i) {
@@ -2243,9 +2340,13 @@ void hierarchical_factorization_unstructured(
     destroy_dynamic_threading_context(dynamic_threading);
 
 
+    // What the factorization keeps: every level's boxes, the root's (its
+    // LU) included, and under H2_partial the root's W and A21 (the
+    // CB is the caller's, until c_bpack_partial_schur_release).  This is
+    // the Mem_Factor a sparse solver adds up over its fronts.
     size_t local_memory_usage = 0;
     size_t CA_halo_memory_usage = 0;
-    for (int current_level = leaf_level; current_level >= 1; current_level--) {
+    for (int current_level = leaf_level; current_level >= 0; current_level--) {
 
         auto& level = tree->levels[current_level];
         for (auto& box : level.local_boxes) {
@@ -2256,6 +2357,10 @@ void hierarchical_factorization_unstructured(
                 CA_halo_memory_usage += calculate_box_data_size(box);
             }
         }
+    }
+    if (tree->partial_root.active) {
+        local_memory_usage += (tree->partial_root.w.data.capacity() +
+                               tree->partial_root.a21.data.capacity()) * sizeof(DataType);
     }
     if (print_detail) {
         printf("factorization memory usage on rank %d: %.10f GB local + %.10f GB CA halo\n",
@@ -2279,7 +2384,8 @@ void hierarchical_factorization_unstructured(
             std::cout << "logdet: " << phase << " " << logabsdet << std::endl;
         }
 
-        (void)h2_quick_verification_unstructured(tree, kernel);
+        if (tree->partial()) (void)h2_quick_verification_partial(tree, kernel);
+        else (void)h2_quick_verification_unstructured(tree, kernel);
     }
     // (reported apart from the factor time, as the full-grid loop does)
     h2_verification_seconds() = std::chrono::duration<double>(clock::now() - verification_start).count();

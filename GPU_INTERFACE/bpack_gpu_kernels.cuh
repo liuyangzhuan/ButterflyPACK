@@ -98,17 +98,17 @@ struct EvalItemT {
     IndexList cols;
 };
 
-// Sketch list entries pack (row, destination, sign): row in the low
-// kEntryRowBits bits, destination above, sign in bit 31 (set = negative).
-// The draws of a box are partitioned by owner warp: destination mod
-// kSketchOwners.  18 row bits (262143 rows) and 13 destination bits (8191
-// points a box) since 2026-10-11: with 20/11 a box of over 2047 points sent
-// its whole level to host sketches and the host exchange, which at 768^3 on
-// 64 ranks made levels 3 and 2 cost 153 s of 386.  A box's rows are its
-// neighbours' points, at most 27 times its own, so the two bounds agree.
-constexpr int kEntryRowBits = 18;
-constexpr int kEntryRowMask = (1 << kEntryRowBits) - 1;
-constexpr int kEntryDestMask = (1 << (31 - kEntryRowBits)) - 1;
+// Sketch list entries pack (row, destination, sign) in 64 bits: row in the
+// low kEntryRowBits bits, destination above, sign in bit 63 (set =
+// negative).  The draws of a box are partitioned by owner warp: destination
+// mod kSketchOwners.  (32-bit entries, 18 row bits and 13 destination bits,
+// held a box's sketch to 262143 rows: its rows are its two-hop ring's points,
+// up to 124 times its own, and Laplace 320^3 at tol 1e-5 on 64 GPUs stopped at
+// level 3 with ~336k rows a box, 2026-11-02.)
+using SketchEntry = long long;
+constexpr int kEntryRowBits = 32;
+constexpr SketchEntry kEntryRowMask = (SketchEntry{1} << kEntryRowBits) - 1;
+constexpr SketchEntry kEntryDestMask = (SketchEntry{1} << (63 - kEntryRowBits)) - 1;
 constexpr int kSketchOwners = 16;
 
 // out (d x ncols, leading dimension ldo) = sparse-sign sketch of `rows` rows:
@@ -127,7 +127,7 @@ struct OrderedSketchItemT {
     int ncols;
     int rows;
     const int* ptr;
-    const int* entries;
+    const SketchEntry* entries;
     double scale;
     const int* row_slots;
     int col_base;
@@ -263,16 +263,17 @@ ordered_sketch_kernel(const OrderedSketchItemT<T>* items, Entry entry, PointTabl
         col_id = points.ids[sc];
     }
     // this warp's entries, 32 at a time: one coalesced load, then broadcasts
-    const int* list = item.entries + item.ptr[warp];
-    const int* end = item.entries + item.ptr[warp + 1];
+    const SketchEntry* list = item.entries + item.ptr[warp];
+    const SketchEntry* end = item.entries + item.ptr[warp + 1];
     // +-scale by the entry's sign bit (the same fma as with a branch)
     const unsigned long long scale_bits = static_cast<unsigned long long>(__double_as_longlong(item.scale));
-    auto signed_scale = [&](int e) {
+    auto signed_scale = [&](SketchEntry e) {
         return __longlong_as_double(static_cast<long long>(
-            scale_bits ^ (static_cast<unsigned long long>(static_cast<unsigned>(e) & 0x80000000u) << 32)));
+            scale_bits ^ (static_cast<unsigned long long>(e) & 0x8000000000000000ull)));
     };
     const bool all_dests = i0 == 0 && i1 == item.d;  // no range test
-    int batch = 0, batch_count = 0, batch_pos = 0;
+    SketchEntry batch = 0;
+    int batch_count = 0, batch_pos = 0;
     T next[kSketchRowsPerWarp];
     chunk_values<T, kKernelRows, Entry>(item, entry, points, col_x, col_id, column, c, warp, 0, next);
     for (int r0 = 0; r0 < item.rows; r0 += kSketchTileRows) {
@@ -304,12 +305,12 @@ ordered_sketch_kernel(const OrderedSketchItemT<T>* items, Entry entry, PointTabl
             if (all_dests) {
                 // two entries at a time: different destinations update independently
                 for (; j + 1 < stop; j += 2) {
-                    const int e1 = __shfl_sync(0xffffffffu, batch, j);
-                    const int e2 = __shfl_sync(0xffffffffu, batch, j + 1);
-                    const int a1 = ((e1 >> kEntryRowBits) & kEntryDestMask) * kSketchPitch;
-                    const int a2 = ((e2 >> kEntryRowBits) & kEntryDestMask) * kSketchPitch;
-                    const T v1 = vrow[((e1 & kEntryRowMask) - r0) * kSketchPitch];
-                    const T v2 = vrow[((e2 & kEntryRowMask) - r0) * kSketchPitch];
+                    const SketchEntry e1 = __shfl_sync(0xffffffffu, batch, j);
+                    const SketchEntry e2 = __shfl_sync(0xffffffffu, batch, j + 1);
+                    const int a1 = static_cast<int>((e1 >> kEntryRowBits) & kEntryDestMask) * kSketchPitch;
+                    const int a2 = static_cast<int>((e2 >> kEntryRowBits) & kEntryDestMask) * kSketchPitch;
+                    const T v1 = vrow[(static_cast<int>(e1 & kEntryRowMask) - r0) * kSketchPitch];
+                    const T v2 = vrow[(static_cast<int>(e2 & kEntryRowMask) - r0) * kSketchPitch];
                     if (a1 != a2) {
                         const T y1 = ycol[a1], y2 = ycol[a2];
                         ycol[a1] = sketch_fma(signed_scale(e1), v1, y1);
@@ -319,18 +320,18 @@ ordered_sketch_kernel(const OrderedSketchItemT<T>* items, Entry entry, PointTabl
                     }
                 }
                 if (j < stop) {
-                    const int e = __shfl_sync(0xffffffffu, batch, j);
-                    const int a = ((e >> kEntryRowBits) & kEntryDestMask) * kSketchPitch;
-                    ycol[a] = sketch_fma(signed_scale(e), vrow[((e & kEntryRowMask) - r0) * kSketchPitch], ycol[a]);
+                    const SketchEntry e = __shfl_sync(0xffffffffu, batch, j);
+                    const int a = static_cast<int>((e >> kEntryRowBits) & kEntryDestMask) * kSketchPitch;
+                    ycol[a] = sketch_fma(signed_scale(e), vrow[(static_cast<int>(e & kEntryRowMask) - r0) * kSketchPitch], ycol[a]);
                     ++j;
                 }
             } else {
                 for (; j < stop; ++j) {
-                    const int e = __shfl_sync(0xffffffffu, batch, j);
-                    const int i = (e >> kEntryRowBits) & kEntryDestMask;
+                    const SketchEntry e = __shfl_sync(0xffffffffu, batch, j);
+                    const int i = static_cast<int>((e >> kEntryRowBits) & kEntryDestMask);
                     if (i >= i0 && i < i1) {
                         T& y = ycol[(i - i0) * kSketchPitch];
-                        y = sketch_fma(signed_scale(e), vrow[((e & kEntryRowMask) - r0) * kSketchPitch], y);
+                        y = sketch_fma(signed_scale(e), vrow[(static_cast<int>(e & kEntryRowMask) - r0) * kSketchPitch], y);
                     }
                 }
             }

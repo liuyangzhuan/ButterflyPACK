@@ -2,6 +2,7 @@
 
 #include "core/butterfly_types.hpp"
 #include "core/butterfly_matvec.hpp"
+#include "core/h2_block_codec.hpp"
 #ifdef H2_HAVE_GPU
 #include "h2_gpu/h2_matvec.hpp"
 #endif
@@ -39,8 +40,9 @@ void apply_compressed_interactions_serial(
 
             std::vector<DataType> contribution;
             const int64_t nrhs = target_data[box_index].nrhs;
+            fmm::MatrixStorage<DataType> block_scratch;  // (a compressed block's entries)
             h2_matrix_vector_product(
-                block.matrix, source, contribution, nrhs, 'N');
+                fmm::h2_block_values(block, block_scratch, "H2 compressed multiply"), source, contribution, nrhs, 'N');
             const int64_t skeleton_count =
                 static_cast<int64_t>(target.skeleton_indices.size());
             if (contribution.size() !=
@@ -94,8 +96,9 @@ void apply_compressed_leaf_near_serial(
 
             std::vector<DataType> contribution;
             const int64_t nrhs = target_data[box_index].nrhs;
+            fmm::MatrixStorage<DataType> block_scratch;  // (a compressed block's entries)
             h2_matrix_vector_product(
-                block.matrix, source, contribution, nrhs, 'N');
+                fmm::h2_block_values(block, block_scratch, "H2 compressed multiply"), source, contribution, nrhs, 'N');
             if (contribution.size() != output.size()) {
                 throw std::runtime_error(
                     "color_unstructured compressed multiply: "
@@ -135,7 +138,9 @@ void apply_compressed_transposed(
             level, source_data, target.morton_index, !near);
         for (const auto& block : blocks) {
             std::vector<DataType> contribution;
-            h2_matrix_vector_product(block.matrix, source, contribution, nrhs, 'T');
+            fmm::MatrixStorage<DataType> block_scratch;  // (a compressed block's entries)
+            h2_matrix_vector_product(fmm::h2_block_values(block, block_scratch, "H2 compressed multiply (transposed)"),
+                                     source, contribution, nrhs, 'T');
             accumulate_replace_then_add(
                 updates, block.source_morton, contribution.data(),
                 static_cast<int64_t>(contribution.size()));

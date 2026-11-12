@@ -10,7 +10,9 @@
 #include <complex>
 #include <cstdint>
 #include <iostream>
+#include <climits>
 #include <limits>
+#include <stdexcept>
 #include <vector>
 #include <memory>
 #include <cstring>
@@ -18,6 +20,9 @@
 #include <iomanip>
 #include <stdlib.h>
 #include <type_traits>
+#if defined(__GLIBC__)
+#include <malloc.h>   // malloc_trim (c_bpack_h2_delete)
+#endif
 
 using namespace std;
 
@@ -229,6 +234,7 @@ static butterfly::ProgramOptions read_h2_program_options64(
   double H2_ID_proxy_points_d = 0.0;
   double BACA_Batch_d = 0.0;
   double H2_s_op = 0.0;
+  double H2_partial_d = 0.0;
   c_bpack_getoption(option, "tol_comp", &tolerance);
   c_bpack_getoption(option, "reduction_threshold", &reduction_threshold_d);
   c_bpack_getoption(option, "Nmin_leaf", &Nmin_leaf_d);
@@ -252,6 +258,7 @@ static butterfly::ProgramOptions read_h2_program_options64(
   c_bpack_getoption(option, "H2_ID_proxy_points", &H2_ID_proxy_points_d);
   c_bpack_getoption(option, "BACA_Batch", &BACA_Batch_d);
   c_bpack_getoption(option, "H2_s_op", &H2_s_op);
+  c_bpack_getoption(option, "H2_partial", &H2_partial_d);
 
   const int64_t reduction_threshold =
       static_cast<int64_t>(reduction_threshold_d);
@@ -380,6 +387,7 @@ static butterfly::ProgramOptions read_h2_program_options64(
     result.id_adaptive_batch = BACA_Batch;
   }
   result.s_op = H2_s_op;
+  result.partial_count = static_cast<int64_t>(std::llround(H2_partial_d));
   if (result.precon == 2) result.CA_level = result.num_levels;
   butterfly::validate_h2_backend_selection(result);
   return result;
@@ -454,6 +462,8 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"h2_id_radius",    "format-7 H2 mandatory ID neighborhood radius; 2 keeps the standard workspace"},
 		{"h2_id_proxy",     "format-7 H2 proxy mode: 0 none, 1 geometric surface, 2 adaptive row sampling"},
 		{"h2_id_proxy_points", "geometric surface samples when h2_id_proxy=1"},
+		{"h2_partial",      "format-7 H2 (H2_unstructured 1, sym 0): partial factorization - the first h2_partial points in input order (F11) are eliminated, the rest (F22) retained; the object then serves the partial solves and the Schur complement F22 - F21 F11^-1 F12 (c_bpack_partial_*); 0 off"},
+		{"h2_partial_extract", "format-7 H2 partial factorization: where the Schur complement's entries (c_bpack_extractelement) are computed: auto (0, default: the device when the records are on it and the call is large enough), device (1, when the records are on it), host (2)"},
 		{"h2_s_op",         "format-7 H2 IDs: an absolute floor tol_comp*h2_s_op on the rank rule, |R_kk| > max(tol_comp |R_11|, tol_comp h2_s_op); 0 off (default). At most ||A|| for compression-only H2 (precon 2), at most 1/||A^-1|| for the factorization (K + tau^2 I: tau^2)"},
 		{"errfillfull",     "errfillfull: a slow (n^2), thorough error checking is performed after the compression of each block"},
 		{"baca_batch",      "block size in batched ACA when reclr_leaf=4 or 5; adaptive H2 rows per spatial node when h2_id_proxy=2"},
@@ -586,6 +596,12 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"H2_compress_factors", required_argument, 0, 1001},
 		{"h2_s_op", required_argument, 0, 1004},
 		{"H2_s_op", required_argument, 0, 1004},
+		{"h2_partial", required_argument, 0, 1006},
+		{"H2_partial", required_argument, 0, 1006},
+		{"h2_partial_extract", required_argument, 0, 1007},
+		{"H2_partial_extract", required_argument, 0, 1007},
+		{"h2_extract", required_argument, 0, 1008},
+		{"H2_extract", required_argument, 0, 1008},
 		{"H2_use_gpu", required_argument, 0, 59},
 		{"hodlr_use_gpu", required_argument, 0, 60},
 		{"HODLR_use_gpu", required_argument, 0, 60},
@@ -915,6 +931,27 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		std::istringstream iss(optarg);
 		iss >> opt_d;
 		c_bpack_set_D_option(&option0, "H2_s_op", opt_d);
+		} break;
+		case 1006: {
+		std::istringstream iss(optarg);
+		iss >> opt_i;
+		c_bpack_set_I_option(&option0, "H2_partial", opt_i);
+		} break;
+		case 1007: {
+		const std::string v(optarg);
+		if (v == "auto") opt_i = 0;
+		else if (v == "device") opt_i = 1;
+		else if (v == "host") opt_i = 2;
+		else { std::istringstream iss(v); iss >> opt_i; }
+		c_bpack_set_I_option(&option0, "H2_partial_extract", opt_i);
+		} break;
+		case 1008: {
+		const std::string v(optarg);
+		if (v == "auto") opt_i = 0;
+		else if (v == "device") opt_i = 1;
+		else if (v == "host") opt_i = 2;
+		else { std::istringstream iss(v); iss >> opt_i; }
+		c_bpack_set_I_option(&option0, "H2_extract", opt_i);
 		} break;
 		case 61: {
 		std::istringstream iss(optarg);
@@ -1334,6 +1371,7 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       double H2_ID_proxy_points_d;
       double BACA_Batch_d;
       double H2_s_op = 0.0;
+      double H2_partial_d = 0.0;
       c_bpack_getoption(option, "tol_comp", &tolerance);
       c_bpack_getoption(option, "reduction_threshold", &reduction_threshold_d);
       c_bpack_getoption(option, "Nmin_leaf", &Nmin_leaf_d);
@@ -1357,6 +1395,7 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       c_bpack_getoption(option, "H2_ID_proxy_points", &H2_ID_proxy_points_d);
       c_bpack_getoption(option, "BACA_Batch", &BACA_Batch_d);
       c_bpack_getoption(option, "H2_s_op", &H2_s_op);
+      c_bpack_getoption(option, "H2_partial", &H2_partial_d);
       int64_t reduction_threshold = (int64_t)reduction_threshold_d;
       int64_t Nmin_leaf = (int64_t)Nmin_leaf_d;
       const int CA_level = static_cast<int>(std::llround(CA_level_d));
@@ -1472,6 +1511,7 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
         H2_options.id_adaptive_batch = BACA_Batch;
       }
       H2_options.s_op = H2_s_op;
+      H2_options.partial_count = static_cast<int64_t>(std::llround(H2_partial_d));
       if (H2_options.precon == 2) {
         H2_options.CA_level = H2_options.num_levels;
       }
@@ -1503,7 +1543,8 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
                   << ", h2_ca_owner_serial=" << H2_options.ca_owner_serial
                   << ", h2_id_radius=" << H2_options.id_neighborhood_radius
                   << ", h2_id_proxy=" << H2_options.id_proxy_mode
-                  << ", h2_s_op=" << H2_options.s_op;
+                  << ", h2_s_op=" << H2_options.s_op
+                  << ", h2_partial=" << H2_options.partial_count;
         if (H2_options.id_proxy_mode == 1) {
           std::cout << ", h2_id_proxy_points=" << H2_options.id_proxy_points;
         } else if (H2_options.id_proxy_mode == 2) {
@@ -1527,8 +1568,11 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
 	  std::vector<int> rank_idxs(nproc_h2, 0), rank_idxe(nproc_h2, -1);
 	  MPI_Allgather(&idxs, 1, MPI_INT, rank_idxs.data(), 1, MPI_INT, H2_solver->comm);
 	  MPI_Allgather(&idxe, 1, MPI_INT, rank_idxe.data(), 1, MPI_INT, H2_solver->comm);
+	  // the index tree goes down to the leaf size this H2 was given, so a
+	  // butterfly built on this mesh has real depth (c_bpack_set_mesh_h2)
+	  int nmin_leaf_mesh = static_cast<int>(std::max<int64_t>(H2_options.nmin_leaf, 1));
 	  c_bpack_set_mesh_h2(Npo, new2old.data(), &idxs, &idxe, &nproc_h2,
-	                      rank_idxs.data(), rank_idxe.data(), msh);
+	                      rank_idxs.data(), rank_idxe.data(), &nmin_leaf_mesh, msh);
 	  *Npo_loc=idxe-idxs+1;
 	  if (perms != nullptr) {
 		std::copy(new2old.begin(), new2old.end(), perms);
@@ -1794,6 +1838,8 @@ void c_bpack_construct_element_compute(F2Cptr* bmat, F2Cptr* option,F2Cptr* stat
 	  // too, else it fetches their blocks, CollectiveEntries::set_sketch)
 	  H2_solver->kernel.collective->set_sketch(H2_solver->kernel.sketch_callback);
 	  H2_solver->kernel.collective->set_sketch_transposed(H2_solver->kernel.sketch_transpose_callback);
+	  H2_solver->kernel.collective->set_sketch_device(H2_solver->kernel.sketch_device_callback);
+	  H2_solver->kernel.collective->set_block_device(H2_solver->kernel.block_device_callback);
 #if defined(H2_HAVE_GPU) && defined(DAT) && (DAT == 0 || DAT == 1)
 	  if (H2_solver->options.use_gpu != 0) {
 	    H2_solver->kernel.gpu_evaluator =
@@ -1943,6 +1989,86 @@ void c_bpack_set_gpu_list_evaluator(F2Cptr* bmat, bpack_gpu_list_evaluator evalu
 }
 
 /*
+ * The same three kinds of evaluator for a butterfly block (the bf handle of
+ * c_bf_construct_init): with HODLR_use_gpu > 0, c_bf_construct_element_compute
+ * then takes the block's entries from the device.  K(i, j): i a row and j a
+ * column, each by its own mesh - the CPU callbacks' indices minus one;
+ * coordinates only for a butterfly built with geometry (nogeo 0 or 4).
+ */
+#ifdef BPACK_GPU_EVALUATORS
+template<typename Make>
+static void bf_set_gpu_evaluator(F2Cptr* bf, const char* caller, Make make) {
+  using H2Data = typename butterfly::fmm_data<C_DT>::type;
+  if (bf == nullptr || *bf == nullptr) throw std::invalid_argument(std::string(caller) + ": null butterfly handle");
+  const std::shared_ptr<fmm::gpu::Evaluator> evaluator = make(static_cast<int>(sizeof(H2Data)));
+  c_bf_gpu_set_evaluator(*bf, &evaluator);
+}
+#endif
+
+void c_bf_set_gpu_entry_launchers(F2Cptr* bf, const bpack_gpu_entry_launchers* launchers) {
+#ifdef BPACK_GPU_EVALUATORS
+  if (launchers == nullptr) throw std::invalid_argument("c_bf_set_gpu_entry_launchers: null argument");
+  bf_set_gpu_evaluator(bf, "c_bf_set_gpu_entry_launchers", [&](int scalar_bytes) {
+    return fmm::gpu::Evaluator::from_launchers(*launchers, scalar_bytes);
+  });
+#else
+  (void)bf;
+  (void)launchers;
+#endif
+}
+
+void c_bf_set_gpu_entry_source(F2Cptr* bf, const char* source, const double* params, const int* nparams,
+                               const int* flags) {
+#ifdef BPACK_GPU_EVALUATORS
+  if (source == nullptr || flags == nullptr || (nparams != nullptr && *nparams > 0 && params == nullptr)) {
+    throw std::invalid_argument("c_bf_set_gpu_entry_source: null argument");
+  }
+  const int count = nparams != nullptr ? std::max(*nparams, 0) : 0;
+  bf_set_gpu_evaluator(bf, "c_bf_set_gpu_entry_source", [&](int scalar_bytes) {
+    return fmm::gpu::Evaluator::from_source(source, params, count, *flags, scalar_bytes);
+  });
+#else
+  (void)bf;
+  (void)source;
+  (void)params;
+  (void)nparams;
+  (void)flags;
+#endif
+}
+
+void c_bf_set_gpu_block_evaluator(F2Cptr* bf, bpack_gpu_block_evaluator evaluate, void* user, const int* flags) {
+#ifdef BPACK_GPU_EVALUATORS
+  if (evaluate == nullptr || flags == nullptr) {
+    throw std::invalid_argument("c_bf_set_gpu_block_evaluator: null argument");
+  }
+  bf_set_gpu_evaluator(bf, "c_bf_set_gpu_block_evaluator", [&](int scalar_bytes) {
+    return fmm::gpu::Evaluator::from_block(evaluate, user, *flags, scalar_bytes);
+  });
+#else
+  (void)bf;
+  (void)evaluate;
+  (void)user;
+  (void)flags;
+#endif
+}
+
+void c_bf_set_gpu_list_evaluator(F2Cptr* bf, bpack_gpu_list_evaluator evaluate, void* user, const int* flags) {
+#ifdef BPACK_GPU_EVALUATORS
+  if (evaluate == nullptr || flags == nullptr) {
+    throw std::invalid_argument("c_bf_set_gpu_list_evaluator: null argument");
+  }
+  bf_set_gpu_evaluator(bf, "c_bf_set_gpu_list_evaluator", [&](int scalar_bytes) {
+    return fmm::gpu::Evaluator::from_list(evaluate, user, *flags, scalar_bytes);
+  });
+#else
+  (void)bf;
+  (void)evaluate;
+  (void)user;
+  (void)flags;
+#endif
+}
+
+/*
  * The warm-up of the registered GPU evaluator now, on the GPU the matrix will
  * use, rather than before its first level (fmm::gpu::Evaluator::warm_up):
  * for H2 with H2_use_gpu, after the registration.  seconds[0]: its time on
@@ -2082,21 +2208,147 @@ void c_bpack_input_to_internal(
  * core/extraction_profile.hpp): seconds of the eight steps (resolve, tasks,
  * vectors up, column side, compute, pack, route, unpack), then the route's
  * MPI seconds, the entries computed, the bytes routed and the calls, summed
- * over every compressed H2 this process served since the start (or since a
- * CollectiveEntries::report, which resets it).  Local, not collective.
+ * over every compressed H2 this process served since the start (the resets
+ * at each factorization, CollectiveEntries::reset_counts, included).  Local,
+ * not collective.
  */
 void c_bpack_get_extraction_profile(double* vals) {
 #ifdef HAVE_MPI
   const fmm::ExtractionProfile& p = fmm::extraction_profile();
-  for (int s = 0; s < fmm::ExtractionProfile::kSteps; ++s) vals[s] = p.seconds[s];
-  vals[8] = p.route_mpi;
-  vals[9] = p.entries_computed;
-  vals[10] = p.bytes_routed;
-  vals[11] = static_cast<double>(p.calls);
+  const fmm::ExtractionProfile& r = fmm::extraction_profile_reset();
+  for (int s = 0; s < fmm::ExtractionProfile::kSteps; ++s) vals[s] = p.seconds[s] + r.seconds[s];
+  vals[8] = p.route_mpi + r.route_mpi;
+  vals[9] = p.entries_computed + r.entries_computed;
+  vals[10] = p.bytes_routed + r.bytes_routed;
+  vals[11] = static_cast<double>(p.calls + r.calls);
 #else
   for (int s = 0; s < 12; ++s) vals[s] = 0.0;
 #endif
 }
+
+#ifdef HAVE_MPI
+// For BF_extract_owned_gpu (BPACK_constr.f90): each intersection's rows
+// this rank computed - out: nloc[n] x nc[n], column major, stacked; local:
+// their positions among the intersection's nr[n] rows, stacked - to its
+// owner, rank owner[n] of comm, who places them in its block of alldat
+// (nr[n] x nc[n], column major, its own intersections' blocks in order).
+// Collective over comm.
+extern "C" void c_bf_route_owned_rows(int* fcomm, int* ninter, int* nr, int* nc, int* nloc, int* local, int* owner,
+                                      void* out, void* alldat) {
+  MPI_Comm comm = MPI_Comm_f2c(static_cast<MPI_Fint>(*fcomm));
+  try {  // (called from Fortran: nothing may unwind into it)
+  int P = 1, me = 0;
+  MPI_Comm_size(comm, &P);
+  MPI_Comm_rank(comm, &me);
+  const int64_t n = std::max(*ninter, 0);
+  const C_DT* vals = static_cast<const C_DT*>(out);
+  C_DT* dat = static_cast<C_DT*>(alldat);
+  // where each intersection's pieces are: its values in out, its local rows,
+  // and on its owner its block in alldat
+  std::vector<int64_t> out_at(static_cast<size_t>(n) + 1, 0), loc_at(out_at.size(), 0), blk_at(out_at.size(), -1);
+  int64_t own = 0;
+  for (int64_t k = 0; k < n; ++k) {
+    out_at[k + 1] = out_at[k] + static_cast<int64_t>(nloc[k]) * nc[k];
+    loc_at[k + 1] = loc_at[k] + nloc[k];
+    if (owner[k] == me) {
+      blk_at[k] = own;
+      own += static_cast<int64_t>(nr[k]) * nc[k];
+    }
+  }
+  // a piece's rows into its block: column j, row local[i] <- value (i, j)
+  auto place = [&](int64_t k, int m, const int* rows, const C_DT* v) {
+    C_DT* b = dat + blk_at[k];
+    const int64_t ld = nr[k];
+    for (int j = 0; j < nc[k]; ++j)
+      for (int i = 0; i < m; ++i) b[rows[i] + j * ld] = v[i + static_cast<int64_t>(j) * m];
+  };
+  // this rank's own pieces in place; the others' counted per destination
+  std::vector<int64_t> icnt(static_cast<size_t>(P), 0), vcnt(static_cast<size_t>(P), 0);
+  std::vector<int64_t> mine_k;
+  for (int64_t k = 0; k < n; ++k) {
+    if (nloc[k] == 0 || nc[k] == 0) continue;
+    if (owner[k] == me) mine_k.push_back(k);
+    else {
+      icnt[owner[k]] += 2 + nloc[k];
+      vcnt[owner[k]] += static_cast<int64_t>(nloc[k]) * nc[k];
+    }
+  }
+#pragma omp parallel for schedule(dynamic, 4)
+  for (size_t q = 0; q < mine_k.size(); ++q) {
+    const int64_t k = mine_k[q];
+    place(k, nloc[k], local + loc_at[k], vals + out_at[k]);
+  }
+  // the others: (intersection, rows, their positions) and the values, per
+  // destination in intersection order
+  std::vector<int64_t> isd(static_cast<size_t>(P) + 1, 0), vsd(isd.size(), 0);
+  for (int p = 0; p < P; ++p) {
+    isd[p + 1] = isd[p] + icnt[p];
+    vsd[p + 1] = vsd[p] + vcnt[p];
+  }
+  if (isd[P] > INT_MAX || vsd[P] > INT_MAX)
+    throw std::overflow_error("c_bf_route_owned_rows: a call's pieces exceed INT_MAX");
+  std::vector<int> ibuf(static_cast<size_t>(std::max<int64_t>(isd[P], 1)));
+  std::vector<C_DT> vbuf(static_cast<size_t>(std::max<int64_t>(vsd[P], 1)));
+  {
+    std::vector<int64_t> ip(isd.begin(), isd.end() - 1), vp(vsd.begin(), vsd.end() - 1);
+    for (int64_t k = 0; k < n; ++k) {
+      if (nloc[k] == 0 || nc[k] == 0 || owner[k] == me) continue;
+      const int d = owner[k];
+      ibuf[ip[d]++] = static_cast<int>(k);
+      ibuf[ip[d]++] = nloc[k];
+      std::copy(local + loc_at[k], local + loc_at[k + 1], ibuf.begin() + ip[d]);
+      ip[d] += nloc[k];
+      std::copy(vals + out_at[k], vals + out_at[k + 1], vbuf.begin() + vp[d]);
+      vp[d] += out_at[k + 1] - out_at[k];
+    }
+  }
+  std::vector<int> sc(P), sd(P), rc(P), rd(P), vsc(P), vsdi(P), vrc(P), vrd(P);
+  for (int p = 0; p < P; ++p) {
+    sc[p] = static_cast<int>(icnt[p]);
+    sd[p] = static_cast<int>(isd[p]);
+    vsc[p] = static_cast<int>(vcnt[p]);
+    vsdi[p] = static_cast<int>(vsd[p]);
+  }
+  MPI_Alltoall(sc.data(), 1, MPI_INT, rc.data(), 1, MPI_INT, comm);
+  MPI_Alltoall(vsc.data(), 1, MPI_INT, vrc.data(), 1, MPI_INT, comm);
+  int64_t ri = 0, rv = 0;
+  for (int p = 0; p < P; ++p) {
+    rd[p] = static_cast<int>(ri);
+    vrd[p] = static_cast<int>(rv);
+    ri += rc[p];
+    rv += vrc[p];
+  }
+  if (ri > INT_MAX || rv > INT_MAX) throw std::overflow_error("c_bf_route_owned_rows: received pieces exceed INT_MAX");
+  std::vector<int> irecv(static_cast<size_t>(std::max<int64_t>(ri, 1)));
+  std::vector<C_DT> vrecv(static_cast<size_t>(std::max<int64_t>(rv, 1)));
+  MPI_Datatype vt;
+  MPI_Type_contiguous(static_cast<int>(sizeof(C_DT)), MPI_BYTE, &vt);
+  MPI_Type_commit(&vt);
+  MPI_Alltoallv(ibuf.data(), sc.data(), sd.data(), MPI_INT, irecv.data(), rc.data(), rd.data(), MPI_INT, comm);
+  MPI_Alltoallv(vbuf.data(), vsc.data(), vsdi.data(), vt, vrecv.data(), vrc.data(), vrd.data(), vt, comm);
+  MPI_Type_free(&vt);
+  // the received pieces in place (each one's rows its own: no two write the
+  // same entry)
+  struct Piece { int64_t k, at_i, at_v; int m; };
+  std::vector<Piece> pieces;
+  for (int64_t a = 0, v = 0; a < ri;) {
+    const int64_t k = irecv[a], m = irecv[a + 1];
+    if (k < 0 || k >= n || owner[k] != me) throw std::logic_error("c_bf_route_owned_rows: a piece for another rank");
+    pieces.push_back({k, a + 2, v, static_cast<int>(m)});
+    a += 2 + m;
+    v += m * nc[k];
+  }
+#pragma omp parallel for schedule(dynamic, 4)
+  for (size_t q = 0; q < pieces.size(); ++q)
+    place(pieces[q].k, pieces[q].m, irecv.data() + pieces[q].at_i, vrecv.data() + pieces[q].at_v);
+  } catch (const std::exception& e) {
+    int rank = 0;
+    MPI_Comm_rank(comm, &rank);
+    std::cerr << "Error in c_bf_route_owned_rows on rank " << rank << ": " << e.what() << std::endl;
+    MPI_Abort(comm, 1);
+  }
+}
+#endif
 
 /* Inverse of c_bpack_input_to_internal, with the same batched layout. */
 void c_bpack_internal_to_input(
@@ -2266,6 +2518,11 @@ void c_bpack_solve(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*bmat, F2Cptr*optio
 		  tolerance, static_cast<int>(std::llround(max_iterations_d)),
 		  &iterations, &residual, verbosity >= 1);
 	  } else {
+		if (H2_solver->build_state == butterfly::H2BuildState::RS_PARTIAL) {
+		  throw std::runtime_error(
+			"c_bpack_solve (format 7): a partial factorization (H2_partial) is applied by "
+			"c_bpack_partial_forward / c_bpack_partial_backward");
+		}
 		if (H2_solver->build_state != butterfly::H2BuildState::RS_FACTORIZED) {
 		  throw std::runtime_error(
 			"c_bpack_solve (format 7): direct solve requires c_bpack_factor first");
@@ -2452,6 +2709,11 @@ void c_bpack_inv_mult(char const * trans, C_DT const * xin,
         throw std::invalid_argument(
           "c_bpack_inv_mult (format 7): Ninloc must equal Noutloc");
       }
+      if (H2_solver->build_state == butterfly::H2BuildState::RS_PARTIAL) {
+        throw std::runtime_error(
+          "c_bpack_inv_mult (format 7): a partial factorization (H2_partial) is applied by "
+          "c_bpack_partial_forward / c_bpack_partial_backward");
+      }
       if (H2_solver->build_state != butterfly::H2BuildState::RS_FACTORIZED) {
         throw std::runtime_error(
           "c_bpack_inv_mult (format 7): applies the factorization; call "
@@ -2569,25 +2831,61 @@ static butterfly::H2<double, H2Data>* h2_of(F2Cptr* bmat) {
 // The blocks of a list of intersections from a compression-only
 // unstructured Color H2 (format 7; unstructured/extraction.hpp), each to one
 // rank of caller_comm (pmaps of 1 x 1 grids), collective over caller_comm;
-// the H2 on a subset of its ranks, bmat null on the others.
+// the H2 on a subset of its ranks, bmat null on the others.  `partial`: a
+// partial factorization (H2_partial; every caller rank passing the same):
+// the blocks of its Schur complement instead, the indices 1-based F22 ones
+// (unstructured/partial.hpp, extract_partial_blocks).
+// H2_partial_extract (0 auto, 1 device, 2 host): where a partial
+// factorization's Schur complement entries are computed.
+static int partial_extract_of(F2Cptr* option) {
+  double v = 0.0;
+  c_bpack_getoption(option, "H2_partial_extract", &v);
+  const int mode = static_cast<int>(std::llround(v));
+  if (mode < 0 || mode > 2) throw std::invalid_argument("H2_partial_extract must be 0 (auto), 1 (device) or 2 (host)");
+  return mode;
+}
+
+// H2_extract (0 auto, 1 device, 2 host): where a compression-only H2's
+// entries are computed.  It picks a collective branch, so every rank of the
+// call must hold the same value (the bridge reduces it: only the source's
+// ranks hold the option).
+static int compressed_extract_of(F2Cptr* option) {
+  double v = 0.0;
+  c_bpack_getoption(option, "H2_extract", &v);
+  const int mode = static_cast<int>(std::llround(v));
+  if (mode < 0 || mode > 2) throw std::invalid_argument("H2_extract must be 0 (auto), 1 (device) or 2 (host)");
+  return mode;
+}
+
 static void h2_extract_elements(
-    F2Cptr* bmat, MPI_Comm caller_comm, int* Ninter, int* allrows, int* allcols,
-    C_DT* alldat_loc, int* rowidx, int* colidx, int* pgidx, int* Npmap,
+    F2Cptr* bmat, MPI_Comm caller_comm, bool partial, int partial_extract, int extract, int* Ninter, int* allrows,
+    int* allcols, C_DT* alldat_loc, int* rowidx, int* colidx, int* pgidx, int* Npmap,
     int* pmaps, const char* caller) {
   using H2Data = typename butterfly::fmm_data<C_DT>::type;
   const std::vector<int> owner =
     single_rank_owners(*Ninter, pgidx, *Npmap, pmaps, (std::string(caller) + " (format 7)").c_str());
+  if (partial) {
+    butterfly::H2<double, H2Data>* h2 = h2_of<H2Data>(bmat);
+    butterfly::color_unstructured::extract_partial_blocks(
+      h2 != nullptr ? h2->tree.get() : nullptr, caller_comm, *Ninter, allrows, allcols, rowidx, colidx, owner,
+      reinterpret_cast<H2Data*>(alldat_loc), partial_extract);
+    return;
+  }
   butterfly::color_unstructured::extract_compressed_blocks(
     h2_of<H2Data>(bmat), caller_comm, *Ninter, allrows, allcols, rowidx, colidx, owner,
-    reinterpret_cast<H2Data*>(alldat_loc));
+    reinterpret_cast<H2Data*>(alldat_loc), extract);
 }
 
 // The sketched blocks of a list of requests from a compression-only
 // unstructured Color H2 (as h2_extract_elements; Omega's entries 1-based).
+// `partial`: a partial factorization's Schur complement, sketched as it is
+// computed (extract_partial_blocks with a PartialSketch: Omega A(rows,
+// columns) sketches CB's rows, the transposed form CB(columns, rows)'s
+// columns).
 static void h2_extract_sketches(
-    F2Cptr* bmat, MPI_Comm caller_comm, int* Nsketch, int* allrows, int* allcols, int* rowidx, int* colidx,
-    int* sketchdim, int* omegaidx, int* omega_row, int* omega_dest, double* omega_val, C_DT* alldat_loc,
-    int* pgidx, int* Npmap, int* pmaps, const char* caller, bool transposed) {
+    F2Cptr* bmat, MPI_Comm caller_comm, bool partial, int partial_extract, int* Nsketch, int* allrows, int* allcols,
+    int* rowidx, int* colidx, int* sketchdim, int* omegaidx, int* omega_row, int* omega_dest, double* omega_val,
+    C_DT* alldat_loc, int* pgidx, int* Npmap, int* pmaps, const char* caller, bool transposed) {
   using H2Data = typename butterfly::fmm_data<C_DT>::type;
   const std::vector<int> owner =
     single_rank_owners(*Nsketch, pgidx, *Npmap, pmaps, (std::string(caller) + " (format 7)").c_str());
@@ -2602,11 +2900,151 @@ static void h2_extract_sketches(
     orow[static_cast<size_t>(e)] = omega_row[e] - 1;
     odest[static_cast<size_t>(e)] = omega_dest[e] - 1;
   }
+  if (partial) {
+    std::vector<int64_t> dims(sketchdim, sketchdim + std::max(*Nsketch, 0));
+    butterfly::color_unstructured::PartialSketch sk;
+    sk.side = transposed ? 1 : 0;
+    sk.dims = dims.data();
+    sk.omega_off = omega_off.data();
+    sk.omega_pos = orow.data();
+    sk.omega_dest = odest.data();
+    sk.omega_val = omega_val;
+    butterfly::H2<double, H2Data>* h2 = h2_of<H2Data>(bmat);
+    auto* tree = h2 != nullptr ? h2->tree.get() : nullptr;
+    auto* out = reinterpret_cast<H2Data*>(alldat_loc);
+    if (transposed) {
+      butterfly::color_unstructured::extract_partial_blocks(tree, caller_comm, *Nsketch, allcols, allrows, colidx, rowidx,
+                                                            owner, out, partial_extract, &sk);
+    } else {
+      butterfly::color_unstructured::extract_partial_blocks(tree, caller_comm, *Nsketch, allrows, allcols, rowidx, colidx,
+                                                            owner, out, partial_extract, &sk);
+    }
+    return;
+  }
   butterfly::color_unstructured::extract_compressed_sketches(
     h2_of<H2Data>(bmat), caller_comm, *Nsketch, allrows, allcols, rowidx, colidx, sketchdim, omega_off.data(),
     orow.data(), odest.data(), omega_val, owner, reinterpret_cast<H2Data*>(alldat_loc), transposed);
 }
 #endif
+
+#ifdef HAVE_MPI
+template<typename H2Data>
+static butterfly::H2<double, H2Data>* h2_partial_of(F2Cptr* bmat, F2Cptr* option, const char* caller) {
+  double tmp = 0.0;
+  c_bpack_getoption(option, "format", &tmp);
+  if (static_cast<int>(tmp) != 7) throw std::invalid_argument(std::string(caller) + ": format 7 (H2) only");
+  void* H2_raw = nullptr;
+  c_bpack_get_h2(*bmat, &H2_raw);
+  auto* H2_solver = static_cast<butterfly::H2<double, H2Data>*>(H2_raw);
+  if (H2_solver == nullptr || H2_solver->build_state != butterfly::H2BuildState::RS_PARTIAL) {
+    throw std::runtime_error(std::string(caller) + ": needs a partial factorization (H2_partial > 0, c_bpack_factor)");
+  }
+  return H2_solver;
+}
+#endif
+
+// The partial factorization's entries (BPACK_wrapper.h; unstructured/partial.hpp).
+void c_bpack_partial_forward(C_DT* out2, C_DT const* b, int* Nloc, int* N22, int* Nrhs, F2Cptr* bmat, F2Cptr* option,
+	F2Cptr* stats, F2Cptr* ptree){
+#ifdef HAVE_MPI
+  using H2Data = typename butterfly::fmm_data<C_DT>::type;
+  auto* H2_solver = h2_partial_of<H2Data>(bmat, option, "c_bpack_partial_forward");
+  const int64_t n22 = H2_solver->tree->num_points - H2_solver->tree->partial_count;
+  if (*Nrhs <= 0) throw std::invalid_argument("c_bpack_partial_forward: Nrhs must be positive");
+  if (*N22 != n22) throw std::invalid_argument("c_bpack_partial_forward: N22 must be N - H2_partial");
+  const int verbosity = sync_h2_verbosity(option, H2_solver);
+  const double t0 = MPI_Wtime();
+  std::vector<H2Data> rhs;
+  h2_values_to_internal(H2_solver, reinterpret_cast<const H2Data*>(b), *Nloc, *Nrhs, rhs, "c_bpack_partial_forward");
+  auto& solve_data = H2_solver->tree->partial_solve_data;
+  solve_data.clear();
+  solve_data.resize(static_cast<size_t>(H2_solver->options.num_levels));
+  std::vector<H2Data> result;
+  butterfly::color_unstructured::hierarchical_solve_unstructured(
+    H2_solver->tree.get(), rhs, solve_data, *Nrhs, verbosity, false, 1,
+    static_cast<const std::vector<H2Data>*>(nullptr), &result);
+  H2_solver->tree->partial_solve_nrhs = *Nrhs;
+  std::copy(result.begin(), result.end(), reinterpret_cast<H2Data*>(out2));
+  double t = MPI_Wtime() - t0;
+  MPI_Allreduce(MPI_IN_PLACE, &t, 1, MPI_DOUBLE, MPI_MAX, H2_solver->comm);
+  c_bpack_setstats(stats, "Time_Solve", &t);
+  (void)ptree;
+#else
+  format7_requires_mpi("c_bpack_partial_forward");
+#endif
+}
+
+void c_bpack_partial_backward(C_DT* x, C_DT const* x2, int* Nloc, int* N22, int* Nrhs, F2Cptr* bmat, F2Cptr* option,
+	F2Cptr* stats, F2Cptr* ptree){
+#ifdef HAVE_MPI
+  using H2Data = typename butterfly::fmm_data<C_DT>::type;
+  auto* H2_solver = h2_partial_of<H2Data>(bmat, option, "c_bpack_partial_backward");
+  const int64_t n22 = H2_solver->tree->num_points - H2_solver->tree->partial_count;
+  if (*N22 != n22) throw std::invalid_argument("c_bpack_partial_backward: N22 must be N - H2_partial");
+  auto& solve_data = H2_solver->tree->partial_solve_data;
+  if (solve_data.empty() || H2_solver->tree->partial_solve_nrhs != *Nrhs) {
+    throw std::runtime_error("c_bpack_partial_backward: call c_bpack_partial_forward with the same Nrhs first");
+  }
+  const int verbosity = sync_h2_verbosity(option, H2_solver);
+  const double t0 = MPI_Wtime();
+  const std::vector<H2Data> x2v(reinterpret_cast<const H2Data*>(x2),
+                                reinterpret_cast<const H2Data*>(x2) + static_cast<size_t>(n22) * static_cast<size_t>(*Nrhs));
+  // (the rhs argument only sizes the local vectors)
+  int internal_nloc = *Nloc;
+  if (const auto* layout = H2_solver->distributed_layout.get()) internal_nloc = static_cast<int>(layout->internal_local_size);
+  std::vector<H2Data> sized(static_cast<size_t>(internal_nloc) * static_cast<size_t>(*Nrhs), H2Data(0.0));
+  butterfly::color_unstructured::hierarchical_solve_unstructured(
+    H2_solver->tree.get(), sized, solve_data, *Nrhs, verbosity, false, 2, &x2v,
+    static_cast<std::vector<H2Data>*>(nullptr));
+  std::vector<H2Data> internal_solution(sized.size());
+  butterfly::gather_local_solution(H2_solver->tree.get(), solve_data, internal_solution.data(), &internal_nloc, *Nrhs);
+  h2_values_from_internal(H2_solver, internal_solution, reinterpret_cast<H2Data*>(x), *Nrhs);
+  double t = MPI_Wtime() - t0;
+  MPI_Allreduce(MPI_IN_PLACE, &t, 1, MPI_DOUBLE, MPI_MAX, H2_solver->comm);
+  c_bpack_setstats(stats, "Time_Solve", &t);
+  (void)ptree;
+#else
+  format7_requires_mpi("c_bpack_partial_backward");
+#endif
+}
+
+void c_bpack_partial_schur_extract(C_DT* out, int const* rows, int* nrows, int const* cols, int* ncols, F2Cptr* bmat,
+	F2Cptr* option){
+#ifdef HAVE_MPI
+  using H2Data = typename butterfly::fmm_data<C_DT>::type;
+  auto* H2_solver = h2_partial_of<H2Data>(bmat, option, "c_bpack_partial_schur_extract");
+  std::vector<int64_t> r(rows, rows + std::max(*nrows, 0)), c(cols, cols + std::max(*ncols, 0));
+  butterfly::color_unstructured::partial_schur_entries(
+    *H2_solver->tree, r.data(), static_cast<int64_t>(r.size()), c.data(), static_cast<int64_t>(c.size()),
+    reinterpret_cast<H2Data*>(out), partial_extract_of(option));
+#else
+  format7_requires_mpi("c_bpack_partial_schur_extract");
+#endif
+}
+
+void c_bpack_partial_schur_mult(C_DT* y2, C_DT const* x2, int* N22, int* Ncol, F2Cptr* bmat, F2Cptr* option){
+#ifdef HAVE_MPI
+  using H2Data = typename butterfly::fmm_data<C_DT>::type;
+  auto* H2_solver = h2_partial_of<H2Data>(bmat, option, "c_bpack_partial_schur_mult");
+  const int64_t n22 = H2_solver->tree->num_points - H2_solver->tree->partial_count;
+  if (*N22 != n22) throw std::invalid_argument("c_bpack_partial_schur_mult: N22 must be N - H2_partial");
+  if (*Ncol <= 0) throw std::invalid_argument("c_bpack_partial_schur_mult: Ncol must be positive");
+  butterfly::color_unstructured::partial_schur_multiply(
+    *H2_solver->tree, reinterpret_cast<const H2Data*>(x2), reinterpret_cast<H2Data*>(y2), *Ncol);
+#else
+  format7_requires_mpi("c_bpack_partial_schur_mult");
+#endif
+}
+
+void c_bpack_partial_schur_release(F2Cptr* bmat, F2Cptr* option){
+#ifdef HAVE_MPI
+  using H2Data = typename butterfly::fmm_data<C_DT>::type;
+  auto* H2_solver = h2_partial_of<H2Data>(bmat, option, "c_bpack_partial_schur_release");
+  butterfly::color_unstructured::partial_schur_release(*H2_solver->tree);
+#else
+  format7_requires_mpi("c_bpack_partial_schur_release");
+#endif
+}
 
 void c_bpack_extractelement(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree,
 	int* Ninter, int* Nallrows, int* Nallcols, int64_t* Nalldat_loc, int* allrows,int* allcols,
@@ -2620,10 +3058,14 @@ void c_bpack_extractelement(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stat
     using H2Data = typename butterfly::fmm_data<C_DT>::type;
     void* H2_raw = nullptr;
     c_bpack_get_h2(*bmat, &H2_raw);
-    MPI_Comm comm = static_cast<butterfly::H2<double, H2Data>*>(H2_raw)->comm;
+    auto* h2 = static_cast<butterfly::H2<double, H2Data>*>(H2_raw);
+    MPI_Comm comm = h2->comm;
+    // (every rank holds the matrix, so its kind needs no collective)
+    const bool partial = h2->build_state == butterfly::H2BuildState::RS_PARTIAL;
     try {
-      h2_extract_elements(bmat, comm, Ninter, allrows, allcols, alldat_loc,
-                          rowidx, colidx, pgidx, Npmap, pmaps, "c_bpack_extractelement");
+      h2_extract_elements(bmat, comm, partial, partial ? partial_extract_of(option) : 0,
+                          partial ? 0 : compressed_extract_of(option), Ninter, allrows, allcols,
+                          alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps, "c_bpack_extractelement");
     } catch (const std::exception& e) {
       int rank = 0;
       MPI_Comm_rank(comm, &rank);
@@ -2648,16 +3090,30 @@ void c_bpack_extractelement_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cpt
   int fcomm = 0;
   c_bpack_get_comm(ptree_caller, &fcomm);
   MPI_Comm caller_comm = MPI_Comm_f2c(static_cast<MPI_Fint>(fcomm));
-  int format = -1;
+  // and whether it is a partial factorization, in the same reduction
+  using H2Data = typename butterfly::fmm_data<C_DT>::type;
+  // kind: the format, whether it is a partial factorization, and H2_extract
+  // (the compressed path's branch is collective, and only the source's ranks
+  // hold the option, so it travels in the same reduction)
+  int kind[3] = {-1, 0, -1};
+  int partial_extract = 0;  // (read where the matrix is: only its ranks compute)
   if (option != nullptr && *option != nullptr) {
     double tmp = 0.0;
     c_bpack_getoption(option, "format", &tmp);
-    format = static_cast<int>(tmp);
+    kind[0] = static_cast<int>(tmp);
+    if (kind[0] == 7) {
+      butterfly::H2<double, H2Data>* h2 = h2_of<H2Data>(bmat);
+      kind[1] = h2 != nullptr && h2->build_state == butterfly::H2BuildState::RS_PARTIAL ? 1 : 0;
+      if (kind[1] != 0) partial_extract = partial_extract_of(option);
+      else kind[2] = compressed_extract_of(option);
+    }
   }
-  MPI_Allreduce(MPI_IN_PLACE, &format, 1, MPI_INT, MPI_MAX, caller_comm);
+  MPI_Allreduce(MPI_IN_PLACE, kind, 3, MPI_INT, MPI_MAX, caller_comm);
+  const int format = kind[0];
   if (format == 7) {
     try {
-      h2_extract_elements(bmat, caller_comm, Ninter, allrows, allcols, alldat_loc,
+      h2_extract_elements(bmat, caller_comm, kind[1] != 0, partial_extract, std::max(kind[2], 0), Ninter, allrows,
+                          allcols, alldat_loc,
                           rowidx, colidx, pgidx, Npmap, pmaps, "c_bpack_extractelement_bridge");
     } catch (const std::exception& e) {
       int rank = 0;
@@ -2709,6 +3165,40 @@ void c_bpack_set_sketch_transpose_callback(F2Cptr* bmat, c_bpack_func_zmn_sketch
 #endif
 }
 
+void c_bpack_set_sketch_device_callback(F2Cptr* bmat, c_bpack_func_zmn_sketch_device C_FuncZmnSketchDevice) {
+#ifdef HAVE_MPI
+  if (bmat == nullptr || *bmat == nullptr) {
+    throw std::invalid_argument("c_bpack_set_sketch_device_callback: null matrix handle");
+  }
+  using H2Data = typename butterfly::fmm_data<C_DT>::type;
+  butterfly::H2<double, H2Data>* solver = h2_of<H2Data>(bmat);
+  if (solver == nullptr) return;  // (not an H2: its entries are never sketched)
+  using Entries = fmm::CollectiveEntries<H2Data, typename butterfly::H2Kernel<double, H2Data>::kerData>;
+  solver->kernel.sketch_device_callback = reinterpret_cast<typename Entries::SketchDeviceCallback>(C_FuncZmnSketchDevice);
+  if (solver->kernel.collective) solver->kernel.collective->set_sketch_device(solver->kernel.sketch_device_callback);
+#else
+  (void)bmat;
+  (void)C_FuncZmnSketchDevice;
+#endif
+}
+
+void c_bpack_set_block_device_callback(F2Cptr* bmat, c_bpack_func_zmn_block_device C_FuncZmnBlockDevice) {
+#ifdef HAVE_MPI
+  if (bmat == nullptr || *bmat == nullptr) {
+    throw std::invalid_argument("c_bpack_set_block_device_callback: null matrix handle");
+  }
+  using H2Data = typename butterfly::fmm_data<C_DT>::type;
+  butterfly::H2<double, H2Data>* solver = h2_of<H2Data>(bmat);
+  if (solver == nullptr) return;  // (not an H2)
+  using Entries = fmm::CollectiveEntries<H2Data, typename butterfly::H2Kernel<double, H2Data>::kerData>;
+  solver->kernel.block_device_callback = reinterpret_cast<typename Entries::BlockDeviceCallback>(C_FuncZmnBlockDevice);
+  if (solver->kernel.collective) solver->kernel.collective->set_block_device(solver->kernel.block_device_callback);
+#else
+  (void)bmat;
+  (void)C_FuncZmnBlockDevice;
+#endif
+}
+
 // c_bpack_extractsketch_bridge and its transposed form: Y_n = Omega_n
 // A(rows, columns), or with transposed Omega_n A(columns, rows)^T.
 static void extractsketch_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree,
@@ -2724,18 +3214,28 @@ static void extractsketch_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr*
   MPI_Comm caller_comm = MPI_Comm_f2c(static_cast<MPI_Fint>(fcomm));
   int crank = 0;
   MPI_Comm_rank(caller_comm, &crank);
-  // the source's format, from its ranks (the others hold no option)
-  int format = -1;
+  // the source's format and whether it is a partial factorization, from its
+  // ranks (the others hold no option)
+  int kind[2] = {-1, 0};
+  int partial_extract = 0;  // (read where the matrix is: only its ranks compute)
   if (option != nullptr && *option != nullptr) {
     double tmp = 0.0;
     c_bpack_getoption(option, "format", &tmp);
-    format = static_cast<int>(tmp);
+    kind[0] = static_cast<int>(tmp);
+    if (kind[0] == 7) {
+      using H2Data = typename butterfly::fmm_data<C_DT>::type;
+      butterfly::H2<double, H2Data>* h2 = h2_of<H2Data>(bmat);
+      kind[1] = h2 != nullptr && h2->build_state == butterfly::H2BuildState::RS_PARTIAL ? 1 : 0;
+      if (kind[1] != 0) partial_extract = partial_extract_of(option);
+    }
   }
-  MPI_Allreduce(MPI_IN_PLACE, &format, 1, MPI_INT, MPI_MAX, caller_comm);
+  MPI_Allreduce(MPI_IN_PLACE, kind, 2, MPI_INT, MPI_MAX, caller_comm);
+  const int format = kind[0];
   try {
     if (format == 7) {
-      h2_extract_sketches(bmat, caller_comm, Nsketch, allrows, allcols, rowidx, colidx, sketchdim, omegaidx,
-                          omega_row, omega_dest, omega_val, alldat_loc, pgidx, Npmap, pmaps, caller, transposed);
+      h2_extract_sketches(bmat, caller_comm, kind[1] != 0, partial_extract, Nsketch, allrows, allcols, rowidx, colidx,
+                          sketchdim, omegaidx, omega_row, omega_dest, omega_val, alldat_loc, pgidx, Npmap, pmaps, caller,
+                          transposed);
       return;
     }
     // other formats: the requests' entries (transposed: A(columns, rows)),
@@ -2808,6 +3308,241 @@ void c_bpack_extractsketch_transpose_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* 
     alldat_loc, pgidx, Npmap, pmaps, true, "c_bpack_extractsketch_transpose_bridge");
 }
 
+// c_bpack_inv_mult_device: c_bpack_inv_mult (format 7) on device vectors for
+// an H2 factorized on the GPU: xout = op(A)^{-1} xin, xin and xout device
+// memory (*Nloc x *Ncol at leading dimensions *ldx and *ldy, written by the
+// caller on `stream`; xout complete on return).  perm (may be null; the same
+// on every rank): row i of the H2's input order (global, 1-based entries) is
+// the caller's row perm[i] - 1, the caller's rows split over the ranks as the
+// input order's are, by rank (each rank's *Nloc).  Collective.  done = 1 when
+// solved, with the stats' Time_C_Mult (this rank's), else 0 on every rank and
+// nothing written: a partial or no factorization, no device solve, a
+// distributed64 handle on several ranks, 'C' of complex data.  The result is
+// the host-vector call's (fmm::gpu::device_vector_solve).
+void c_bpack_inv_mult_device(char const * trans, C_DT const * xin, int* ldx, C_DT* xout, int* ldy, int* Nloc,
+	int* Ncol, int const* perm, void* stream, F2Cptr* bmat, F2Cptr* option, F2Cptr* stats, F2Cptr* ptree,
+	int* done) {
+  *done = 0;
+  (void)ptree;
+#if defined(HAVE_MPI) && defined(H2_HAVE_GPU) && defined(DAT) && (DAT == 0 || DAT == 1)
+  if (bmat == nullptr || *bmat == nullptr || option == nullptr || *option == nullptr) return;
+  double tmp = 0.0;
+  c_bpack_getoption(option, "format", &tmp);
+  if (static_cast<int>(tmp) != 7) return;
+  using H2Data = typename butterfly::fmm_data<C_DT>::type;
+  butterfly::H2<double, H2Data>* h2 = h2_of<H2Data>(bmat);
+  if (h2 == nullptr || h2->options.use_gpu == 0 || h2->options.unstructured != 1) return;
+  if (h2->build_state != butterfly::H2BuildState::RS_FACTORIZED) return;
+  int csize = 0;
+  MPI_Comm_size(h2->comm, &csize);
+  const auto* layout = h2->distributed_layout.get();
+  // (several ranks: the caller's ranks hold the internal order's counts, as
+  // a legacy handle's do; a distributed64 one's redistribution is declined)
+  if ((csize != 1 && layout != nullptr) || *Ncol <= 0 || *Nloc < 0) return;
+  try {
+    const char op = h2_trans_operation(trans, "c_bpack_inv_mult_device");
+    if (op == 'C' && butterfly::is_complex_v<H2Data>) return;
+    const double t0 = MPI_Wtime();
+    // one rank with a layout: the input slot of each internal row
+    int64_t internal_nloc = *Nloc;
+    std::vector<int64_t> slots;
+    if (layout != nullptr) {
+      if (layout->size != 1 || layout->input_local_size != *Nloc) return;
+      internal_nloc = layout->internal_local_size;
+      const auto& from = layout->forward_send_input_slots;
+      const auto& to = layout->forward_recv_internal_slots;
+      if (from.size() != to.size() || static_cast<int64_t>(to.size()) != internal_nloc) return;
+      slots.resize(static_cast<size_t>(internal_nloc));
+      for (size_t s = 0; s < to.size(); ++s) slots[static_cast<size_t>(to[s])] = from[s];
+    }
+    std::string why;
+    if (!fmm::gpu::device_vector_solve(h2->tree.get(), reinterpret_cast<const H2Data*>(xin), *ldx,
+                                       reinterpret_cast<H2Data*>(xout), *ldy, internal_nloc, *Ncol, perm,
+                                       perm != nullptr ? static_cast<int64_t>(h2->options.N) : 0,
+                                       layout != nullptr ? &slots : nullptr, h2_transposed(h2, op),
+                                       static_cast<cudaStream_t>(stream), why)) {
+      return;
+    }
+    double t = MPI_Wtime() - t0;
+    c_bpack_setstats(stats, "Time_C_Mult", &t);
+    c_bpack_setstats(stats, "Time_C_Mult_Wrapper", &t);
+    *done = 1;
+  } catch (const std::exception& e) {
+    std::cerr << "Error in c_bpack_inv_mult_device: " << e.what() << std::endl;
+    MPI_Abort(h2->comm, 1);
+  }
+#else
+  (void)trans; (void)xin; (void)ldx; (void)xout; (void)ldy; (void)Nloc; (void)Ncol; (void)perm; (void)stream;
+  (void)bmat; (void)option; (void)stats;
+#endif
+}
+
+// c_bpack_extractelement_device: a partial factorization's blocks for a one-rank caller added into its device
+// outputs (extract_partial_blocks with PartialDeviceTargets), or a compression-only H2's built on the GPU
+// (extract_compressed_blocks_into_device; not with H2_extract 2, the host); anything else declines (done = 0,
+// nothing written).
+void c_bpack_extractelement_device(F2Cptr* bmat, F2Cptr* option, F2Cptr* ptree_caller, int* Ninter, int* Nallrows,
+	int* Nallcols, int* allrows, int* allcols, int* rowidx, int* colidx, void** dout, int64_t* ldo, int* drows,
+	int* dcols, void* stream, int* done) {
+  *done = 0;
+  (void)Nallrows;
+  (void)Nallcols;
+  (void)stream;  // (the writes are complete on return)
+#if defined(HAVE_MPI) && defined(H2_HAVE_GPU) && defined(DAT) && (DAT == 0 || DAT == 1)
+  if (bmat == nullptr || *bmat == nullptr || option == nullptr || *option == nullptr) return;
+  double tmp = 0.0;
+  c_bpack_getoption(option, "format", &tmp);
+  if (static_cast<int>(tmp) != 7) return;
+  using H2Data = typename butterfly::fmm_data<C_DT>::type;
+  butterfly::H2<double, H2Data>* h2 = h2_of<H2Data>(bmat);
+  if (h2 == nullptr || h2->options.use_gpu == 0) return;
+  const bool compressed =
+    h2->build_state == butterfly::H2BuildState::H2_COMPRESSED && h2->options.unstructured == 1;
+  if (h2->build_state != butterfly::H2BuildState::RS_PARTIAL && !compressed) return;
+  int fcomm = 0;
+  c_bpack_get_comm(ptree_caller, &fcomm);
+  MPI_Comm caller_comm = MPI_Comm_f2c(static_cast<MPI_Fint>(fcomm));
+  int csize = 0;
+  MPI_Comm_size(caller_comm, &csize);
+  if (csize != 1) return;
+  if (compressed) {
+    const int mode = compressed_extract_of(option);
+    if (mode == 2) return;  // (H2_extract host: the caller's host path)
+    try {
+      const int ni = std::max(*Ninter, 0);
+      butterfly::color_unstructured::CompressedDeviceTargets<H2Data> tg;
+      tg.out.resize(static_cast<size_t>(ni));
+      tg.ld.assign(ldo, ldo + ni);
+      tg.row_off.assign(static_cast<size_t>(ni) + 1, 0);
+      tg.col_off.assign(static_cast<size_t>(ni) + 1, 0);
+      for (int n = 0; n < ni; ++n) {
+        tg.out[static_cast<size_t>(n)] = static_cast<H2Data*>(dout[n]);
+        tg.row_off[static_cast<size_t>(n) + 1] = tg.row_off[static_cast<size_t>(n)] + rowidx[n];
+        tg.col_off[static_cast<size_t>(n) + 1] = tg.col_off[static_cast<size_t>(n)] + colidx[n];
+      }
+      tg.rows.assign(drows, drows + tg.row_off.back());
+      tg.cols.assign(dcols, dcols + tg.col_off.back());
+      std::string why;
+      if (butterfly::color_unstructured::extract_compressed_blocks_into_device(h2, caller_comm, ni, allrows, allcols,
+                                                                              rowidx, colidx, tg, why)) {
+        *done = 1;
+      } else if (mode == 1) {
+        // an explicit request that cannot be served says so
+        std::printf("H2_extract device declined (device blocks), the caller's host path runs instead: %s\n",
+                    why.c_str());
+        std::fflush(stdout);
+      }
+    } catch (const std::exception& e) {
+      std::cerr << "Error in c_bpack_extractelement_device: " << e.what() << std::endl;
+      MPI_Abort(caller_comm, 1);
+    }
+    return;
+  }
+  try {
+    const int ni = std::max(*Ninter, 0);
+    butterfly::color_unstructured::PartialDeviceTargets<H2Data> tg;
+    tg.out.resize(static_cast<size_t>(ni));
+    tg.ld.assign(ldo, ldo + ni);
+    tg.row_off.assign(static_cast<size_t>(ni) + 1, 0);
+    tg.col_off.assign(static_cast<size_t>(ni) + 1, 0);
+    for (int n = 0; n < ni; ++n) {
+      tg.out[static_cast<size_t>(n)] = static_cast<H2Data*>(dout[n]);
+      tg.row_off[static_cast<size_t>(n) + 1] = tg.row_off[static_cast<size_t>(n)] + rowidx[n];
+      tg.col_off[static_cast<size_t>(n) + 1] = tg.col_off[static_cast<size_t>(n)] + colidx[n];
+    }
+    tg.rows.assign(drows, drows + tg.row_off.back());
+    tg.cols.assign(dcols, dcols + tg.col_off.back());
+    const std::vector<int> owner(static_cast<size_t>(ni), 0);
+    butterfly::color_unstructured::extract_partial_blocks(h2->tree.get(), caller_comm, ni, allrows, allcols, rowidx, colidx,
+                                                          owner, static_cast<H2Data*>(nullptr), partial_extract_of(option),
+                                                          nullptr, &tg);
+    *done = 1;
+  } catch (const std::exception& e) {
+    std::cerr << "Error in c_bpack_extractelement_device: " << e.what() << std::endl;
+    MPI_Abort(caller_comm, 1);
+  }
+#else
+  (void)bmat; (void)option; (void)ptree_caller; (void)Ninter; (void)allrows; (void)allcols; (void)rowidx; (void)colidx;
+  (void)dout; (void)ldo; (void)drows; (void)dcols;
+#endif
+}
+
+// c_bpack_extractsketch_device: a partial factorization's sketches for a one-rank caller added into its device
+// outputs (extract_partial_blocks with PartialDeviceTargets); anything else declines (done = 0, nothing written).
+void c_bpack_extractsketch_device(F2Cptr* bmat, F2Cptr* option, F2Cptr* ptree_caller, int* Nsketch, int* Nallrows,
+	int* Nallcols, int64_t* Nallomega, int* allrows, int* allcols, int* rowidx, int* colidx, int* sketchdim,
+	int* omegaidx, int* omega_row, int* omega_dest, double* omega_val, int* transposed, void** dout, int64_t* ldo,
+	int* dcols, void* stream, int* done) {
+  *done = 0;
+  (void)Nallrows;
+  (void)Nallcols;
+  (void)Nallomega;
+  (void)stream;  // (the writes are complete on return)
+#if defined(HAVE_MPI) && defined(H2_HAVE_GPU) && defined(DAT) && (DAT == 0 || DAT == 1)
+  if (bmat == nullptr || *bmat == nullptr || option == nullptr || *option == nullptr) return;
+  double tmp = 0.0;
+  c_bpack_getoption(option, "format", &tmp);
+  if (static_cast<int>(tmp) != 7) return;
+  using H2Data = typename butterfly::fmm_data<C_DT>::type;
+  butterfly::H2<double, H2Data>* h2 = h2_of<H2Data>(bmat);
+  if (h2 == nullptr || h2->build_state != butterfly::H2BuildState::RS_PARTIAL || h2->options.use_gpu == 0) return;
+  int fcomm = 0;
+  c_bpack_get_comm(ptree_caller, &fcomm);
+  MPI_Comm caller_comm = MPI_Comm_f2c(static_cast<MPI_Fint>(fcomm));
+  int csize = 0;
+  MPI_Comm_size(caller_comm, &csize);
+  if (csize != 1) return;
+  try {
+    const int ns = std::max(*Nsketch, 0);
+    std::vector<int64_t> omega_off(static_cast<size_t>(ns) + 1, 0);
+    for (int n = 0; n < ns; ++n) {
+      if (omegaidx[n] < 0) throw std::invalid_argument("c_bpack_extractsketch_device: a negative sketch entry count");
+      omega_off[static_cast<size_t>(n) + 1] = omega_off[static_cast<size_t>(n)] + omegaidx[n];
+    }
+    std::vector<int> orow(static_cast<size_t>(omega_off.back())), odest(orow.size());
+    for (size_t e = 0; e < orow.size(); ++e) {
+      orow[e] = omega_row[e] - 1;
+      odest[e] = omega_dest[e] - 1;
+    }
+    std::vector<int64_t> dims(sketchdim, sketchdim + ns);
+    butterfly::color_unstructured::PartialSketch sk;
+    sk.side = *transposed != 0 ? 1 : 0;
+    sk.dims = dims.data();
+    sk.omega_off = omega_off.data();
+    sk.omega_pos = orow.data();
+    sk.omega_dest = odest.data();
+    sk.omega_val = omega_val;
+    // request n's sketch is sketchdim[n] x colidx[n] either way (transposed: Omega_n A(columns, rows)^T)
+    butterfly::color_unstructured::PartialDeviceTargets<H2Data> tg;
+    tg.out.resize(static_cast<size_t>(ns));
+    tg.ld.assign(ldo, ldo + ns);
+    tg.col_off.assign(static_cast<size_t>(ns) + 1, 0);
+    for (int n = 0; n < ns; ++n) {
+      tg.out[static_cast<size_t>(n)] = static_cast<H2Data*>(dout[n]);
+      tg.col_off[static_cast<size_t>(n) + 1] = tg.col_off[static_cast<size_t>(n)] + colidx[n];
+    }
+    tg.cols.assign(dcols, dcols + tg.col_off.back());
+    const std::vector<int> owner(static_cast<size_t>(ns), 0);
+    auto* tree = h2->tree.get();
+    if (*transposed != 0) {
+      butterfly::color_unstructured::extract_partial_blocks(tree, caller_comm, ns, allcols, allrows, colidx, rowidx, owner,
+                                                            static_cast<H2Data*>(nullptr), partial_extract_of(option), &sk, &tg);
+    } else {
+      butterfly::color_unstructured::extract_partial_blocks(tree, caller_comm, ns, allrows, allcols, rowidx, colidx, owner,
+                                                            static_cast<H2Data*>(nullptr), partial_extract_of(option), &sk, &tg);
+    }
+    *done = 1;
+  } catch (const std::exception& e) {
+    std::cerr << "Error in c_bpack_extractsketch_device: " << e.what() << std::endl;
+    MPI_Abort(caller_comm, 1);
+  }
+#else
+  (void)bmat; (void)option; (void)ptree_caller; (void)Nsketch; (void)allrows; (void)allcols; (void)rowidx;
+  (void)colidx; (void)sketchdim; (void)omegaidx; (void)omega_row; (void)omega_dest; (void)omega_val; (void)transposed;
+  (void)dout; (void)ldo; (void)dcols;
+#endif
+}
+
 
 void c_bpack_logdet(C_DT* phase, C_RDT* logabsdet, F2Cptr* option, F2Cptr* bmat){
   double tmp;
@@ -2822,7 +3557,9 @@ void c_bpack_logdet(C_DT* phase, C_RDT* logabsdet, F2Cptr* option, F2Cptr* bmat)
 	check_h2_symmetry_option(option, H2_solver->comm, "c_bpack_logdet");
 
 
-	if (H2_solver->build_state != butterfly::H2BuildState::RS_FACTORIZED) {
+	// (a partial factorization: the log-determinant of F11)
+	if (H2_solver->build_state != butterfly::H2BuildState::RS_FACTORIZED &&
+	    H2_solver->build_state != butterfly::H2BuildState::RS_PARTIAL) {
 	  throw std::runtime_error(
 		"c_bpack_logdet (format 7): log-determinant requires an RS-S factorization");
 	}
@@ -2846,6 +3583,20 @@ extern "C" void c_bpack_h2_delete(C2Fptr h2_ptr) {
     if (H2_solver != nullptr) fmm::gpu::release_operator(H2_solver->tree.get());
 #endif
     delete H2_solver;
+    // The host memory it held, back to the system.  The pinned pool keeps
+    // the chunks it gave back for the next operator's stores, and glibc keeps
+    // what it freed in its arenas; the node's other ranks can use neither.  A
+    // GP fit builds and frees a K and its four derivatives per evaluation, and
+    // after four of them the ranks held 13-40 GB with 0.3 GB live (900K Matern,
+    // 8 ranks at 2 a node, 2026-11-05).  Idle pinned chunks go down to what a
+    // level start keeps when the node is short, and malloc_trim gives the
+    // arenas' free pages back (0.1-0.7 s there).
+#ifdef H2_HAVE_GPU
+    fmm::gpu::pinned_chunk_pool().trim(fmm::gpu::PinnedChunkPool::kIdleKeep);
+#endif
+#if defined(__GLIBC__)
+    malloc_trim(0);
+#endif
 #else
 	(void)h2_ptr;
 #endif

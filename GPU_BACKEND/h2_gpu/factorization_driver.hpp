@@ -69,6 +69,11 @@ public:
     ColorGpuDriver(Tree* tree, KernelType* kernel, const Options& options)
         : tree_(tree), kernel_(kernel), opt_(options) {}
 
+    // The chunks pinned ahead for this factorization are waited for here, so
+    // that no pinning thread is left running into the CUDA runtime's teardown
+    // at process exit (PinnedChunkPool::drain).
+    ~ColorGpuDriver() { pinned_chunk_pool().drain(); }
+
     // Before the first level of the process's first factorization (of this
     // data type): the batched LU, the two solves of X_RR^{-1} and the three
     // GEMM forms once per size range, so no level pays the first-use loading
@@ -182,7 +187,7 @@ public:
         }
     }
 
-    // Before the first level of the process's first factorization: a 64 KB
+    // Before the first level of an operator's first factorization: a 64 KB
     // message with every rank this one exchanges with on a level (each
     // level's one-hop neighbour ranks), sent and received the way the levels
     // will (from and into the exchange arena with GPU-aware MPI).  A pair's
@@ -198,11 +203,13 @@ public:
     // after a Color leaf at 384^3 on 8 ranks, 6.5 s at 768^3 on 64 ranks on
     // 80 GB cards; a Color leaf paid the same in its own first waves).
     // Returns its time (0 when it already ran); collective over the tree's
-    // ranks.
+    // ranks.  Once per operator, not per process: a process's operators have
+    // communicators of their own (a STRUMPACK front each), and a flag of the
+    // process let some ranks of a front skip it while the others waited for
+    // them in it.
     double warm_up_exchange() {
-        static bool done = false;
-        if (done || !color_gpu_enabled() || tree_->mpi_size <= 1) return 0.0;
-        done = true;
+        if (tree_->gpu_exchanges_warmed || !color_gpu_enabled() || tree_->mpi_size <= 1) return 0.0;
+        tree_->gpu_exchanges_warmed = true;
         const auto t0 = std::chrono::steady_clock::now();
         std::set<int> peer_set;
         for (int l = 2; l < tree_->num_levels; ++l) {
@@ -478,6 +485,7 @@ public:
                                        /*ca=*/false, /*owner=*/false, opt_.compress_factors);
         level_index_ = lvl;
         decide_solve_keep(lvl, level_comm, false);
+        count_node_level_ranks(level_comm);
         if (wave_trace_enabled()) trace_.start_end();
         if (announce) {
             std::cout << "  GPU box path: "
@@ -536,6 +544,7 @@ public:
         }
         level_index_ = lvl;
         decide_solve_keep(lvl, level_comm, false);  // (the factors kept here are this rank's boxes')
+        count_node_level_ranks(level_comm);
         if (wave_trace_enabled()) trace_.start_end();
         if (announce) {
             std::cout << "  GPU owner level: "
@@ -607,6 +616,7 @@ public:
         }
         level_index_ = lvl;
         decide_solve_keep(lvl, level_comm, true);
+        count_node_level_ranks(level_comm);
         if (level_) {   // (every rank of the level: fits was decided together)
             int pack = level_->shared_packing_expected() ? 1 : 0;
             MPI_Allreduce(MPI_IN_PLACE, &pack, 1, MPI_INT, MPI_MAX, level_comm);
@@ -688,6 +698,22 @@ public:
         }
         MPI_Allreduce(MPI_IN_PLACE, &ok, 1, MPI_INT, MPI_MIN, level_comm);
         if (level_) level_->set_solve_keep(ok != 0, budget, kept_expected_);
+    }
+    // The level's ranks on each node (collective over level_comm, at the
+    // level's start): they share the node's free host memory, which sets the
+    // fill store's step (decide_fill_precision).  A rank not active at the
+    // level holds its memory but does not grow it.
+    void count_node_level_ranks(MPI_Comm level_comm) {
+        int n = 1;
+        if (level_comm != MPI_COMM_NULL) {
+            int rank = 0;
+            MPI_Comm_rank(level_comm, &rank);
+            MPI_Comm node = MPI_COMM_NULL;
+            MPI_Comm_split_type(level_comm, MPI_COMM_TYPE_SHARED, rank, MPI_INFO_NULL, &node);
+            MPI_Comm_size(node, &n);
+            MPI_Comm_free(&node);
+        }
+        if (level_) level_->set_node_level_ranks(n);
     }
     // After the host's post-elimination assisting gather: the assisting
     // boxes' skeletons, for the device transition.
@@ -1009,6 +1035,25 @@ public:
                (reduction_ahead || parent_level.is_process_active) && !opt_.is_hermitian;
     }
 
+    // ---- H2_partial's F22 step (unstructured/partial.hpp) on a device level:
+    // the boxes' two passes on the device, then the level's blocks sliced there to
+    // the new live sets (the transition builds the parents from them, or
+    // takes them to the host).  (Entries through a collective callback: the
+    // passes fetch the near and self blocks they lack, and the level's ranks
+    // quiesce after each, before the step communicates.)
+    bool f22_on_device() const { return level_ != nullptr && tree_->partial(); }
+    void f22_ids(std::vector<PartialF22Work<DataType>>& works) {
+        level_->f22_ids(works);
+        quiesce_entries();
+    }
+    void f22_records(std::vector<PartialF22Work<DataType>>& works) {
+        level_->f22_records(works);
+        quiesce_entries();
+    }
+    void end_partial_level(const PartialF22Kept& kept) {
+        if (level_) level_->f22_slice(kept);
+    }
+
     // Device transition: this level's blocks never leave the device, and the
     // parent's go to the next level's eliminator (or to the host when that
     // level runs there).  Each rank builds the parents of its own boxes, with
@@ -1096,7 +1141,10 @@ public:
             // every rank of the transition can take part: the builders with
             // their blocks, the owners as receivers
             const bool mine = level.is_process_active ? (builds && blocks_ != nullptr) : parent_level.is_process_active;
-            int ok = mine && device_reduction_possible(level.level, parent_lvl, parents) ? 1 : 0;
+            // (a builder whose transition sent finished parents to the host:
+            // the host reduction for every rank)
+            const bool sent = blocks_ != nullptr && blocks_->on_host_in_part();
+            int ok = mine && !sent && device_reduction_possible(level.level, parent_lvl, parents) ? 1 : 0;
             {
                 // H2 8x (2026-10-11): the receivers' room.  A receiver holds the
                 // merged parent blocks raw; when what its senders hold would not
@@ -1136,12 +1184,30 @@ public:
                 }
                 MPI_Allreduce(MPI_IN_PLACE, to_owner.data(), tsize, MPI_DOUBLE, MPI_SUM, transition_comm);
                 int fits = 1;
+                const char* why = "on the device";
                 const DeviceHeap& heap = DeviceHeap::instance();
                 const double incoming = to_owner[static_cast<size_t>(trank)];
                 if (receiver && heap.initialized()) {
                     const double room = static_cast<double>(heap.capacity()) - static_cast<double>(heap.used());
                     const double margin = std::max(2.0e9, 0.1 * static_cast<double>(heap.capacity()));
-                    if (incoming + margin > room) fits = 0;
+                    if (incoming + margin > room) {
+                        fits = 0;
+                        why = "through the host (no room)";
+                    }
+                    // H2_compress_factors: the merged blocks stay raw on the
+                    // card through the next level, which no packing reaches,
+                    // while blocks the host reduction hands over are packed
+                    // beyond half the hold limit when the level uploads them
+                    // (begin()).  So the device takes them only within that
+                    // half.  GPTune's 900K RBF GP on 16 ranks (16 -> 4 into
+                    // level 3): rank 5 merged 40.85 GB into its own 14.03 GB,
+                    // and the level's first wave found 17.9 GB free in 107
+                    // ranges, the largest 2.4 GB.
+                    if (opt_.compress_factors >= 1 && g_hold_limit_bytes > 0 && fits != 0 &&
+                        static_cast<double>(heap.used()) + incoming > 0.5 * static_cast<double>(g_hold_limit_bytes)) {
+                        fits = 0;
+                        why = "through the host (over half the hold limit: packed when uploaded)";
+                    }
                 }
                 if (sender && my_bytes > 1.0e9) {
                     std::printf("  [gpu] level %d rank %d reduction: sends %.2f GB in %d blocks to rank %d, largest %d x %d\n",
@@ -1152,7 +1218,7 @@ public:
                                 level.level, rank, incoming / 1e9, my_bytes / 1e9,
                                 heap.initialized() ? static_cast<double>(heap.used()) / 1e9 : 0.0,
                                 heap.initialized() ? static_cast<double>(heap.capacity()) / 1e9 : 0.0,
-                                fits ? "on the device" : "through the host (no room)");
+                                why);
                 }
                 std::fflush(stdout);
                 if (!fits) ok = 0;
@@ -1171,6 +1237,7 @@ public:
                 for (const Box& p : parents) {
                     if (p.num_points > kEntryDestMask) fits = 0;
                 }
+                if (blocks_ != nullptr && blocks_->on_host_in_part()) fits = 0;   // (sent to the host in the transition)
                 MPI_Allreduce(MPI_IN_PLACE, &fits, 1, MPI_INT, MPI_MIN, level_comm);
                 keep = fits != 0;
             }
@@ -1189,6 +1256,22 @@ public:
                         reduced ? (blocks_ ? "merged on this device (process reduction)"
                                            : "sent to their owner's device (process reduction)")
                                 : (blocks_ ? "kept on the device" : "copied to the host"));
+            if (e.tr_buffer_pieced > 0) {
+                std::printf("  [gpu] level %d transition: G;P buffers of %lld chunks in pieces (no free block that large)\n",
+                            level.level, static_cast<long long>(e.tr_buffer_pieced));
+            }
+            if (e.tr_parents_in_passes > 0) {
+                std::printf("  [gpu] level %d transition: %lld parents in %lld passes over their fill sources (put back "
+                            "from the packed store beyond the chunk budget)\n",
+                            level.level, static_cast<long long>(e.tr_parents_in_passes),
+                            static_cast<long long>(e.tr_parents_in_passes + e.tr_source_passes));
+            }
+            if (e.tr_spills > 0) {
+                std::printf("  [gpu] level %d transition: finished parents' blocks to the host %lld times (%lld blocks, "
+                            "%.2f GB) for room under the hold limit\n",
+                            level.level, static_cast<long long>(e.tr_spills), static_cast<long long>(e.tr_spilled_blocks),
+                            e.tr_spilled_bytes / 1e9);
+            }
             if (e.ghost_lu_bytes > 0) {
                 std::printf("  [gpu] level %d ghosts' LU held to the level's end (H2_CA_solve home): %.2f GB\n",
                             level.level, e.ghost_lu_bytes / 1e9);
@@ -1389,6 +1472,10 @@ public:
                             e.xt_stored_bytes > 0.0 ? e.xt_raw_bytes / e.xt_stored_bytes : 1.0,
                             static_cast<long long>(e.xt_slots), static_cast<long long>(e.xt_boxes),
                             e.xt_short > 0 ? " (some groups found no staging)" : "");
+                if (e.xt_streamed > 0) {
+                    std::printf("  [gpu] level %d X_NR^T store: %lld boxes transposed slot by slot (no room for the staging)\n",
+                                level.level, static_cast<long long>(e.xt_streamed));
+                }
             }
             if (e.os_groups > 0) {
                 std::printf("  [gpu] level %d owner source union: %.2f GB by the largest group, %.2f GB summed "
@@ -1427,6 +1514,12 @@ public:
                             level.level, e.mat_bytes / 1e9, static_cast<long long>(e.mat_blocks),
                             static_cast<long long>(e.mat_batches), e.mat_seconds,
                             static_cast<long long>(e.mat_left), static_cast<long long>(e.mat_prefetched));
+            }
+            if (e.ub_blocks > 0) {
+                std::printf("  [gpu] level %d uploaded blocks packed to the host (over half the hold limit): %.2f -> %.2f GB "
+                            "(%.1fx) over %lld blocks in %lld chunks\n", level.level, e.ub_raw_bytes / 1e9,
+                            e.ub_stored_bytes / 1e9, e.ub_stored_bytes > 0.0 ? e.ub_raw_bytes / e.ub_stored_bytes : 1.0,
+                            static_cast<long long>(e.ub_blocks), static_cast<long long>(e.ub_chunks));
             }
             if (e.pb_blocks > 0) {
                 std::printf("  [gpu] level %d parent blocks compress: %.2f -> %.2f GB (%.1fx) over %lld blocks", level.level,
@@ -1563,6 +1656,16 @@ public:
     // The level-1 transition assembled the root block on the device.
     bool holds_root_block() const { return blocks_ != nullptr; }
 
+    // H2_partial: the partial root (its setup done) from the root block the
+    // level-1 transition left on the device, its factors to the host
+    // (partial_root_on_device); false without that block.
+    bool partial_root(Box& root, PartialRootFactor<DataType>& pr) {
+        if (!blocks_) return false;
+        partial_root_on_device(*blocks_, root, pr);
+        blocks_.reset();
+        return true;
+    }
+
     // The root's LU on the device: of the block the level-1 transition
     // assembled there, or of the host-assembled block (multi-rank runs)
     // when the heap has room.  Returns false when the host factors it.  A
@@ -1680,6 +1783,10 @@ public:
                         static_cast<long long>(e.fs_slots), static_cast<long long>(e.fs_boxes),
                         static_cast<long long>(e.fs_waves_plain),
                         static_cast<long long>(e.fs_packed_short));
+            if (e.fs_pieced > 0) std::printf(", %lld compressed in pieces", static_cast<long long>(e.fs_pieced));
+            if (e.fs_streamed > 0) {
+                std::printf(", %lld transposed slot by slot (no room for the raw block)", static_cast<long long>(e.fs_streamed));
+            }
             if (e.fs_check_tol > 0.0) {
                 std::printf("; round trip worst error %.3e against %.3e allowed%s", e.fs_check_err, e.fs_check_tol,
                             e.fs_check_err <= e.fs_check_tol ? " (ok)" : "  *** OVER TOLERANCE ***");
@@ -1777,6 +1884,10 @@ public:
             if (e.exchange_host > 0) {
                 std::printf("  [gpu] level %d exchange buffers in pinned host memory (no device range fitted): %lld, %.2f GB\n",
                             lvl, static_cast<long long>(e.exchange_host), e.exchange_host_bytes / 1e9);
+            }
+            if (e.xnr_host > 0) {
+                std::printf("  [gpu] level %d generators' original X_NR in pinned host memory (no device range fitted): "
+                            "%lld blocks, %.2f GB\n", lvl, static_cast<long long>(e.xnr_host), e.xnr_host_bytes / 1e9);
             }
         }
         std::fflush(stdout);

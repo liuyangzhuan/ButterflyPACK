@@ -50,7 +50,7 @@ void c_bpack_construct_init_fortran(int* Npo, int* Ndim, double* Locations, int*
 // the mesh can carry a basis_group reproducing the H2's own distribution; a
 // butterfly block built on this mesh (c_bf_construct_init) then lands on the
 // same rows.
-void c_bpack_set_mesh_h2(int* Npo, int* new2old, int* idxs, int* idxe, int* nproc, int* rank_idxs, int* rank_idxe, F2Cptr* msh_Cptr);
+void c_bpack_set_mesh_h2(int* Npo, int* new2old, int* idxs, int* idxe, int* nproc, int* rank_idxs, int* rank_idxe, int* nmin_leaf, F2Cptr* msh_Cptr);
 void c_bpack_set_mesh_distributed64(const int64_t* N_global, const int64_t* N_input_local, const int64_t* N_internal_local, const int64_t* internal_global_start, F2Cptr* msh_Cptr);
 void c_bpack_wrap_h2(F2Cptr* bmat_Cptr, C2Fptr h2_ptr);
 void c_bpack_get_h2(C2Fptr bmat_Cptr, F2Cptr* h2_ptr);
@@ -87,9 +87,20 @@ void c_bpack_set_gpu_entry_source(F2Cptr* bmat, const char* source, const double
 void c_bpack_set_gpu_block_evaluator(F2Cptr* bmat, bpack_gpu_block_evaluator evaluate, void* user, const int* flags);
 void c_bpack_set_gpu_list_evaluator(F2Cptr* bmat, bpack_gpu_list_evaluator evaluate, void* user, const int* flags);
 void c_bpack_gpu_warm_up(F2Cptr* bmat, double* seconds);
+/*
+ * The same for a butterfly block (the bf handle of c_bf_construct_init), with
+ * HODLR_use_gpu > 0: K(i, j) for row i of the row mesh and column j of the
+ * column mesh, ids the CPU callbacks' indices minus one.
+ */
+void c_bf_set_gpu_entry_launchers(F2Cptr* bf, const bpack_gpu_entry_launchers* launchers);
+void c_bf_set_gpu_entry_source(F2Cptr* bf, const char* source, const double* params, const int* nparams, const int* flags);
+void c_bf_set_gpu_block_evaluator(F2Cptr* bf, bpack_gpu_block_evaluator evaluate, void* user, const int* flags);
+void c_bf_set_gpu_list_evaluator(F2Cptr* bf, bpack_gpu_list_evaluator evaluate, void* user, const int* flags);
+void c_bf_set_gpu_matvec(F2Cptr* bf, bpack_gpu_bf_matvec matvec, void* user);
 /* GPU state of formats other than H2 (SRC/BPACK_gpu_wrapper.cpp) */
 void c_bpack_gpu_create(void** gpu);
 void c_bpack_gpu_set_evaluator(void* gpu, const void* evaluator);
+void c_bf_gpu_set_evaluator(void* bf, const void* evaluator);
 void c_bpack_get_internal_global_ids64(F2Cptr* bmat, const int64_t* internal_local_offset, const int64_t* count, int64_t* global_ids);
 void c_bpack_get_input_to_internal_map64(F2Cptr* bmat, const int64_t* input_local_offset, const int64_t* count, int64_t* global_ids, int* internal_owner_ranks, int64_t* internal_global_indices);
 void c_bpack_input_to_internal(F2Cptr* bmat, const int* nrhs, const C_DT* input_values, C_DT* internal_values);
@@ -146,14 +157,75 @@ void c_bpack_set_sketch_callback(F2Cptr* bmat, c_bpack_func_zmn_sketch C_FuncZmn
 // The transposed sketched blocks, for a nonsymmetric H2: request n asks for Y_n = Omega_n A(columns, rows)^T
 // (= Omega_n A^T(rows, columns)), the arguments as for the sketch callback (Omega_n over the rows).
 void c_bpack_set_sketch_transpose_callback(F2Cptr* bmat, c_bpack_func_zmn_sketch C_FuncZmnSketchT);
+// A sketch callback that adds on the device (GPU H2 with one rank, as a sequential front's): the requests of one
+// orientation call (transposed 0 or 1) as for the sketch callback, request n's Y_n (sketchdim[n] x colidx[n]) added
+// into dout[n] instead (device memory, column major with leading dimension ldo[n], zeroed by the caller) and no
+// alldat_loc, pgidx or pmaps (the caller's one rank owns every request).  done = 1 when it added every request (its
+// writes complete on return), 0 when it wrote nothing (the host callback is asked then).  stream: the caller's
+// cudaStream_t, for ordering.  Tried first when set; the host callbacks are still needed.
+typedef void (*c_bpack_func_zmn_sketch_device)(int* Nsketch, int* Nallrows, int* Nallcols, int64_t* Nallomega, int* allrows, int* allcols, int* rowidx, int* colidx, int* sketchdim, int* omegaidx, int* omega_row, int* omega_dest, double* omega_val, void** dout, int64_t* ldo, int* transposed, void* stream, int* done, C2Fptr C_QuantApp);
+void c_bpack_set_sketch_device_callback(F2Cptr* bmat, c_bpack_func_zmn_sketch_device C_FuncZmnSketchDevice);
+// The same for the blocks' entries (an elem_extract=1 block callback's): block n's K(rows, columns) (rowidx[n] x
+// colidx[n]) added into dout[n] (device memory, leading dimension ldo[n], zeroed by the caller), no alldat_loc,
+// pgidx or pmaps; done as for the sketches.  Tried first when set; the host block callback is still needed.
+typedef void (*c_bpack_func_zmn_block_device)(int* Ninter, int* Nallrows, int* Nallcols, int64_t* Nalldat_loc, int* allrows, int* allcols, int* rowidx, int* colidx, void** dout, int64_t* ldo, void* stream, int* done, C2Fptr C_QuantApp);
+void c_bpack_set_block_device_callback(F2Cptr* bmat, c_bpack_func_zmn_block_device C_FuncZmnBlockDevice);
 // The sketched blocks from a matrix on a subset of the caller's ranks (as c_bpack_extractelement_bridge): a
-// compression-only H2 (format 7) sketches them from its representation; other formats extract the entries and
-// sketch them on their owners.
+// compression-only H2 (format 7) sketches them from its representation, a partial factorization (H2_partial) its
+// Schur complement's blocks as it computes them (1-based F22 indices, as for c_bpack_extractelement_bridge); other
+// formats extract the entries and sketch them on their owners.
 void c_bpack_extractsketch_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree,F2Cptr* ptree_caller, int* Nsketch, int* Nallrows, int* Nallcols, int64_t* Nallomega, int64_t* Nalldat_loc, int* allrows, int* allcols, int* rowidx, int* colidx, int* sketchdim, int* omegaidx, int* omega_row, int* omega_dest, double* omega_val, C_DT* alldat_loc, int* pgidx, int* Npmap, int* pmaps);
 // The same for the transposed sketches, Y_n = Omega_n A(columns, rows)^T.
 void c_bpack_extractsketch_transpose_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree,F2Cptr* ptree_caller, int* Nsketch, int* Nallrows, int* Nallcols, int64_t* Nallomega, int64_t* Nalldat_loc, int* allrows, int* allcols, int* rowidx, int* colidx, int* sketchdim, int* omegaidx, int* omega_row, int* omega_dest, double* omega_val, C_DT* alldat_loc, int* pgidx, int* Npmap, int* pmaps);
+// A partial factorization's (H2_partial) sketched blocks for a one-rank caller, added on the device: the requests of
+// c_bpack_extractsketch_bridge (transposed 1: its transposed form), request n's Y_n (sketchdim[n] x colidx[n]) added
+// into dout[n] (device memory, leading dimension ldo[n]) with its column j into column dcols[c_n + j] (0-based; c_n
+// the earlier requests' colidx summed).  done = 1 when added (complete on return), 0 when this matrix cannot (another
+// format, more ranks, no GPU path; nothing written).  For a device sketch callback serving its children.
+void c_bpack_extractsketch_device(F2Cptr* bmat, F2Cptr* option, F2Cptr* ptree_caller, int* Nsketch, int* Nallrows, int* Nallcols, int64_t* Nallomega, int* allrows, int* allcols, int* rowidx, int* colidx, int* sketchdim, int* omegaidx, int* omega_row, int* omega_dest, double* omega_val, int* transposed, void** dout, int64_t* ldo, int* dcols, void* stream, int* done);
+// The same for a partial factorization's blocks (as c_bpack_extractelement_bridge, 1-based F22 indices): block n's
+// entry (i, j) added into dout[n] at (drows[r_n + i], dcols[c_n + j]) (0-based; r_n, c_n the earlier blocks' rowidx
+// and colidx summed).  A compression-only H2 built on the GPU serves it too (1-based indices of the matrix), unless
+// its H2_extract is 2 (the host).
+void c_bpack_extractelement_device(F2Cptr* bmat, F2Cptr* option, F2Cptr* ptree_caller, int* Ninter, int* Nallrows, int* Nallcols, int* allrows, int* allcols, int* rowidx, int* colidx, void** dout, int64_t* ldo, int* drows, int* dcols, void* stream, int* done);
+// A butterfly's blocks on one process (as c_bf_extractelement: 1-based rows 1..M and columns 1..N) added into a
+// caller's device blocks, as c_bpack_extractelement_device places them; done = 1 when added (complete on return), 0
+// when the device does not serve it (the GPU not asked for, a low-rank block, several processes, no device room;
+// nothing written).
+void c_bf_extractelement_device(F2Cptr* bf, F2Cptr* option, F2Cptr* ptree, int* Ninter, int* allrows, int* allcols, int* rowidx, int* colidx, void** dout, int64_t* ldo, int* drows, int* dcols, void* stream, int* done);
 void c_bpack_inv_mult_fortran(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* bmat,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);
 void c_bpack_inv_mult(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* bmat,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);
+// c_bpack_inv_mult on device vectors (xin, xout device memory at leading dimensions ldx, ldy; perm, may be null, the
+// same on every rank: row i of the global input order is the caller's row perm[i] - 1, the caller's rows split over
+// the ranks as the input's); collective; done = 0 on every rank when it does not apply
+void c_bpack_inv_mult_device(char const * trans, C_DT const * xin, int* ldx, C_DT* xout, int* ldy, int* Nloc, int* Ncol, int const* perm, void* stream, F2Cptr* bmat, F2Cptr* option, F2Cptr* stats, F2Cptr* ptree, int* done);
+/*
+ * The partial factorization (format 7, option H2_partial = the number of
+ * leading input points forming F11; h2_parallel/unstructured/
+ * PARTIAL_FACTORIZATION_PLAN.md).  c_bpack_factor eliminates F11 only; the
+ * object then serves the front: the forward partial solve, out2 = b2 - F21
+ * F11^-1 b1 for b in the caller's order (as c_bpack_solve), out2 the F22
+ * vectors (N22 = N - H2_partial rows, F22 index = input index - H2_partial,
+ * replicated on every rank); the backward one, x = [F11^-1 (b1 - F12 x2);
+ * x2] in the caller's order from the forward call's b and the given x2; the
+ * Schur complement CB = F22 - F21 F11^-1 F12 by entries (rows, cols 0-based
+ * F22 indices; out column-major nrows x ncols, replicated) and by products
+ * (x2, y2 N22 x Ncol, replicated); and the release of the Schur complement
+ * (its root block and the F22 records, nearly all of the object's memory; the
+ * solves stay, and Schur calls after it throw).  With H2_compress_factors 1
+ * the records are kept compressed (lossy at 0.02 tol_comp): the entries and
+ * products decompress what they read.  All collective over the matrix's
+ * communicator, every rank passing the same rows, cols and x2.
+ * c_bpack_extractelement and c_bpack_extractelement_bridge on the object
+ * return blocks of the Schur complement, as an N22 x N22 matrix: 1-based F22
+ * indices (1..N22), each intersection to one rank (1 x 1 process grids, as
+ * for a compression-only H2), every intersection of a call in one pass.
+ */
+void c_bpack_partial_forward(C_DT* out2, C_DT const* b, int* Nloc, int* N22, int* Nrhs, F2Cptr* bmat, F2Cptr* option, F2Cptr* stats, F2Cptr* ptree);
+void c_bpack_partial_backward(C_DT* x, C_DT const* x2, int* Nloc, int* N22, int* Nrhs, F2Cptr* bmat, F2Cptr* option, F2Cptr* stats, F2Cptr* ptree);
+void c_bpack_partial_schur_extract(C_DT* out, int const* rows, int* nrows, int const* cols, int* ncols, F2Cptr* bmat, F2Cptr* option);
+void c_bpack_partial_schur_mult(C_DT* y2, C_DT const* x2, int* N22, int* Ncol, F2Cptr* bmat, F2Cptr* option);
+void c_bpack_partial_schur_release(F2Cptr* bmat, F2Cptr* option);
 // The two above for a Fortran caller: an H2 matrix (format 7), which
 // BPACK_Inv_Mult and BPACK_Mult cannot apply, with any exception reported and
 // aborted here rather than thrown through the Fortran frame.
@@ -197,6 +269,39 @@ c_bpack_setoption(option, nam, (C2Fptr) &val);
 }
 
 void c_bf_extractelement(F2Cptr* blocks,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree, int* Ninter, int* Nallrows, int* Nallcols, int64_t* Nalldat_loc, int* allrows,int* allcols, C_DT* alldat_loc, int* rowidx, int* colidx, int* pgidx, int* Npmap, int* pmaps);
+void c_bf_get_block_pid(F2Cptr bf, F2Cptr ptree, int level, int index_i, int index_j, char mode, int* pid, int* myid, int* nproc);
+void c_bf_get_sub_head(F2Cptr bf, F2Cptr ptree, int* is_head, MPI_Fint* comm, int* nproc);
+void c_bf_get_exchange_dest(F2Cptr bf, F2Cptr ptree, int level, char mode, char collect, int nr, int nc,
+                            int idx_r, int inc_r, int idx_c, int inc_c, int* pid);
+void c_bf_get_mvp_vec_ranges(F2Cptr bf, F2Cptr ptree, char chara, int* idx_r, int* inc_r, int* nr,
+                             int* idx_c, int* inc_c, int* nc);
+void c_bf_get_all2all_dest(F2Cptr bf, F2Cptr ptree, int level, char mode_new, int nr, int nc,
+                           int idx_r, int inc_r, int idx_c, int inc_c, int* pid);
+void c_bf_get_all2all_range(F2Cptr bf, F2Cptr ptree, int level, char mode_new, int* idx_r, int* inc_r, int* nr,
+                            int* idx_c, int* inc_c, int* nc);
+void c_bf_get_block_group(F2Cptr bf, F2Cptr ptree, int level, int index_i, int index_j, char mode,
+                          int* nproc, MPI_Fint* comm, int* is_head);
+void c_bf_gpu_level_id(const int* nblk, const int* rows, const int* cols, void* const* blk,
+                       const int* transposed, const void* entries, const int64_t* nnz,
+                       const double* rtol, const double* atol, int* rank, int* jpvt, void* xout,
+                       int* info);
+/* alpha and beta point to the library's scalar (double, or double complex) */
+void c_bf_gpu_mult(F2Cptr bf, F2Cptr ptree, const char* op, const int* nrhs, const void* x,
+                   const int* ldx, void* y, const int* ldy, const void* alpha, const void* beta,
+                   double* flops, int* info);
+void c_bf_gpu_mult_host(F2Cptr bf, F2Cptr ptree, const char* op, const int* nrhs, const void* x,
+                        const int* ldx, void* y, const int* ldy, double* flops, int* info);
+void c_bf_gpu_extract(F2Cptr bf, F2Cptr ptree, const int* ninter, const int* allrows, const int* allcols,
+                      const int* rowidx, const int* colidx, const int* pgidx, const int* npmap, const int* pmaps,
+                      void* alldat_loc, const int64_t* nalldat_loc, double* flops, int* info);
+void c_bf_gpu_release(F2Cptr bf);
+void c_bpack_gpu_workspace_alloc(const int64_t* elements, void** ptr);
+void c_bpack_gpu_workspace_free(void* ptr);
+void c_bpack_gpu_workspace_copy(void* device, void* host, const int64_t* elements,
+                                const int* to_device);
+void c_bf_get_vec_ranges(F2Cptr bf, F2Cptr ptree, char dir, int* idx_r, int* inc_r, int* nr, int* idx_c, int* inc_c, int* nc);
+void c_bf_get_layout(F2Cptr bf, int* level_butterfly, int* level_half, int* M, int* N, int* M_loc, int* N_loc, int* nlevels, int* nblocks);
+void c_bf_get_blocks(F2Cptr bf, int* lvl_nr, int* lvl_nc, int* lvl_idxr, int* lvl_idxc, int* lvl_incr, int* lvl_incc, int* blk_rows, int* blk_cols, void** blk_ptr);
 void c_bf_construct_init(int* M, int* N,int* M_loc,int* N_loc, int* nnsr, int* nnsc, F2Cptr* mshr,F2Cptr* mshc,F2Cptr* bf, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, void (*C_FuncDistmn)(int*, int*, double*,C2Fptr), void (*C_FuncNearFar)(int*, int*, int*,C2Fptr), C2Fptr C_QuantApp);
 void c_bf_construct_element_compute(F2Cptr* bf, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, void (*C_FuncZmn)(int*, int*, C_DT*,C2Fptr), void (*C_FuncZmnBlock)(int*, int*, int*, int64_t*, int*, int*, C_DT*, int*, int*, int*, int*, int*, C2Fptr), C2Fptr C_QuantApp);
 void c_bf_construct_matvec_compute(F2Cptr* bf, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree,void (*C_FuncBMatVec)(char const *, int*, int*, int*, C_DT const*,C_DT*,C2Fptr,C_DT*, C_DT*), C2Fptr C_QuantApp);

@@ -160,7 +160,8 @@ if (enable_python)
   )
   if (enable_h2_gpu)
     # the CUDA kernels of the H2 and HODLR GPU backends, called by the code compiled into this module
-    target_sources(butterflypack_python PRIVATE $<TARGET_OBJECTS:h2_gpu_kernels> $<TARGET_OBJECTS:hodlr_gpu_kernels>)
+    target_sources(butterflypack_python PRIVATE $<TARGET_OBJECTS:h2_gpu_kernels> $<TARGET_OBJECTS:hodlr_gpu_kernels>
+                                                $<TARGET_OBJECTS:bf_gpu_kernels>)
     target_link_libraries(butterflypack_python PUBLIC ${H2_GPU_LIB})
   endif()
 endif()

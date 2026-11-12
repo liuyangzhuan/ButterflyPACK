@@ -466,7 +466,7 @@ void gather_skeleton_to_parent(
         // Copy metadata from parent box if we own it
         BoxData<CoordType, DataType>* parent_box = parent_level.find_local_box(parent_morton);
         if (parent_box != nullptr) {
-            parent_solve.skeleton_indices = parent_box->skeleton_indices;
+            parent_solve.skeleton_indices = factor_skeleton(*parent_box);
             parent_solve.redundant_indices = parent_box->redundant_indices;
             parent_solve.one_hop = parent_box->one_hop;
             parent_solve.use_full_set = parent_box->use_full_set;
@@ -567,7 +567,7 @@ void gather_skeleton_to_parent(
                     " not found in parent_level on owner rank " + std::to_string(rank));
             }
 
-            parent_solve.skeleton_indices = parent_box->skeleton_indices;
+            parent_solve.skeleton_indices = factor_skeleton(*parent_box);
             parent_solve.redundant_indices = parent_box->redundant_indices;
             parent_solve.one_hop = parent_box->one_hop;
             parent_solve.use_full_set = parent_box->use_full_set;
@@ -1123,7 +1123,7 @@ void apply_forward_elimination(
             X_NR = &box->X_NR;
             X_RS = &box->X_RS;
             X_RN = &box->X_RN;
-            skeleton_indices = &box->skeleton_indices;
+            skeleton_indices = &factor_skeleton(*box);
             redundant_indices = &box->redundant_indices;
             one_hop = &box->one_hop;
             use_full_set = &box->use_full_set;
@@ -1149,7 +1149,7 @@ void apply_forward_elimination(
         X_NR = &box->X_NR;
         X_RS = &box->X_RS;
         X_RN = &box->X_RN;
-        skeleton_indices = &box->skeleton_indices;
+        skeleton_indices = &factor_skeleton(*box);
         redundant_indices = &box->redundant_indices;
         one_hop = &box->one_hop;
         use_full_set = &box->use_full_set;
@@ -1419,7 +1419,7 @@ void apply_backward_substitution(
             X_RN = &box->X_RN;
             X_SR = &box->X_SR;
             X_NR = &box->X_NR;
-            skeleton_indices = &box->skeleton_indices;
+            skeleton_indices = &factor_skeleton(*box);
             redundant_indices = &box->redundant_indices;
             one_hop = &box->one_hop;
             use_full_set = &box->use_full_set;
@@ -1449,7 +1449,7 @@ void apply_backward_substitution(
         X_RN = &box->X_RN;
         X_SR = &box->X_SR;
         X_NR = &box->X_NR;
-        skeleton_indices = &box->skeleton_indices;
+        skeleton_indices = &factor_skeleton(*box);
         redundant_indices = &box->redundant_indices;
         one_hop = &box->one_hop;
         use_full_set = &box->use_full_set;

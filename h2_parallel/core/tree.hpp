@@ -11,6 +11,8 @@
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <type_traits>
+#include <utility>
 #include <mpi.h>
 #include "morton.hpp"
 #include "region_partition.hpp"
@@ -478,6 +480,138 @@ struct MatrixStorage {
         return lda * cols;
     }
 };
+/**
+ * @brief An allocator whose construct without arguments default-initializes:
+ * a vector of scalars it allocates is not zero-filled by resize(n).
+ */
+template<typename T>
+struct DefaultInitAllocator : std::allocator<T> {
+    template<typename U>
+    struct rebind { using other = DefaultInitAllocator<U>; };
+    DefaultInitAllocator() noexcept = default;
+    template<typename U>
+    DefaultInitAllocator(const DefaultInitAllocator<U>&) noexcept {}
+    template<typename U>
+    void construct(U* p) noexcept(std::is_nothrow_default_constructible_v<U>) {
+        ::new (static_cast<void*>(p)) U;
+    }
+    template<typename U, typename... Args>
+    void construct(U* p, Args&&... args) {
+        ::new (static_cast<void*>(p)) U(std::forward<Args>(args)...);
+    }
+};
+
+/**
+ * @brief A host buffer that resize(n) does not zero-fill, for values
+ * written in full before they are read.
+ */
+template<typename T>
+using HostBuffer = std::vector<T, DefaultInitAllocator<T>>;
+
+/**
+ * @brief A HostBuffer that a call site (Tag) keeps for the thread's later
+ * calls (up to kKeep bytes), grown and never shrunk, so its pages stay mapped and
+ * faulted in: the partial CB's results copied into a fresh buffer each call
+ * ran at about half the speed of warm memory (Poisson 400^3, 64 ranks).
+ * Its contents are not zeroed (as HostBuffer).  A nested use of the same
+ * site on one thread, or a request above kKeep, gets a buffer of its own.
+ */
+template<typename T, typename Tag>
+class KeptBuffer {
+public:
+    static constexpr size_t kKeep = size_t{1} << 30;  ///< bytes kept at most
+    explicit KeptBuffer(size_t n) {
+        Slot& s = slot();
+        if (!s.busy && n * sizeof(T) <= kKeep) {
+            s.busy = true;
+            held_ = &s;
+            s.buf.resize(n);
+            data_ = s.buf.data();
+        } else {
+            own_.resize(n);
+            data_ = own_.data();
+        }
+    }
+    ~KeptBuffer() {
+        if (held_ != nullptr) held_->busy = false;
+    }
+    KeptBuffer(const KeptBuffer&) = delete;
+    KeptBuffer& operator=(const KeptBuffer&) = delete;
+    T* data() const { return data_; }
+
+private:
+    struct Slot {
+        HostBuffer<T> buf;
+        bool busy = false;
+    };
+    static Slot& slot() {
+        static thread_local Slot s;
+        return s;
+    }
+    Slot* held_ = nullptr;
+    HostBuffer<T> own_;
+    T* data_ = nullptr;
+};
+
+/**
+ * @brief Zero n values over the calling rank's threads (one thread when
+ * called from a parallel region).  A large buffer is a fresh mapping whose
+ * pages fault in as it is first written; one thread zeroed them at ~10 GB/s.
+ */
+template<typename T>
+void parallel_zero(T* p, size_t n) {
+    constexpr size_t kPiece = size_t{1} << 16;
+    const int64_t pieces = static_cast<int64_t>((n + kPiece - 1) / kPiece);
+#pragma omp parallel for schedule(static) if (pieces > 1 && !omp_in_parallel())
+    for (int64_t i = 0; i < pieces; ++i) {
+        const size_t a = static_cast<size_t>(i) * kPiece;
+        std::fill(p + a, p + std::min(n, a + kPiece), T{});
+    }
+}
+
+/**
+ * @brief A dense column-major block of the partial factorization's F22
+ * records (T22, X_RR, X_RS, X_SR, X_RN, X_NR; unstructured/partial.hpp).
+ * Sizing it does not zero-fill it: the GPU path sizes a record and its
+ * background copy writes it from many threads, the pages faulting in on
+ * those threads (a zero-filled destination halved that copy, measured).
+ */
+template<typename DataType>
+struct PartialRecord {
+    std::vector<DataType, DefaultInitAllocator<DataType>> data;
+    int64_t rows = 0;
+    int64_t cols = 0;
+    int64_t lda = 0;
+    // H2_compress_factors: the entries as lossy Bitcomp chunks, data empty
+    // (core/partial_record_codec.hpp): the chunks end to end, each padded to
+    // its stride
+    std::vector<char, DefaultInitAllocator<char>> packed;
+    std::vector<uint32_t> strides;
+    // kept on the device from the factorization (GPU_BACKEND/h2_gpu/
+    // partial_device.hpp): the entries, or the chunks end to end; null: on
+    // the host only.  With no host copy (device_only) the host paths fetch it
+    // first (partial_records_to_host).
+    const char* device = nullptr;
+    bool compressed() const { return !strides.empty(); }
+    bool device_only() const { return device != nullptr && data.empty() && packed.empty() && rows * cols > 0; }
+    size_t bytes() const { return data.capacity() * sizeof(DataType) + packed.capacity(); }
+    void allocate(int64_t nrows, int64_t ncols) {  // zero-filled
+        rows = nrows;
+        cols = ncols;
+        lda = nrows;
+        data.assign(static_cast<size_t>(std::max<int64_t>(nrows * ncols, 0)), DataType{});
+        packed.clear();
+        strides.clear();
+    }
+    void assign(int64_t nrows, int64_t ncols, const std::vector<DataType>& values) {
+        rows = nrows;
+        cols = ncols;
+        lda = nrows;
+        data.assign(values.begin(), values.end());
+        packed.clear();
+        strides.clear();
+    }
+};
 
 /**
  * @brief One dense allocation shared by the two directed views of a symmetric edge.
@@ -505,6 +639,7 @@ struct PointDataRequest {
     std::vector<CoordType> coords;  ///< Point coordinates (dim × num_points, column-major)
     std::vector<int64_t> indices; ///< Global point indices
     std::vector<int64_t> skel_indices; ///< Skeleton indices
+    std::vector<int64_t> skel_before;  ///< H2_partial: the skeleton before the F22 phase (set by its owner's publish, not serialized)
     bool on_boundary; ///< if this box is on the boundary
     
     PointDataRequest() : morton_index(-1), source_rank(-1) {}
@@ -604,7 +739,8 @@ struct SolveDataRequest {
         num_points = rhs_info.num_points;
         nrhs = rhs_info.nrhs;
         redundant_indices = box.redundant_indices;
-        skeleton_indices = box.skeleton_indices;
+        // the F11 factors' skeleton (H2_partial: before the F22 phase)
+        skeleton_indices = box.skeleton_before_f22.empty() ? box.skeleton_indices : box.skeleton_before_f22;
         right_side = rhs_info.right_side;
         left_side = rhs_info.left_side;
         
@@ -623,7 +759,8 @@ struct SolveDataRequest {
         num_points = rhs_info.num_points;
         nrhs = rhs_info.nrhs;
         redundant_indices = box.redundant_indices;
-        skeleton_indices = box.skeleton_indices;
+        // the F11 factors' skeleton (H2_partial: before the F22 phase)
+        skeleton_indices = box.skeleton_before_f22.empty() ? box.skeleton_indices : box.skeleton_before_f22;
         one_hop = box.one_hop;
         use_full_set = box.use_full_set;
         right_side = rhs_info.right_side;
@@ -971,6 +1108,14 @@ template<typename DataType>
 struct H2Block {
     int64_t source_morton;
     MatrixStorage<DataType> matrix;
+    // H2_compress_factors (GPU compression, core/h2_block_codec.hpp): the
+    // entries as lossy Bitcomp chunks end to end, each padded to its stride,
+    // with matrix.data empty (its rows and cols kept); or, with a GPU entry
+    // evaluator, not stored at all (the device matvec evaluates the block,
+    // ParallelTree::h2_blocks_evaluated)
+    std::vector<char> packed;
+    std::vector<uint32_t> strides;
+    bool compressed() const { return !strides.empty(); }
 
     H2Block() : source_morton(-1) {}
     ~H2Block() = default;
@@ -1026,6 +1171,33 @@ struct BoxData {
     // ===== Neighbor Information =====
     std::vector<int64_t> one_hop; ///< Morton indices of 1-hop neighbors
     std::vector<int64_t> use_full_set; ///< whether to use full set or skeleton for each neighbor
+
+    // ===== H2_partial: the F22 part (unstructured/partial.hpp) =====
+    /// The live set the F11 factors (T, X_SR, X_RS, schur at elimination
+    /// time) index: the skeleton before the level's F22 phase sparsified the
+    /// box; empty when the box has no F22 part (then skeleton_indices).
+    std::vector<int64_t> skeleton_before_f22;
+    struct F22Part {
+        bool sparsified = false;
+        std::vector<int64_t> skeleton;     ///< S22 (box slots)
+        std::vector<int64_t> redundant;    ///< R22 (box slots)
+        PartialRecord<DataType> T;         ///< k' x r22 over skeleton_indices (S' = S11, S22), zero rows on S11
+        PartialRecord<DataType> X_RR;      ///< r22 x r22 (the transformed R22 block)
+        PartialRecord<DataType> X_RS;      ///< r22 x k'
+        PartialRecord<DataType> X_SR;      ///< k' x r22
+        PartialRecord<DataType> X_RN;      ///< r22 x (the neighbours' raw F22 points)
+        /// per one_hop slot: (that neighbour's raw F22 points that stay live) x r22
+        /// (the CB product and entries read it a neighbour at a time)
+        std::vector<PartialRecord<DataType>> X_NR;
+        std::vector<int64_t> neighbor_f22_counts;             ///< per one_hop slot: X_RN's columns
+        std::vector<std::vector<int64_t>> neighbor_f22_slots; ///< per one_hop slot: those points as the neighbour's box slots
+        /// per one_hop slot: X_NR's rows, the neighbour's raw F22 points it does
+        /// not sparsify at this level (its R22 rows are not kept: those
+        /// couplings are its X_RN's), and those points as its box slots
+        std::vector<int64_t> neighbor_nr_counts;
+        std::vector<std::vector<int64_t>> neighbor_nr_slots;
+        bool released = false;
+    } f22;
     std::vector<int64_t> two_hop; ///< Morton indices of 2-hop neighbors
     bool on_boundary; ///< if this box is on the boundary
     
@@ -1162,6 +1334,7 @@ struct BoxData {
  */
 template<typename CoordType, typename DataType = CoordType>
 struct TreeLevel {
+    int64_t partial_count = 0;  ///< H2_partial (ParallelTree::partial_count), set by the factorization
     int32_t level;                   ///< Level number (0 = root)
     int64_t num_boxes_global;        ///< Total number of boxes at this level (global)
     int64_t num_boxes_local;         ///< Number of boxes owned by this process
@@ -1253,6 +1426,10 @@ struct TreeLevel {
     // the next level, even when they own none of its direct endpoints.
     std::unordered_map<int64_t, std::unordered_set<int>>
         lazy_generator_requesters;
+    // The ranks that requested each local box as assisting state in this
+    // level's assisting exchanges: an early generator exchange pushes them its
+    // skeleton once it is eliminated (post_early_generators, serialization.hpp).
+    std::unordered_map<int64_t, std::vector<int>> assisting_requesters;
 
     BoxData<CoordType, DataType>* find_generator_box(int64_t morton) {
         auto it = generator_id_to_index.find(morton);
@@ -1560,6 +1737,66 @@ enum class ReductionPattern {
  * - Box size = max(dimension ranges) / grid_size
  * - Rectangular domains waste some boxes but simplify proxy geometry
  */
+/// The skeleton a box's F11 factors index (H2_partial: the skeleton before
+/// the F22 phase; otherwise the skeleton).
+template<typename CoordType, typename DataType>
+const std::vector<int64_t>& factor_skeleton(const BoxData<CoordType, DataType>& box) {
+    return box.skeleton_before_f22.empty() ? box.skeleton_indices : box.skeleton_before_f22;
+}
+
+/**
+ * H2_partial: one box's F22 step as the device takes it
+ * (unstructured/partial.hpp plans the box; LevelEliminator::f22_ids returns
+ * the step's ID, f22_records, once the host has set q22_nr from the kept
+ * sets, its records).  Positions are within the box's live slots before the
+ * step (S_old), a neighbour's within its own.
+ */
+/// H2_partial: the boxes the F22 step sparsified (this rank's and the copies'),
+/// by Morton index: the old live set's size and the kept positions in it
+using PartialF22Kept = std::unordered_map<int64_t, std::pair<int64_t, std::vector<int64_t>>>;
+
+template<typename DataType>
+struct PartialF22Work {
+    int64_t morton = -1;
+    std::vector<int64_t> S_old;         ///< the box's live slots before the step
+    std::vector<int64_t> pos11, pos22;  ///< the F11 / F22 positions of S_old
+    struct Near {
+        int64_t morton = -1;
+        const std::vector<int64_t>* S_old = nullptr;  ///< the neighbour's live slots before the step
+        std::vector<int64_t> q11, q22;                ///< its F11 / F22 positions
+        std::vector<int64_t> q22_nr;                  ///< X_NR's rows: the F22 positions it keeps live
+    };
+    std::vector<Near> near;             ///< the box's one_hop order
+    // ---- results
+    bool done = false;                  ///< the device took the box (its ID)
+    std::vector<int64_t> skel22, red22; ///< the ID's F22 skeleton and redundant columns (indices of pos22), sorted
+    PartialRecord<DataType> T;          ///< k' x r22 over S' = S11, S22 (zero rows on S11)
+    PartialRecord<DataType> X_SR, X_RS, X_RR, X_RN;
+    std::vector<PartialRecord<DataType>> X_NR;  ///< per near: over its q22_nr rows
+};
+
+/**
+ * @brief The partial factorization's root (H2_partial, unstructured/partial.hpp):
+ * the root matrix split by point id, A11's LU in the root box's X_RR, and
+ * W = A11^-1 A12, A21, CB = A22 - A21 W.
+ */
+template<typename DataType>
+struct PartialRootFactor {
+    bool active = false;                 ///< this rank holds the root
+    int64_t n11 = 0, n22 = 0;            ///< root slots of F11 / F22 points
+    int64_t n22_global = 0;              ///< N - partial_count
+    std::vector<int64_t> slots11, slots22;
+    std::vector<int64_t> ids22;          ///< point ids of slots22
+    std::vector<int64_t> f22_slot;       ///< F22 index (id - partial_count) -> position in slots22
+    MatrixStorage<DataType> w;           ///< A11^-1 A12 (n11 x n22)
+    MatrixStorage<DataType> a21;         ///< n22 x n11
+    MatrixStorage<DataType> cb;          ///< the Schur complement on the F22 points (n22 x n22)
+    bool cb_released = false;
+    std::vector<int64_t> leaf_box;       ///< F22 index -> local leaf box (the CB entries; built on first use)
+    std::vector<int64_t> leaf_slot;      ///< F22 index -> slot in that leaf box
+    std::vector<int64_t> leaf_morton;    ///< F22 index -> its leaf box's Morton index, every rank's (the CB sketches; built on first use)
+};
+
 template<typename CoordType, typename DataType = CoordType>
 struct ParallelTree {
     int dimension;            ///< 1, 2, or 3
@@ -1586,9 +1823,26 @@ struct ParallelTree {
     int id_proxy_points;                 ///< Geometric surface samples for mode 1
     int id_adaptive_batch;               ///< Adaptive rows per spatial node for mode 2
     double id_s_op = 0.0;                ///< H2_s_op: the IDs' absolute floor is tol * id_s_op (0: off)
+    int64_t partial_count = 0;           ///< H2_partial: points with id < partial_count are F11 (eliminated); 0: full factorization
+    bool partial_compress_records = false;  ///< H2_compress_factors with H2_partial: the F22 records stored compressed
+    bool compress_h2_blocks = false;        ///< H2_compress_factors: a compression-only H2's blocks evaluated or compressed (GPU)
+    bool h2_blocks_evaluated = false;       ///< ... the blocks are not stored: the device matvec evaluates them
+    bool partial_records_on_device = false;  ///< some F22 records kept on the device only (partial_device.hpp)
+    bool gpu_exchanges_warmed = false;       ///< the GPU exchanges with this tree's peer ranks warmed up (warm_up_exchange)
+    bool partial() const { return partial_count > 0; }
+    bool partial_f11(int64_t point_id) const { return point_id < partial_count; }
+    PartialRootFactor<DataType> partial_root;  ///< the root of a partial factorization
+    /// the forward partial solve's swept vectors, for the backward one
+    std::vector<std::vector<SolveDataRequest<CoordType, DataType>>> partial_solve_data;
+    int partial_solve_nrhs = 0;
     std::vector<CoordType> id_source_point_coords; ///< Retained global coordinates only for ID diagnostics
     std::vector<int64_t> id_source_point_order; ///< Global point indices in spatial Morton order
     std::vector<int64_t> id_source_leaf_offsets; ///< Point offsets for every finest-level Morton box
+    /// a compression-only H2's entry extraction (unstructured/extraction.hpp, plan_extraction): each local
+    /// leaf point's leaf box and its position there, by point id (-1: not on this rank); built at the first
+    /// extraction, as the leaf boxes do not change after the compression
+    std::vector<int64_t> extraction_leaf_box;
+    std::vector<int32_t> extraction_leaf_position;
 
     bool level_requests_CA(int level) const {
         return dimension != 1 &&

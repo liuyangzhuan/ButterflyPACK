@@ -41,6 +41,98 @@ struct GatherItemT {
 };
 using GatherItem = GatherItemT<double>;
 
+// out[out_rows[i] * ors + j * ocs] = src[src_rows[i] * rs + j * cs], or += with
+// add (i < m, j < n): rows gathered and scattered in one.  The items of a
+// launch write distinct entries.
+template<typename T>
+struct IndexCopyItemT {
+    T* out;
+    int64_t ors;
+    int64_t ocs;
+    IndexList out_rows;
+    const T* src;
+    int64_t rs;
+    int64_t cs;
+    IndexList src_rows;
+    int m;
+    int n;
+    int add;
+};
+
+// out[out_rows[i] * ors + out_cols[j] * ocs] = src[src_rows[i] * rs +
+// src_cols[j] * cs] (i < m, j < n), or += with add: rows and columns indexed
+// on both sides, so one launch covers a gather into a dense block, the
+// scatter of a block into indexed rows and columns of an output, and the two
+// in one.  An index list left default is the identity (index_at), and a
+// transposed source is the same item with rs and cs swapped.  The items of a
+// launch write distinct entries, except with add 2 (atomic adds).  row_w and
+// col_w (byte offsets in meta, -1: none) weight entry (i, j) by row_w[i] and
+// col_w[j] (doubles): a source row or column listed several times, each
+// with its weight, sketches the block.
+template<typename T>
+struct BlockCopyItemT {
+    T* out;
+    int64_t ors;
+    int64_t ocs;
+    IndexList out_rows;
+    IndexList out_cols;
+    const T* src;
+    int64_t rs;
+    int64_t cs;
+    IndexList src_rows;
+    IndexList src_cols;
+    int m;
+    int n;
+    int add;
+    int64_t row_w = -1;
+    int64_t col_w = -1;
+};
+using BlockCopyItem = BlockCopyItemT<double>;
+
+// out[out_rows[i] * ors + out_cols[j] * ocs] += sum_x L(i, x) R(x, j) for i
+// < m, j < n, x < k, with L(i, x) = l[l_rows[i] * lrs + l_x[x] * lxs] and R(x,
+// j) = r[r_x[x] * rxs + r_cols[j] * rcs] (index lists; default: the
+// identity), the adds atomic: a GEMM of rows and columns picked out of its
+// operands, into rows and columns of an output.
+template<typename T>
+struct IndexedGemmItemT {
+    T* out;
+    int64_t ors;
+    int64_t ocs;
+    IndexList out_rows;
+    IndexList out_cols;
+    const T* l;
+    int64_t lrs;
+    int64_t lxs;
+    IndexList l_rows;
+    IndexList l_x;
+    const T* r;
+    int64_t rxs;
+    int64_t rcs;
+    IndexList r_x;
+    IndexList r_cols;
+    int m;
+    int n;
+    int k;
+};
+
+// out(i, j) = a(rows[i], cols[j]) of a column-major matrix (leading dimension
+// lda) held as chunks of `chunk` elements, chunk k at pool + slot[k] * chunk
+// (the chunks a gather reads, decompressed: H2_partial's records)
+template<typename T>
+struct ChunkGatherItemT {
+    T* out;
+    int ld;
+    int m;
+    int n;
+    const T* pool;
+    IndexList slot;
+    int64_t chunk;
+    int64_t lda;
+    IndexList rows;
+    IndexList cols;
+};
+
 // out[i * ors + j * ocs] = a(i, j) + b(i, j)
 template<typename T>
 struct AddStoreItemT {
@@ -159,7 +251,7 @@ struct SketchListsItem {
     int* draws;             // rows * sk
     int* rows_out;          // rows
     int* ptr;               // kSketchOwners + 1
-    int* entries;           // rows * sk
+    SketchEntry* entries;   // rows * sk
 };
 
 // One fill source of a box: destination lists of its stored rows.
@@ -168,7 +260,7 @@ struct SourceListsItem {
     int num_runs;           // <= kMaxSourceRuns
     int64_t runs_offset;    // RunDesc array in the metadata
     int* ptr;               // kSketchOwners + 1
-    int* entries;           // sum of the run counts * sk
+    SketchEntry* entries;   // sum of the run counts * sk
     int* row_index;         // sum of the run counts: source row of each sketched row
 };
 
@@ -215,6 +307,10 @@ struct QrcpItemT {
     double* norm;
     int* flag;
     double tol = -1.0;
+    // optional: the Householder scalars of the steps taken (at least min(m, n)
+    // entries; the reflectors stay below the diagonal as LAPACK's geqp3 leaves
+    // them), for a caller forming Q (the butterfly's range finder, bf_gpu)
+    T* tau = nullptr;
 };
 using QrcpItem = QrcpItemT<double>;
 
@@ -227,6 +323,16 @@ size_t qrcp_work_bytes(int count, int max_n);
 template<typename T>
 void launch_qrcp(const QrcpItemT<T>* items, int count, int max_n, double tol, double abs_tol, void* work,
                  cudaStream_t stream, bool batch_independent = false);
+// The same ID by a blocked QRCP (LAPACK dlaqps: a GEMM update a panel), for
+// tall items of many columns; max_m, the items' most rows.  Its results
+// differ from launch_qrcp's in rounding; a box's are the same bit for bit
+// whatever its batch.  The work block (bytes, 16-byte aligned) is always
+// needed.
+template<typename T>
+size_t qrcp_blocked_work_bytes(int count, int max_m, int max_n);
+template<typename T>
+void launch_qrcp_blocked(const QrcpItemT<T>* items, int count, int max_m, int max_n, double tol, double abs_tol,
+                         void* work, cudaStream_t stream);
 
 // C_i = alpha op(A_i) op(B_i) + beta C_i on the FP64 tensor cores
 // (device_gemm.cu); sizes, leading dimensions and pointers are device arrays
@@ -237,6 +343,17 @@ void launch_dgemm_vbatched_tc(bool trans_a, bool trans_b, const int* m, const in
                               const double* const* a, const int* lda, const double* const* b, const int* ldb,
                               double beta, double* const* c, const int* ldc, const int2* blocks, int num_blocks,
                               int tile, cudaStream_t stream);
+// The same on double complex data, C_i = op(A_i) B_i (+ C_i when accumulate),
+// tile 32 or 64: each complex product as two real DMMA products of the
+// operands' real views - the real part with A's imaginary entries negated,
+// the imaginary part with B's (re, im) pairs swapped - so every element sums
+// its k products in cuCfma's order, MAGMA's zgemm's, and the result is
+// MAGMA's to the bit.  (Alpha 1 and beta 0 or 1 only: MAGMA's complex
+// scaling is left to MAGMA.)
+void launch_zgemm_vbatched_tc(bool trans_a, const int* m, const int* n, const int* k, const dcomplex* const* a,
+                              const int* lda, const dcomplex* const* b, const int* ldb, bool accumulate,
+                              dcomplex* const* c, const int* ldc, const int2* blocks, int num_blocks, int tile,
+                              cudaStream_t stream);
 
 template<typename T>
 void launch_gather(const GatherItemT<T>* items, int count, int max_m, int max_n,
@@ -244,6 +361,18 @@ void launch_gather(const GatherItemT<T>* items, int count, int max_m, int max_n,
 template<typename T>
 void launch_add_store(const AddStoreItemT<T>* items, int count, int max_m, int max_n,
                       cudaStream_t stream);
+template<typename T>
+void launch_index_copy(const IndexCopyItemT<T>* items, int count, int max_m, int max_n, const char* meta,
+                       cudaStream_t stream);
+template<typename T>
+void launch_indexed_gemm(const IndexedGemmItemT<T>* items, int count, int max_m, int max_n, const char* meta,
+                         cudaStream_t stream);
+template<typename T>
+void launch_block_copy(const BlockCopyItemT<T>* items, int count, int max_m, int max_n, const char* meta,
+                       cudaStream_t stream);
+template<typename T>
+void launch_chunk_gather(const ChunkGatherItemT<T>* items, int count, int max_m, int max_n, const char* meta,
+                         cudaStream_t stream);
 template<typename T>
 void launch_sym_add(const SymAddItemT<T>* items, int count, int max_n, cudaStream_t stream);
 // a := (a + a^T) / 2 of each item's n x n matrix (the symmetric part)
@@ -291,6 +420,20 @@ void launch_transpose(const TransposeItemT<T>* items, int count, int max_m, int 
 // stores.  Used to write small results straight into mapped pinned host
 // memory, so they do not queue behind bulk copies on the copy engine.
 void launch_copy_bytes(void* dst, const void* src, size_t bytes, cudaStream_t stream);
+// The blocks of a packed image to their places: item b's m x n block, column
+// major and contiguous at src, to dst (leading dimension ld), elements of
+// elem_bytes (4, 8 or 16); max_entries: the largest m x n.  One launch for a
+// batch (collective_evaluator.hpp; a cudaMemcpy2DAsync a block was 3 us of
+// host time each).
+struct ImageCopyItem {
+    const void* src;
+    void* dst;
+    int64_t ld;
+    int m;
+    int n;
+};
+void launch_image_copy(const ImageCopyItem* items, int count, int64_t max_entries, int elem_bytes,
+                       cudaStream_t stream);
 
 }  // namespace gpu
 }  // namespace fmm

@@ -565,10 +565,10 @@ void hierarchical_factorization_parallel(
         static const bool phase_report = fmm::env::trace("phase");
         if (phase_report) {
             FMM_PHASE_RESET();
+            transport_timers() = TransportTimers{};
 #ifdef H2_HAVE_GPU
             gpu::owner_pass_stats() = gpu::OwnerPassStats{};
             gpu::eliminator_stats() = gpu::EliminatorStats{};
-            transport_timers() = TransportTimers{};
 #endif
         }
         if (!participates_in_transition) {
@@ -909,6 +909,17 @@ void hierarchical_factorization_parallel(
 #else
             const bool gpu_level_local = false;
 #endif
+            // A host Color level in lazy Schur mode 2: its owner passes update
+            // local blocks only, so each boundary wave's generators leave
+            // before its owner pass (post_early_generators, serialization.hpp)
+            // and the next transport receives them (complete_early_generators).
+            EarlyGeneratorExchange<DataType> early_exchange;
+            bool early_generators = lazy_far_field_mode() == LazyFarFieldMode::LAZY && generator_near_enabled() &&
+                                    is_symmetric && !is_hermitian && level.partial_count == 0 &&
+                                    kernel_symmetric(kernel, 0) && !kernel_entries_collective(kernel, 0);
+#ifdef H2_HAVE_GPU
+            early_generators = early_generators && !color_gpu_enabled();
+#endif
 
             skew_probe.loop_begin();
             for (int counter = 0; counter < static_cast<int>(color_bins.size()); ++counter) {
@@ -945,6 +956,10 @@ void hierarchical_factorization_parallel(
                             };
                     }
                     std::chrono::high_resolution_clock::duration comm_duration_raw{};
+                    if (early_exchange.active) {
+                        comm_duration_raw = complete_early_generators(
+                            tree, current_level, kernel, pending_updates, early_exchange);
+                    } else
 #ifdef H2_HAVE_GPU
                     if (gpu_driver.on()) {
                         // device level on several ranks
@@ -963,7 +978,10 @@ void hierarchical_factorization_parallel(
                                 transport_memory_diagnostic);
                     }
                     level_data_exchange += comm_duration_raw;
+                    const auto t_slicing = std::chrono::steady_clock::now();
                     update_neighbor_slicing_for_level(level, is_symmetric);
+                    transport_timers().slicing += std::chrono::duration<double>(
+                        std::chrono::steady_clock::now() - t_slicing).count();
                     if (memory_diagnostics.enabled()) {
                         memory_diagnostics.record(
                             tree, current_level, "color",
@@ -992,7 +1010,12 @@ void hierarchical_factorization_parallel(
                 }
 
                 FMM_PHASE_LAP(wave_lap, WALL_STAGED);  // transport
-                if (color_list.empty()) continue;
+                const bool early_post = early_generators && !is_interior;
+                if (color_list.empty()) {
+                    // (every rank posts every boundary wave's early exchange)
+                    if (early_post) post_early_generators(tree, current_level, color_list, counter, early_exchange);
+                    continue;
+                }
                 FMM_PHASE_NOTE_WAVE(color_list.size());
 
                 const bool enable_deferred_xnn =
@@ -1159,6 +1182,10 @@ void hierarchical_factorization_parallel(
                 }
                 FMM_PHASE_LAP(wave_lap, WALL_BOX);
                 FMM_PHASE_WAVE_BOX_DONE();
+                if (early_post) {
+                    post_early_generators(tree, current_level, color_list, counter, early_exchange);
+                    FMM_PHASE_LAP(wave_lap, WALL_STAGED);
+                }
 
                 for (int local_boundary_count : thread_boundary_counts) {
                     boundary_count += local_boundary_count;
@@ -1368,7 +1395,7 @@ void hierarchical_factorization_parallel(
                     // original one-hop coupling. Finalization replaces X_NR
                     // with temp2, which remains the representation retained
                     // by local and installed generator boxes.
-                    if (lazy_far_field_mode() == LazyFarFieldMode::LAZY) {
+                    if (lazy_far_field_mode() == LazyFarFieldMode::LAZY && !early_post) {
                         emit_lazy_generators(
                             level, color_list, counter, pending_updates);
                     }
@@ -1435,6 +1462,9 @@ void hierarchical_factorization_parallel(
 
             }
 
+            if (early_exchange.active) {
+                throw std::logic_error("an early generator exchange was not completed in its level");
+            }
             // Keep the final flush outside the wave body so empty trailing bins
             // cannot strand updates produced by the last nonempty wave.
             if (memory_diagnostics.enabled()) {
@@ -1475,7 +1505,10 @@ void hierarchical_factorization_parallel(
                             final_transport_memory_diagnostic);
                 }
                 level_data_exchange += final_comm_duration;
+                const auto t_slicing = std::chrono::steady_clock::now();
                 update_neighbor_slicing_for_level(level, is_symmetric);
+                transport_timers().slicing += std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - t_slicing).count();
             }
             if (memory_diagnostics.enabled()) {
                 memory_diagnostics.record(
@@ -1578,6 +1611,24 @@ void hierarchical_factorization_parallel(
                 MPI_Comm_rank(level_comm, &level_rank);
                 FMM_PHASE_REPORT(level_comm, 0, true, level_rank, current_level,
                                  omp_get_max_threads(), print_detail);
+                {
+                    // the exchange's steps (the transports' sum): this rank and the max over the ranks
+                    const auto& t = transport_timers();
+                    double v[11] = {t.sizes, t.payload, t.serialize, t.deserialize, t.assisting, t.install,
+                                    t.form_near, t.apply, t.slicing, t.bytes_sent / 1e9, t.bytes_received / 1e9};
+                    double vmax[11] = {0.0};
+                    MPI_Reduce(v, vmax, 11, MPI_DOUBLE, MPI_MAX, 0, level_comm);
+                    if (print_detail && level_rank == 0) {
+                        for (const double* x : {static_cast<const double*>(v), static_cast<const double*>(vmax)}) {
+                            std::printf("  [phase] level %d transport %s (s): sizes %.1f payload %.1f [serialize %.1f] "
+                                        "deserialize %.1f assisting %.1f install %.1f form-near %.1f apply %.1f "
+                                        "slicing %.1f | sent %.2f GB, received %.2f GB\n",
+                                        current_level, x == v ? "rank-root" : "max-ranks", x[0], x[1], x[2], x[3],
+                                        x[4], x[5], x[6], x[7], x[8], x[9], x[10]);
+                        }
+                        std::fflush(stdout);
+                    }
+                }
 #ifdef H2_HAVE_GPU
                 if (color_gpu_enabled() && print_detail && level_rank == 0 &&
                     !gpu_driver.report_level(current_level)) {
@@ -2044,7 +2095,9 @@ void hierarchical_factorization_parallel(
             // At level 0, the assembled matrix is just the schur complement
             if (!root_box.schur_complement.is_allocated()) {
                 throw std::runtime_error(
-                    "hierarchical_factorization_parallel: Root box schur complement not allocated");
+                    "hierarchical_factorization_parallel: root box Schur complement not "
+                    "allocated; the level-1 transition assembles it, so an H2 tree of one "
+                    "level never does (see require_h2_tree_depth)");
             }
         
             n = root_box.schur_complement.rows;
@@ -2095,13 +2148,12 @@ void hierarchical_factorization_parallel(
 
                 int nn = n;
                 int info = 0;
-
-                if constexpr (std::is_same_v<DataType, double>) {
-                    dgetrf_(&nn, &nn, root_box.X_RR.data.data(), &nn,
-                            root_box.X_RR_pivots.data(), &info);
-                } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-                    zgetrf_(&nn, &nn, root_box.X_RR.data.data(), &nn,
-                            root_box.X_RR_pivots.data(), &info);
+                // the process's team over the sequential BLAS (one getrf
+                // call was one core: 304 s of 789 at 160^3)
+                if constexpr (std::is_same_v<DataType, double> ||
+                              std::is_same_v<DataType, std::complex<double>>) {
+                    parallel_getrf(nn, root_box.X_RR.data.data(), nn,
+                                   root_box.X_RR_pivots.data(), &info);
                 }
 
                 if (info != 0) {
@@ -2159,8 +2211,12 @@ void hierarchical_factorization_parallel(
                     std::cout << "  ✓ Root matrix copied (no factorization)" << std::endl;
                 }
             }
-        
+
         }
+
+        // The root block is factored (X_RR) and nothing reads it again
+        // (as the unstructured path)
+        root_box.schur_complement = MatrixStorage<DataType>{};
 
         // Mark root as skeleton only (no redundant DOFs at this level)
         root_box.skeleton_indices.resize(n);
@@ -2206,9 +2262,11 @@ void hierarchical_factorization_parallel(
     destroy_dynamic_threading_context(dynamic_threading);
 
 
+    // What the factorization keeps: every level's boxes, the root's (its
+    // LU) included (the Mem_Factor a caller reads).
     size_t local_memory_usage = 0;
     size_t CA_halo_memory_usage = 0;
-    for (int current_level = leaf_level; current_level >= 1; current_level--) {
+    for (int current_level = leaf_level; current_level >= 0; current_level--) {
     
         auto& level = tree->levels[current_level];
         for (auto& box : level.local_boxes) {

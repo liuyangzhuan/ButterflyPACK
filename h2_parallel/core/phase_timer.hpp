@@ -261,6 +261,20 @@ inline void report(MPI_Comm comm, int root, bool active, int rank, int level,
     };
     line("rank-root", local);
     line("max-ranks", gmax);
+    // Waves of fewer boxes than threads (the top levels: one box a wave) leave
+    // the per-thread averages near zero; the box buckets' sums over the threads
+    // (thread-seconds, rank-root) say where a box's time goes.
+    if (local[NUM_PHASES + 2] > 0 && local[NUM_PHASES + 2] < threads) {
+        const double* v = local;
+        std::printf(
+            "  [phase] level %d rank-root box sums (thread-s): sketch %.2f [kernel %.2f consume %.2f gather %.2f "
+            "axpy %.2f gemm %.2f] id %.2f factor %.2f near %.2f [kernel %.2f assemble %.2f s2-temp %.2f "
+            "s2-ans %.2f s2-rest %.2f] | owner: mat %.2f alloc %.2f gemm %.2f accum %.2f flush %.2f\n",
+            level, v[BOX_SKETCH], v[SK_KERNEL], v[SK_CONSUME], v[SK_FILL_GATHER], v[SK_FILL_AXPY],
+            v[SK_FILL_GEMM], v[BOX_ID], v[BOX_FACTOR], v[BOX_NEAR], v[NEAR_KERNEL], v[NEAR_ASSEMBLE],
+            v[S2_TEMP], v[S2_ANS], v[S2_REST], v[OWN_MATERIALIZE], v[OWN_ALLOC], v[OWN_GEMM],
+            v[OWN_ACCUM], v[OWN_FLUSH]);
+    }
     {
         // boxes within two of a box: count of boxes, ms each (all ranks, boxes
         // eliminated one per thread)

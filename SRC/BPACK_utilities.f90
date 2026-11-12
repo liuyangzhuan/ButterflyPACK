@@ -652,10 +652,14 @@ contains
             ! deallocate(ptree%pgrp(ii)%gd)
             ! ptree%pgrp(ii)%gd=>null()
             ! endif
+            ! (a one-process group's four contexts are one grid, CreatePtree: exited once)
             if (ptree%pgrp(ii)%ctxt /= -1) call blacs_gridexit_wrp(ptree%pgrp(ii)%ctxt)
-            if (ptree%pgrp(ii)%ctxt1D /= -1) call blacs_gridexit_wrp(ptree%pgrp(ii)%ctxt1D)
-            if (ptree%pgrp(ii)%ctxt1DCol /= -1) call blacs_gridexit_wrp(ptree%pgrp(ii)%ctxt1DCol)
-            if (ptree%pgrp(ii)%ctxt_head /= -1) call blacs_gridexit_wrp(ptree%pgrp(ii)%ctxt_head)
+            if (ptree%pgrp(ii)%ctxt1D /= -1 .and. ptree%pgrp(ii)%ctxt1D /= ptree%pgrp(ii)%ctxt) &
+               call blacs_gridexit_wrp(ptree%pgrp(ii)%ctxt1D)
+            if (ptree%pgrp(ii)%ctxt1DCol /= -1 .and. ptree%pgrp(ii)%ctxt1DCol /= ptree%pgrp(ii)%ctxt) &
+               call blacs_gridexit_wrp(ptree%pgrp(ii)%ctxt1DCol)
+            if (ptree%pgrp(ii)%ctxt_head /= -1 .and. ptree%pgrp(ii)%ctxt_head /= ptree%pgrp(ii)%ctxt) &
+               call blacs_gridexit_wrp(ptree%pgrp(ii)%ctxt_head)
             if (ptree%pgrp(ii)%Comm /= MPI_COMM_NULL) call MPI_Comm_free(ptree%pgrp(ii)%Comm, ierr)
          enddo
          deallocate (ptree%pgrp)
@@ -1334,6 +1338,9 @@ contains
       option%H2_ID_proxy=0
       option%H2_ID_proxy_points=8
       option%H2_s_op=0d0
+      option%H2_partial=0
+      option%H2_partial_extract=0
+      option%H2_extract=0
 
    end subroutine SetDefaultOptions
 
@@ -1430,6 +1437,28 @@ contains
                   read (strings1, *) option%H2_ID_proxy_points
                else if (trim(strings) == '--h2_s_op' .or. trim(strings) == '--H2_s_op') then
                   read (strings1, *) option%H2_s_op
+               else if (trim(strings) == '--h2_partial' .or. trim(strings) == '--H2_partial') then
+                  read (strings1, *) option%H2_partial
+               else if (trim(strings) == '--h2_partial_extract' .or. trim(strings) == '--H2_partial_extract') then
+                  if (trim(strings1) == 'auto') then
+                     option%H2_partial_extract = 0
+                  else if (trim(strings1) == 'device') then
+                     option%H2_partial_extract = 1
+                  else if (trim(strings1) == 'host') then
+                     option%H2_partial_extract = 2
+                  else
+                     read (strings1, *) option%H2_partial_extract
+                  endif
+               else if (trim(strings) == '--h2_extract' .or. trim(strings) == '--H2_extract') then
+                  if (trim(strings1) == 'auto') then
+                     option%H2_extract = 0
+                  else if (trim(strings1) == 'device') then
+                     option%H2_extract = 1
+                  else if (trim(strings1) == 'host') then
+                     option%H2_extract = 2
+                  else
+                     read (strings1, *) option%H2_extract
+                  endif
                else if (trim(strings) == '--iter_solver') then
                   read (strings1, *) option%iter_solver
                else if (trim(strings) == '--gmres_restart') then
@@ -1571,6 +1600,9 @@ contains
       option1%H2_ID_proxy = option%H2_ID_proxy
       option1%H2_ID_proxy_points = option%H2_ID_proxy_points
       option1%H2_s_op = option%H2_s_op
+      option1%H2_partial = option%H2_partial
+      option1%H2_partial_extract = option%H2_partial_extract
+      option1%H2_extract = option%H2_extract
       option1%tol_comp = option%tol_comp
       option1%tol_Rdetect = option%tol_Rdetect
       option1%tol_LS = option%tol_LS
@@ -1672,6 +1704,9 @@ contains
                write (*, '(A18,I8)') 'baca_batch', option%BACA_Batch
             endif
             write (*, '(A18,Es14.7)') 'h2_s_op', option%H2_s_op
+            write (*, '(A18,I8)') 'h2_partial', option%H2_partial
+            write (*, '(A20,I8)') 'h2_partial_extract', option%H2_partial_extract
+            write (*, '(A20,I8)') 'h2_extract', option%H2_extract
             write (*, '(A18,I8)') 'n_iter', option%n_iter
             write (*, '(A18,I8)') 'precon', option%precon
             write (*, '(A18,I8)') 'verbosity', option%verbosity

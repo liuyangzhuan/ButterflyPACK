@@ -346,7 +346,18 @@ __global__ void __launch_bounds__(1024) wide_pivot_kernel(const PivotItem<T>* it
     }
 }
 
-template<typename T>
+// Applies step k's Householder reflector to this block's columns.
+//
+// With kSmem the reflector is staged in dynamic shared memory, which caps the
+// panel height: a block is given 48 KB of it by default, so r must stay below
+// 6144 for double and 3072 for complex, and a taller panel makes the launch
+// fail with cudaErrorInvalidValue.  launch_qrcp_pivots_wide raises the limit
+// to the card's opt-in maximum (about 164 KB on an A100) and, when a panel is
+// taller than even that holds, instantiates this kernel with kSmem = false,
+// which reads the reflector straight from column k of the panel.  Both paths
+// compute the same thing: every write below is to a column l > k, so column k
+// is untouched for the whole launch.
+template<typename T, bool kSmem>
 __global__ void __launch_bounds__(kWideThreads) wide_apply_kernel(const PivotItem<T>* items, int k) {
     const PivotItem<T> it = items[blockIdx.x];
     const int r = it.r, L = it.L;
@@ -354,15 +365,19 @@ __global__ void __launch_bounds__(kWideThreads) wide_apply_kernel(const PivotIte
     const WideLayout<T> lay(it);
     if (static_cast<int>(blockIdx.y) >= lay.nblk) return;
     extern __shared__ unsigned char s_raw[];
-    T* sv = reinterpret_cast<T*>(s_raw);  // the Householder vector, rows k+1 .. r-1
     __shared__ double s_val[kWideThreads];
     __shared__ int s_idx[kWideThreads];
     T* w = it.work;
     auto at = [&](int i, int l) -> T& { return w[l + static_cast<long long>(i) * L]; };
+    // the Householder vector, rows k+1 .. r-1
+    T* sv = kSmem ? reinterpret_cast<T*>(s_raw) : nullptr;
+    auto hv = [&](int i) -> T { return kSmem ? sv[i] : at(i, k); };
     double* vn1 = it.norms;
     double* vn2 = it.norms + L;
     const double tol3z = sqrt(1.1102230246251565e-16);
-    for (int i = k + 1 + threadIdx.x; i < r; i += blockDim.x) sv[i] = at(i, k);
+    if (kSmem) {
+        for (int i = k + 1 + threadIdx.x; i < r; i += blockDim.x) sv[i] = at(i, k);
+    }
     const T tau = *lay.tau;
     __syncthreads();
     const T ctau = conj_of(tau);
@@ -372,10 +387,10 @@ __global__ void __launch_bounds__(kWideThreads) wide_apply_kernel(const PivotIte
     if (l > k && l < L) {
         if (tau != T(0.0)) {
             T dot = at(k, l);
-            for (int i = k + 1; i < r; ++i) dot += conj_of(sv[i]) * at(i, l);
+            for (int i = k + 1; i < r; ++i) dot += conj_of(hv(i)) * at(i, l);
             const T f = ctau * dot;
             at(k, l) -= f;
-            for (int i = k + 1; i < r; ++i) at(i, l) -= f * sv[i];
+            for (int i = k + 1; i < r; ++i) at(i, l) -= f * hv(i);
         }
         if (vn1[l] != 0.0) {
             double temp = sqrt(sq_abs(at(k, l))) / vn1[l];
@@ -506,10 +521,30 @@ void launch_qrcp_pivots_wide(const PivotItem<T>* items, int count, int max_r, in
     wide_mask_kernel<T><<<static_cast<unsigned>(count), kWideThreads, 0, stream>>>(items, meta);
     wide_copy_kernel<T><<<cols, kWideThreads, 0, stream>>>(items);
     check_launch("wide pivots (setup)");
+    // wide_apply_kernel stages the reflector in dynamic shared memory, of which
+    // a block gets 48 KB unless the kernel asks for more.  Ask for what this
+    // batch's tallest panel needs, up to the card's opt-in maximum; if the panel
+    // is taller than that, or the driver refuses, run the variant that reads the
+    // reflector from global memory instead of failing the launch.
     const size_t smem = static_cast<size_t>(std::max(max_r, 1)) * sizeof(T);
+    bool use_smem = false;
+    int dev = 0, optin = 0;
+    if (cudaGetDevice(&dev) == cudaSuccess &&
+        cudaDeviceGetAttribute(&optin, cudaDevAttrMaxSharedMemoryPerBlockOptin, dev) == cudaSuccess &&
+        optin > 0 && smem <= static_cast<size_t>(optin)) {
+        use_smem = cudaFuncSetAttribute(reinterpret_cast<const void*>(&wide_apply_kernel<T, true>),
+                                        cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                        static_cast<int>(smem)) == cudaSuccess;
+    }
+    // a refusal above is a fact about this device, not a pending launch error
+    cudaGetLastError();
     for (int k = 0; k < max_steps; ++k) {
         wide_pivot_kernel<T><<<static_cast<unsigned>(count), 1024, 0, stream>>>(items, k);
-        wide_apply_kernel<T><<<cols, kWideThreads, smem, stream>>>(items, k);
+        if (use_smem) {
+            wide_apply_kernel<T, true><<<cols, kWideThreads, smem, stream>>>(items, k);
+        } else {
+            wide_apply_kernel<T, false><<<cols, kWideThreads, 0, stream>>>(items, k);
+        }
     }
     check_launch("wide pivots (steps)");
     wide_out_kernel<T><<<dim3(static_cast<unsigned>(count), static_cast<unsigned>((std::max(max_p, 1) + kWideThreads - 1) /

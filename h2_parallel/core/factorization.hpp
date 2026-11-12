@@ -31,6 +31,7 @@
 #include "blas_declare.hpp"
 #include "phase_timer.hpp"
 #include "omp_region.hpp"
+#include "parallel_getrf.hpp"
 
 /* used blas functions */
 // dpotrf_, dgetrf_, dgetri_, dgemm_/gemm_, trsm_
@@ -38,6 +39,9 @@
 namespace fmm {
 
 // X := (X + X^T) / 2 (symmetric), or (X + X^H) / 2 (Hermitian), n x n.
+// Outside a parallel region a large X (the root's) goes in tiles over the
+// team, each tile with its mirror; every entry pair is computed as by the
+// plain loop.
 template<typename DataType>
 void symmetrize_in_place(MatrixStorage<DataType>& X, int64_t n, bool hermitian) {
     auto conj_if = [&](const DataType& v) -> DataType {
@@ -47,17 +51,31 @@ void symmetrize_in_place(MatrixStorage<DataType>& X, int64_t n, bool hermitian) 
             return v;
         }
     };
-    for (int64_t j = 0; j < n; ++j) {
-        for (int64_t i = 0; i < j; ++i) {
-            DataType& a = X.data[static_cast<size_t>(i + j * X.lda)];
-            DataType& b = X.data[static_cast<size_t>(j + i * X.lda)];
-            const DataType upper = (a + conj_if(b)) * 0.5;  // (as the device's launch_symmetrize)
-            a = upper;
-            b = conj_if(upper);
+    auto pairs = [&](int64_t j0, int64_t j1, int64_t i0, int64_t i1) {
+        for (int64_t j = j0; j < j1; ++j) {
+            for (int64_t i = i0; i < std::min(i1, j); ++i) {
+                DataType& a = X.data[static_cast<size_t>(i + j * X.lda)];
+                DataType& b = X.data[static_cast<size_t>(j + i * X.lda)];
+                const DataType upper = (a + conj_if(b)) * 0.5;  // (as the device's launch_symmetrize)
+                a = upper;
+                b = conj_if(upper);
+            }
+            if (hermitian && i0 == j0) {
+                DataType& d = X.data[static_cast<size_t>(j + j * X.lda)];
+                d = (d + conj_if(d)) * 0.5;
+            }
         }
-        if (hermitian) {
-            DataType& d = X.data[static_cast<size_t>(j + j * X.lda)];
-            d = (d + conj_if(d)) * 0.5;
+    };
+    constexpr int64_t tile = 64;
+    if (n < 8 * tile || omp_in_parallel() || omp_get_max_threads() <= 1) {
+        pairs(0, n, 0, n);
+        return;
+    }
+    const int64_t tiles = (n + tile - 1) / tile;
+    #pragma omp parallel for schedule(dynamic)
+    for (int64_t t = tiles - 1; t >= 0; --t) {
+        for (int64_t s = 0; s <= t; ++s) {
+            pairs(t * tile, std::min(n, (t + 1) * tile), s * tile, std::min(n, (s + 1) * tile));
         }
     }
 }
@@ -404,8 +422,10 @@ inline void split_columns_chunked(
     const Function& function) {
     if (split_threads > 1 && columns >= 2 * H2_SPLIT_COLUMN_MIN) {
         // as many tasks as the split allows, each of at least
-        // H2_SPLIT_COLUMN_MIN columns (an output column's arithmetic does not
-        // depend on which chunk it is in: split 1 and 16 give the same bits)
+        // H2_SPLIT_COLUMN_MIN columns (a zgemm chunk's last columns are
+        // computed differently unless chunks start at multiples of 6, so the
+        // split changes the last bits: --h2_gemm_split 128 moved a 160^3
+        // logdet's phase by 1e-9, 2026-11-01)
         const int tasks = static_cast<int>(
             std::min<int64_t>(split_threads, columns / H2_SPLIT_COLUMN_MIN));
         const int64_t chunk = (columns + tasks - 1) / tasks;
@@ -424,6 +444,44 @@ inline void split_columns_chunked(
                 std::min<int64_t>(
                     columns, (chunk + 1) * H2_SPLIT_COLUMN_CHUNK));
         }
+    }
+}
+
+// (column pieces of H2_GEMM_PIECE columns: gemm_column_pieces, omp_region.hpp)
+// The pieces only where the wave leaves a box this many threads (the few
+// boxes of the top levels): with 27-37 boxes a wave (split 3) they made many
+// small calls, which this sequential OpenBLAS (USE_LOCKING) serializes, and
+// the level took 5 s longer at 160^3 on 8 nodes; the split's chunks there.
+constexpr int H2_PIECES_MIN_SPLIT = 8;
+inline bool h2_pieces(int split_threads) { return split_threads >= H2_PIECES_MIN_SPLIT; }
+// split_columns_chunked's column ranges with that split, each in pieces
+template <typename Function>
+inline void split_columns_chunked_in_pieces(
+    int64_t columns,
+    int split_threads,
+    const Function& function) {
+    std::vector<std::pair<int64_t, int64_t>> pieces;
+    auto add = [&](int64_t c0, int64_t c1) {
+        for (int64_t p = c0; p < c1; p += H2_GEMM_PIECE) {
+            pieces.emplace_back(p, std::min(c1, p + H2_GEMM_PIECE));
+        }
+    };
+    if (split_threads > 1 && columns >= 2 * H2_SPLIT_COLUMN_MIN) {
+        const int tasks = static_cast<int>(
+            std::min<int64_t>(split_threads, columns / H2_SPLIT_COLUMN_MIN));
+        const int64_t chunk = (columns + tasks - 1) / tasks;
+        for (int64_t task = 0; task < tasks; ++task) {
+            add(task * chunk, std::min<int64_t>(columns, (task + 1) * chunk));
+        }
+    } else {
+        for (int64_t c0 = 0; c0 < columns; c0 += H2_SPLIT_COLUMN_CHUNK) {
+            add(c0, std::min<int64_t>(columns, c0 + H2_SPLIT_COLUMN_CHUNK));
+        }
+    }
+    const int64_t count = static_cast<int64_t>(pieces.size());
+    #pragma omp taskloop grainsize(1) default(shared)
+    for (int64_t i = 0; i < count; ++i) {
+        function(pieces[static_cast<size_t>(i)].first, pieces[static_cast<size_t>(i)].second);
     }
 }
 
@@ -486,8 +544,10 @@ void apply_right_inverse_in_place(
     const DataType* factor = inverse_or_factor.data.data();
     constexpr int64_t row_chunk_size = 512;
     const int64_t chunks = (rows + row_chunk_size - 1) / row_chunk_size;
+    // (h2_pieces: every chunk a task, for the threads the wave leaves idle;
+    // the chunks, so the bits, do not depend on the split)
     const int tasks = (split_threads > 1 && chunks > 1)
-        ? static_cast<int>(std::min<int64_t>(split_threads, chunks))
+        ? static_cast<int>(h2_pieces(split_threads) ? chunks : std::min<int64_t>(split_threads, chunks))
         : 1;
     auto run_chunks = [&](const auto& solve_rows) {
         if (tasks > 1) {
@@ -3532,19 +3592,22 @@ void apply_owner_deferred_xnn_updates_for_candidate_box(
 
             const DataType* candidate_rows =
                 source_box->X_NR.data.data() + candidate_col_offset;
-            split_columns_chunked(
-                n_candidate, scratch.split_threads,
-                [&](int64_t column_begin, int64_t column_end) {
-                    int split_columns =
-                        static_cast<int>(column_end - column_begin);
-                    gemm_("N", "T", &m, &split_columns, &k,
-                        &alpha,
-                        source_rows_ptr, &lda,
-                        candidate_rows + column_begin, &ldb,
-                        &beta,
-                        block_update.data() + column_begin * block.rows,
-                        &ldc);
-                });
+            auto product = [&](int64_t column_begin, int64_t column_end) {
+                int split_columns =
+                    static_cast<int>(column_end - column_begin);
+                gemm_("N", "T", &m, &split_columns, &k,
+                    &alpha,
+                    source_rows_ptr, &lda,
+                    candidate_rows + column_begin, &ldb,
+                    &beta,
+                    block_update.data() + column_begin * block.rows,
+                    &ldc);
+            };
+            if (scratch.split_threads > 1) {
+                split_columns_chunked_in_pieces(n_candidate, scratch.split_threads, product);
+            } else {
+                split_columns_chunked(n_candidate, scratch.split_threads, product);
+            }
 
             if (candidate_unarrived) {
                 if (block.kind == DeferredXnnTargetKind::FAR_A_NS) {
@@ -3797,7 +3860,10 @@ void finalize_deferred_xnn_source_box(
     }
 
     if (!source_box->deferred_xnn_temp2.empty()) {
-        if (!source_box->X_NR.is_allocated()) {
+        // (its data may have moved to the box's lazy generator already)
+        if (source_box->X_NR.rows <= 0 || source_box->X_NR.cols <= 0 ||
+            static_cast<int64_t>(source_box->deferred_xnn_temp2.size()) !=
+                source_box->X_NR.rows * source_box->X_NR.cols) {
             throw std::runtime_error(
                 "finalize_deferred_xnn_source_box: source X_NR missing");
         }
@@ -5098,7 +5164,8 @@ IDResult<DataType> compute_id_from_workspace(
     int64_t rows,
     int64_t cols,
     double tolerance,
-    double abs_tolerance) {
+    double abs_tolerance,
+    int split_threads = 1) {
 
     if (rows == 0) {
         IDResult<DataType> empty_id;
@@ -5111,7 +5178,7 @@ IDResult<DataType> compute_id_from_workspace(
     }
     std::vector<DataType> factored = workspace;
     return compute_id_complex(
-        factored.data(), rows, cols, rows, tolerance, 0, abs_tolerance);
+        factored.data(), rows, cols, rows, tolerance, 0, abs_tolerance, split_threads);
 }
 
 template<typename DataType>
@@ -5215,6 +5282,10 @@ std::vector<DataType> compute_adaptive_id_residual(
 // A nonsymmetric matrix (is_symmetric false): each sampled or hold-out far
 // point gives the two rows the stacked ID target holds of it, K(p, B) and
 // K(B, p)^T (the points' K(P, B) rows, then their K(B, P)^T rows).
+// column_ids: the points of the workspace's columns (null: the box's first
+// workspace_cols points).  id_columns (H2_partial): the columns the box's ID
+// is taken over, one part's; the selection runs on those alone, and the rows
+// it appends are zero in the others, which no ID reads.
 template<typename CoordType, typename DataType, typename KernelType>
 void append_adaptive_id_training_rows(
     const ParallelTree<CoordType, DataType>* tree,
@@ -5225,10 +5296,42 @@ void append_adaptive_id_training_rows(
     std::vector<DataType>& workspace,
     int64_t& workspace_rows,
     int64_t workspace_cols,
-    IDAdaptiveStats* stats = nullptr) {
+    IDAdaptiveStats* stats = nullptr,
+    const int64_t* column_ids = nullptr,
+    const std::vector<int64_t>* id_columns = nullptr,
+    int split_threads = 1) {  // the target's IDs over that many tasks
 
     if (stats != nullptr) *stats = IDAdaptiveStats{};
     if (tree->id_proxy_mode != 2 || workspace_cols == 0) return;
+    if (column_ids == nullptr) column_ids = box->point_indices.data();
+    if (id_columns != nullptr && static_cast<int64_t>(id_columns->size()) != workspace_cols) {
+        const int64_t nk = static_cast<int64_t>(id_columns->size());
+        if (nk == 0) return;
+        std::vector<int64_t> sub_ids(static_cast<size_t>(nk));
+        std::vector<DataType> sub(static_cast<size_t>(workspace_rows * nk));
+        for (int64_t j = 0; j < nk; ++j) {
+            const int64_t c = (*id_columns)[static_cast<size_t>(j)];
+            sub_ids[static_cast<size_t>(j)] = column_ids[c];
+            std::copy_n(workspace.data() + c * workspace_rows, workspace_rows, sub.data() + j * workspace_rows);
+        }
+        int64_t sub_rows = workspace_rows;
+        append_adaptive_id_training_rows(tree, box, kernel, tolerance, is_symmetric, sub, sub_rows, nk, stats,
+                                         sub_ids.data(), nullptr, split_threads);
+        if (sub_rows == workspace_rows) return;
+        const int64_t old_rows = workspace_rows;
+        std::vector<DataType> expanded(static_cast<size_t>(sub_rows * workspace_cols), DataType{0});
+        for (int64_t c = 0; c < workspace_cols; ++c) {
+            std::copy_n(workspace.data() + c * old_rows, old_rows, expanded.data() + c * sub_rows);
+        }
+        for (int64_t j = 0; j < nk; ++j) {
+            const int64_t c = (*id_columns)[static_cast<size_t>(j)];
+            std::copy_n(sub.data() + j * sub_rows + old_rows, sub_rows - old_rows,
+                        expanded.data() + c * sub_rows + old_rows);
+        }
+        workspace.swap(expanded);
+        workspace_rows = sub_rows;
+        return;
+    }
     // H2_s_op: the IDs' absolute floor, and the residual tests' floor
     // (threshold = max(tol ||W||_F, tol s_op))
     const double abs_tolerance = id_absolute_tolerance(tree, tolerance);
@@ -5242,11 +5345,11 @@ void append_adaptive_id_training_rows(
         const int64_t m = is_symmetric ? p : 2 * p;
         rows.assign(static_cast<size_t>(m * workspace_cols), DataType{0});
         kernel->evaluate_block_by_index(
-            points.data(), p, box->point_indices.data(), workspace_cols, rows.data(), m);
+            points.data(), p, column_ids, workspace_cols, rows.data(), m);
         if (!is_symmetric) {
             std::vector<DataType> kbp(static_cast<size_t>(workspace_cols * p));
             kernel->evaluate_block_by_index(
-                box->point_indices.data(), workspace_cols, points.data(), p, kbp.data(), workspace_cols);
+                column_ids, workspace_cols, points.data(), p, kbp.data(), workspace_cols);
             for (int64_t c = 0; c < workspace_cols; ++c) {
                 for (int64_t i = 0; i < p; ++i) {
                     rows[static_cast<size_t>(p + i + c * m)] = kbp[static_cast<size_t>(c + i * workspace_cols)];
@@ -5273,14 +5376,14 @@ void append_adaptive_id_training_rows(
     size_t queue_head = 0;
 
     IDResult<DataType> base_id = compute_id_from_workspace(
-        workspace, workspace_rows, workspace_cols, tolerance, abs_tolerance);
+        workspace, workspace_rows, workspace_cols, tolerance, abs_tolerance, split_threads);
     std::vector<IDResult<DataType>> extra_ids;
     int64_t extra_rank = 0;
     const int64_t sample_batch = std::max<int64_t>(1, tree->id_adaptive_batch);
 
     auto recompute_clean_id = [&]() {
         base_id = compute_id_from_workspace(
-            workspace, workspace_rows, workspace_cols, tolerance, abs_tolerance);
+            workspace, workspace_rows, workspace_cols, tolerance, abs_tolerance, split_threads);
         extra_ids.clear();
         extra_rank = 0;
         ++st.recomputes;
@@ -5425,6 +5528,7 @@ void gather_id_workspace(
     bool adaptive_rows = true,  // false: the caller selects them (against its sketch)
     int split_threads = 1) {  // the kernel blocks split over that many tasks (a small wave)
 
+    BoxWorkScope box_work;  // (no QRCP helper task held on this thread)
     if (adaptive_stats != nullptr) *adaptive_stats = IDAdaptiveStats{};
     if (box == nullptr || box->num_points == 0) {
         workspace_rows = 0;
@@ -5946,7 +6050,8 @@ void gather_id_workspace(
     if (adaptive_rows) {
         append_adaptive_id_training_rows(
             tree, box, kernel, id_tolerance, is_symmetric,
-            workspace, workspace_rows, workspace_cols, adaptive_stats);
+            workspace, workspace_rows, workspace_cols, adaptive_stats,
+            nullptr, nullptr, split_threads);
     }
 
     // if (DEBUG){
@@ -6411,10 +6516,20 @@ void compute_step_two_internal(
         m = total_neighbor_points; n = k; kk = r;
         alpha = 1.0; beta = 0.0;
         
-        gemm_("N", "N", &m, &n, &kk,
-               &alpha, temp2.data(), &m,
-               X_RS_original.data(), &kk,
-               &beta, X_NS_update.data(), &m);
+        // (a small wave: in column pieces over the idle threads, the same
+        // bits as the one call)
+        auto update = [&](int64_t c0, int64_t c1) {
+            int columns = static_cast<int>(c1 - c0);
+            gemm_("N", "N", &m, &columns, &kk,
+                   &alpha, temp2.data(), &m,
+                   X_RS_original.data() + c0 * r, &kk,
+                   &beta, X_NS_update.data() + c0 * total_neighbor_points, &m);
+        };
+        if (h2_pieces(scratch.split_threads)) {
+            gemm_column_pieces(n, update);
+        } else {
+            update(0, n);
+        }
         
         // Segment and update each neighbor
         int64_t current_row = 0;
@@ -8259,6 +8374,9 @@ struct LazyFarEndpoint {
     const std::vector<int64_t>* wanted = nullptr;
     int64_t wanted_count = 0;
     const int64_t* indices = nullptr;
+    /// H2_partial: the endpoint's skeleton before the level's F22 phase (a
+    /// source that saw it after its elimination laid its rows out over it)
+    const std::vector<int64_t>* skeleton_before = nullptr;
 };
 
 /**
@@ -8323,6 +8441,25 @@ bool lazy_far_locate_endpoint_rows(
         return true;
     }
 
+    if (endpoint.skeleton_before != nullptr && !endpoint.skeleton_before->empty() &&
+        slot_count == static_cast<int64_t>(endpoint.skeleton_before->size()) && endpoint.wanted != nullptr &&
+        (endpoint.skeleton == nullptr || slot_count != static_cast<int64_t>(endpoint.skeleton->size()) ||
+         endpoint.wanted != endpoint.skeleton)) {
+        // H2_partial: slot rows are the endpoint's skeleton before the F22
+        // phase; the wanted slots are a subset of it
+        const auto& before = *endpoint.skeleton_before;
+        for (int64_t w : *endpoint.wanted) {
+            const auto it = std::find(before.begin(), before.end(), w);
+            if (it == before.end()) {
+                throw std::runtime_error(
+                    "lazy_far_locate_endpoint_rows: a wanted slot outside the skeleton before the F22 phase "
+                    "(source " + std::to_string(source_box->morton_index) + ", endpoint " +
+                    std::to_string(endpoint.morton) + ")");
+            }
+            row_positions.push_back(static_cast<int64_t>(it - before.begin()));
+        }
+        return true;
+    }
     if (endpoint.skeleton != nullptr &&
         slot_count == static_cast<int64_t>(endpoint.skeleton->size())) {
         // Slot rows are the endpoint's skeleton. The reader must want exactly
@@ -8701,6 +8838,7 @@ void gather_id_target_streamed(
     bool on_boundary,
     double id_tolerance) {
 
+    BoxWorkScope box_work;  // (no QRCP helper task held on this thread)
     scratch.streamed_sketch_valid = false;
     scratch.id_adaptive = IDAdaptiveStats{};
 
@@ -8867,6 +9005,7 @@ void gather_id_target_streamed(
     col_end.morton = box->morton_index;
     col_end.full_size = n;
     col_end.skeleton = &box->skeleton_indices;
+    col_end.skeleton_before = &box->skeleton_before_f22;
     col_end.wanted = nullptr;
     col_end.wanted_count = n;
     col_end.indices = box->point_indices.data();
@@ -8900,9 +9039,10 @@ void gather_id_target_streamed(
     // Computes P_E = X_RR_full_E * temp2_E[B-rows]^T (r x n) for box-source s
     // into P (r x n), through the row positions and the TB gather buffer
     // given; may set box_src_r[s] = 0 (nothing to contribute).  `split`: the
-    // P product's column split (1 inside a task).
+    // P product's column split; `pieces`: its calls cut further over tasks
+    // (split_columns_chunked_in_pieces: the same bits).
     auto compute_P_into = [&](size_t s, std::vector<int64_t>& positions, std::vector<DataType>& TB,
-                              DataType* P, int split) -> const DataType* {
+                              DataType* P, int split, bool pieces) -> const DataType* {
         BoxData<CoordType, DataType>* src_box = box_src_boxes[s];
         const int64_t r = box_src_r[s];
         if (r == 0 || !src_box->X_NR.is_allocated()) {
@@ -8950,18 +9090,23 @@ void gather_id_target_streamed(
             int lda = static_cast<int>(src_box->X_RR_full.lda);
             int ldb = static_cast<int>(n);
             int ldc = static_cast<int>(r);
-            split_columns_chunked(n, Kp, [&](int64_t c0, int64_t c1) {
+            auto product = [&](int64_t c0, int64_t c1) {
                 int n_t = static_cast<int>(c1 - c0);
                 gemm_("N", "T", &m_i, &n_t, &k_i, &alpha, src_box->X_RR_full.data.data(), &lda,
                       TB.data() + c0, &ldb, &beta, P + c0 * r, &ldc);
-            });
+            };
+            if (pieces) {
+                split_columns_chunked_in_pieces(n, Kp, product);
+            } else {
+                split_columns_chunked(n, Kp, product);
+            }
         }
         return P;
     };
     // ... into the box's single P slot (the loop over the sources below)
     auto compute_P = [&](size_t s) -> const DataType* {
         return compute_P_into(s, scratch.stream_positions, scratch.stream_Trow, P_all.data(),
-                              scratch.split_threads);
+                              scratch.split_threads, h2_pieces(scratch.split_threads));
     };
 
     // ------------------------------------------------------------------
@@ -9415,7 +9560,8 @@ void gather_id_target_streamed(
     if (sketch_space_fill && scratch.split_threads > 1 && box_src_mortons.size() > 1) {
         // A small wave (fewer boxes than threads, 2026-10-22): the sources'
         // P_E and W_E in parallel across the threads the wave leaves idle,
-        // one task a source, then folded into the sketch by column chunks,
+        // one task a source (h2_pieces: its P product in column pieces over
+        // the team), then folded into the sketch by column chunks (pieces),
         // every chunk taking the sources in their order - the same operations
         // in the same sequence on every entry as the loop below.
         const size_t nsrc = box_src_mortons.size();
@@ -9436,14 +9582,16 @@ void gather_id_target_streamed(
         FMM_PHASE_LAP_BEGIN(fill_lap);
         std::exception_ptr fill_failure;
         std::mutex fill_failure_mutex;
-        const int fill_tasks = static_cast<int>(std::min<size_t>(nsrc, static_cast<size_t>(scratch.split_threads)));
+        const bool pieces = h2_pieces(scratch.split_threads);
+        const int fill_tasks = static_cast<int>(
+            pieces ? nsrc : std::min<size_t>(nsrc, static_cast<size_t>(scratch.split_threads)));
         #pragma omp taskloop num_tasks(fill_tasks) default(shared)
         for (size_t s = 0; s < nsrc; ++s) {
             auto& ps = per_source[s];
             ps.any_rows = false;
             try {
                 ps.P.resize(static_cast<size_t>(std::max<int64_t>(box_src_r[s], 1) * n));
-                compute_P_into(s, ps.positions, ps.Trow, ps.P.data(), 1);
+                compute_P_into(s, ps.positions, ps.Trow, ps.P.data(), 1, pieces);
                 const int64_t r = box_src_r[s];
                 if (r > 0) {
                     ps.any_rows = accumulate_W(s, box_src_boxes[s], r, ps.positions, ps.Trow, ps.TrowT, ps.W, false);
@@ -9461,7 +9609,7 @@ void gather_id_target_streamed(
             int ldc = static_cast<int>(n);
             DataType alpha = DataType{-1.0};
             DataType beta = DataType{1.0};
-            split_columns_chunked(d, scratch.split_threads, [&](int64_t c0, int64_t c1) {
+            auto fold = [&](int64_t c0, int64_t c1) {
                 int n_t = static_cast<int>(c1 - c0);
                 for (size_t s = 0; s < nsrc; ++s) {
                     const int64_t r = box_src_r[s];
@@ -9471,7 +9619,12 @@ void gather_id_target_streamed(
                     gemm_("T", "N", &m_i, &n_t, &k_i, &alpha, per_source[s].P.data(), &ld,
                           per_source[s].W.data() + c0 * r, &ld, &beta, Oacc.data() + c0 * n, &ldc);
                 }
-            });
+            };
+            if (pieces) {
+                split_columns_chunked_in_pieces(d, scratch.split_threads, fold);
+            } else {
+                split_columns_chunked(d, scratch.split_threads, fold);
+            }
         }
         FMM_PHASE_LAP(fill_lap, SK_FILL_GEMM);
     } else if (sketch_space_fill) {
@@ -9503,11 +9656,16 @@ void gather_id_target_streamed(
             int ldb = static_cast<int>(r);
             int ldc = static_cast<int>(n);
             const int Kg = scratch.split_threads;
-            split_columns_chunked(d, Kg, [&](int64_t c0, int64_t c1) {
+            auto fold = [&](int64_t c0, int64_t c1) {
                 int n_t = static_cast<int>(c1 - c0);
                 gemm_("T", "N", &m_i, &n_t, &k_i, &alpha, P, &lda, W.data() + c0 * r, &ldb,
                       &beta, Oacc.data() + c0 * n, &ldc);
-            });
+            };
+            if (h2_pieces(Kg)) {
+                split_columns_chunked_in_pieces(d, Kg, fold);
+            } else {
+                split_columns_chunked(d, Kg, fold);
+            }
             FMM_PHASE_LAP(gemm_lap, SK_FILL_GEMM);
         }
     }
@@ -9546,7 +9704,8 @@ void gather_id_target_streamed(
     int64_t sketch_rows = d;
     append_adaptive_id_training_rows(
         tree, box, kernel, id_tolerance, true,
-        scratch.sketch_storage, sketch_rows, n, &scratch.id_adaptive);
+        scratch.sketch_storage, sketch_rows, n, &scratch.id_adaptive,
+        nullptr, nullptr, scratch.split_threads);
 
     scratch.workspace_rows = total_rows + (sketch_rows - d);
     scratch.workspace_cols = n;
@@ -9578,8 +9737,13 @@ void gather_id_target_streamed_nonsymmetric(
     KernelType* kernel,
     FactorizationThreadScratch<CoordType, DataType>& scratch,
     bool on_boundary,
-    double id_tolerance) {
+    double id_tolerance,
+    const std::vector<int64_t>* column_slots = nullptr) {
+    // column_slots (H2_partial's F22 phase): the target's columns are these
+    // slots of the box (an eliminated box's skeleton before the phase), the
+    // fill located through them; else every point of the box.
 
+    BoxWorkScope box_work;  // (no QRCP helper task held on this thread)
     scratch.streamed_sketch_valid = false;
     scratch.id_adaptive = IDAdaptiveStats{};
     if (box == nullptr || box->num_points == 0) {
@@ -9592,7 +9756,18 @@ void gather_id_target_streamed_nonsymmetric(
     }
 
     const int dimension = tree->dimension;
-    const int64_t n = box->num_points;
+    std::vector<int64_t> column_ids_storage;
+    if (column_slots != nullptr) {
+        column_ids_storage.reserve(column_slots->size());
+        for (int64_t slot : *column_slots) column_ids_storage.push_back(box->point_indices[static_cast<size_t>(slot)]);
+    }
+    const int64_t n = column_slots != nullptr ? static_cast<int64_t>(column_slots->size()) : box->num_points;
+    const int64_t* column_ids = column_slots != nullptr ? column_ids_storage.data() : box->point_indices.data();
+    if (n == 0) {
+        scratch.workspace_rows = 0;
+        scratch.workspace_cols = 0;
+        return;
+    }
     const std::vector<int64_t> extra = select_static_id_training_indices(tree, box);
     const int64_t n_extra = static_cast<int64_t>(extra.size());
     for (size_t idx = 0; idx < box->one_hop.size(); ++idx) {
@@ -9622,6 +9797,7 @@ void gather_id_target_streamed_nonsymmetric(
     std::vector<int64_t> ring_full(num_ring, 0);
     std::vector<const std::vector<int64_t>*> ring_skeleton(num_ring, nullptr);
     std::vector<const std::vector<int64_t>*> ring_wanted(num_ring, nullptr);
+    std::vector<const std::vector<int64_t>*> ring_before(num_ring, nullptr);  // H2_partial: before the F22 phase
     std::vector<std::vector<int64_t>> ring_points(num_ring);
     std::vector<LazyFarSource> pair_sources;
     int64_t far_rows = 0;
@@ -9636,6 +9812,7 @@ void gather_id_target_streamed_nonsymmetric(
         if (BoxData<CoordType, DataType>* nb = resolve_neighbor(morton)) {
             points = &nb->point_indices;
             skeleton = &nb->skeleton_indices;
+            ring_before[f] = &nb->skeleton_before_f22;
             const bool full_boundary_pair = on_boundary && nb->on_boundary && pair_sources.empty();
             use_skeleton = !full_boundary_pair && sketch_box_eliminated(level, morton);
         } else {
@@ -9755,7 +9932,7 @@ void gather_id_target_streamed_nonsymmetric(
         // K(rows, B), (a x n), into row-major
         block_cm.resize(static_cast<size_t>(a * n));
         evaluate_block_by_index_split<DataType>(
-            kernel, row_points, a, box->point_indices.data(), n, block_cm.data(), a, scratch.split_threads);
+            kernel, row_points, a, column_ids, n, block_cm.data(), a, scratch.split_threads);
         block_rm.resize(static_cast<size_t>(a * n));
         constexpr int64_t tile = 32;
         for (int64_t i0 = 0; i0 < a; i0 += tile) {
@@ -9772,7 +9949,7 @@ void gather_id_target_streamed_nonsymmetric(
         // K(B, rows) (n x a) column-major: the rows of K(B, rows)^T, row-major
         block_rm.resize(static_cast<size_t>(a * n));
         evaluate_block_by_index_split<DataType>(
-            kernel, box->point_indices.data(), n, row_points, a, block_rm.data(), n, scratch.split_threads);
+            kernel, column_ids, n, row_points, a, block_rm.data(), n, scratch.split_threads);
     };
     // Entries through a collective callback with both sketch callbacks: the
     // kernel rows are not evaluated; their draws become Omega's entries, the
@@ -9840,7 +10017,7 @@ void gather_id_target_streamed_nonsymmetric(
             const Deferred& from = deferred[part];
             if (from.ids.empty()) continue;
             kernel_sketch_block(kernel, 0, from.ids.data(), static_cast<int64_t>(from.ids.size()),
-                                box->point_indices.data(), n, static_cast<int>(d),
+                                column_ids, n, static_cast<int>(d),
                                 static_cast<int64_t>(from.orow.size()), from.orow.data(), from.odest.data(),
                                 from.oval.data(), Yk.data(), d, part == 1);
             for (int64_t i = 0; i < d; ++i) {
@@ -9854,11 +10031,12 @@ void gather_id_target_streamed_nonsymmetric(
     if (!pair_src_mortons.empty()) {
         LazyFarEndpoint<CoordType> b_end;
         b_end.morton = box->morton_index;
-        b_end.full_size = n;
+        b_end.full_size = box->num_points;
         b_end.skeleton = &box->skeleton_indices;
-        b_end.wanted = nullptr;
+        b_end.skeleton_before = &box->skeleton_before_f22;
+        b_end.wanted = column_slots;
         b_end.wanted_count = n;
-        b_end.indices = box->point_indices.data();
+        b_end.indices = column_ids;
         std::vector<int64_t> sources;
         for (int64_t candidate : box->one_hop) {
             if (sketch_box_eliminated(level, candidate) &&
@@ -9867,6 +10045,7 @@ void gather_id_target_streamed_nonsymmetric(
             }
         }
         auto& positions = scratch.stream_positions;
+        std::vector<int64_t> b_positions;  // (column_slots: the box's rows; positions is reused for the ring's)
         std::vector<DataType> P1, P2, W1, W2, side;
         for (int64_t src_morton : sources) {
             BoxData<CoordType, DataType>* src = resolve_source(src_morton);
@@ -9885,6 +10064,13 @@ void gather_id_target_streamed_nonsymmetric(
             const int64_t temp2_ld = src->X_NR.lda;
             int64_t b_off = 0, b_count = 0;
             if (!lazy_far_locate_endpoint_rows(src, b_end, b_off, b_count, positions)) continue;
+            if (column_slots != nullptr) {
+                b_positions.assign(positions.begin(), positions.end());
+                if (static_cast<int64_t>(b_positions.size()) != n) {
+                    throw std::logic_error("gather_id_target_streamed_nonsymmetric: the columns' rows in fill source " +
+                                           std::to_string(src_morton) + " not located");
+                }
+            }
 
             // W1 (W2): the sketched temp2_E rows (temp4_E columns) of the
             // blocks listing E, (r x d) column-major
@@ -9907,6 +10093,7 @@ void gather_id_target_streamed_nonsymmetric(
                 f_end.morton = box->two_hop[f];
                 f_end.full_size = ring_full[f];
                 f_end.skeleton = ring_skeleton[f];
+                f_end.skeleton_before = ring_before[f];
                 f_end.wanted = ring_wanted[f];
                 f_end.wanted_count = a;
                 int64_t f_off = 0, f_count = 0;
@@ -9938,8 +10125,9 @@ void gather_id_target_streamed_nonsymmetric(
             if (!any) continue;
 
             // P1 = X_RR_E temp4_E[:, B], P2 = X_RR_E^T temp2_E[B]^T (r x n);
-            // B's rows of a source are its full point set, in order
-            if (b_count != n) {
+            // B's rows of a source are its full point set, in order (or,
+            // with column_slots, the located positions)
+            if (column_slots == nullptr && b_count != n) {
                 throw std::runtime_error(
                     "gather_id_target_streamed_nonsymmetric: the box's slot in a fill source is not its full point set");
             }
@@ -9951,6 +10139,22 @@ void gather_id_target_streamed_nonsymmetric(
                 int lda = static_cast<int>(src->X_RR_full.lda);
                 DataType one = 1.0;
                 DataType zero = 0.0;
+                if (column_slots != nullptr) {
+                    // the columns' rows of the source gathered contiguously
+                    std::vector<DataType> t4g(static_cast<size_t>(r * n)), t2g(static_cast<size_t>(n * r));
+                    for (int64_t c = 0; c < n; ++c) {
+                        const int64_t row = b_off + b_positions[static_cast<size_t>(c)];
+                        std::copy_n(temp4 + row * r, r, t4g.data() + c * r);
+                        for (int64_t j = 0; j < r; ++j) t2g[static_cast<size_t>(c + j * n)] = temp2[row + j * temp2_ld];
+                    }
+                    int n_t = static_cast<int>(n);
+                    int ldb4 = static_cast<int>(r);
+                    gemm_("N", "N", &m_i, &n_t, &k_i, &one, src->X_RR_full.data.data(), &lda, t4g.data(), &ldb4, &zero,
+                          P1.data(), &m_i);
+                    int ldb2 = static_cast<int>(n);
+                    gemm_("T", "T", &m_i, &n_t, &k_i, &one, src->X_RR_full.data.data(), &lda, t2g.data(), &ldb2, &zero,
+                          P2.data(), &m_i);
+                } else
                 split_columns_chunked(n, scratch.split_threads, [&](int64_t c0, int64_t c1) {
                     int n_t = static_cast<int>(c1 - c0);
                     int ldb4 = static_cast<int>(r);
@@ -9986,9 +10190,19 @@ void gather_id_target_streamed_nonsymmetric(
     for (int64_t j = 0; j < n; ++j) {
         for (int64_t i = 0; i < d; ++i) Y[static_cast<size_t>(i + j * d)] = Oacc[static_cast<size_t>(i * n + j)];
     }
-    // adaptive far rows (H2_ID_proxy 2), as gather_id_target_streamed's
+    // adaptive far rows (H2_ID_proxy 2), as gather_id_target_streamed's;
+    // H2_partial: selected for the columns the box's ID takes, the F11 ones
+    // (compute_id_partial), or in the F22 phase (column_slots) the F22 ones
     int64_t sketch_rows = d;
-    append_adaptive_id_training_rows(tree, box, kernel, id_tolerance, false, Y, sketch_rows, n, &scratch.id_adaptive);
+    std::vector<int64_t> id_columns;
+    const bool partial_ids = level.partial_count > 0 && tree->id_proxy_mode == 2;
+    if (partial_ids) {
+        for (int64_t c = 0; c < n; ++c) {
+            if ((column_ids[c] < level.partial_count) == (column_slots == nullptr)) id_columns.push_back(c);
+        }
+    }
+    append_adaptive_id_training_rows(tree, box, kernel, id_tolerance, false, Y, sketch_rows, n, &scratch.id_adaptive,
+                                     column_ids, partial_ids ? &id_columns : nullptr, scratch.split_threads);
     scratch.workspace_rows = total_rows + (sketch_rows - d);
     scratch.workspace_cols = n;
     scratch.streamed_sketch_rows = sketch_rows;
@@ -10014,6 +10228,7 @@ void compute_and_modify(
 
     static_assert(std::is_same_v<DataType, double> || std::is_same_v<DataType, std::complex<double>>,
                   "Only double precision supported currently");
+    BoxWorkScope box_work;  // (no QRCP helper task held on this thread)
     auto& workspace = scratch.workspace;
     const int64_t workspace_rows = scratch.workspace_rows;
     const int64_t workspace_cols = scratch.workspace_cols;
@@ -10108,23 +10323,33 @@ void compute_and_modify(
     IDResult<DataType> id_result;
     FMM_PHASE_LAP_BEGIN(box_lap);
     try {
-        if (scratch.streamed_sketch_valid) {
+        if (level.partial_count > 0) {
+            // H2_partial: the ID of the F11 columns, the F22 columns kept as
+            // skeleton (the production configuration: the streamed sketch)
+            if (!scratch.streamed_sketch_valid) {
+                throw std::logic_error("compute_and_modify: H2_partial needs the streamed sketch");
+            }
+            id_result = fmm::compute_id_partial(
+                sketch_storage.data(), scratch.streamed_sketch_rows, workspace_cols,
+                scratch.streamed_sketch_rows, tolerance.relative, tolerance.absolute,
+                box->point_indices, level.partial_count);
+        } else if (scratch.streamed_sketch_valid) {
             id_result = fmm::compute_id_complex(
                 sketch_storage.data(),
                 scratch.streamed_sketch_rows,
                 workspace_cols,
                 scratch.streamed_sketch_rows,
-                tolerance.relative, 0, tolerance.absolute);
+                tolerance.relative, 0, tolerance.absolute, scratch.split_threads);
         } else if (use_sketch != 0) {
             fmm::id_sketch(workspace.data(), workspace_rows, workspace_cols, workspace_rows, sketch_storage,
                            static_cast<uint64_t>(box->morton_index + 1));
             id_result = fmm::compute_id_complex(sketch_storage.data(), sketch_rows, workspace_cols, sketch_rows,
-                                                tolerance.relative, 0, tolerance.absolute);
+                                                tolerance.relative, 0, tolerance.absolute, scratch.split_threads);
         } else {
             id_result = fmm::compute_id_complex(
                 workspace.data(),
                 workspace_rows, workspace_cols, workspace_rows,
-                tolerance.relative, 0, tolerance.absolute
+                tolerance.relative, 0, tolerance.absolute, scratch.split_threads
             );
         }
         ensure_nonempty_box_id_rank(id_result, workspace_cols);
@@ -10225,6 +10450,20 @@ void compute_and_modify(
     int64_t r = box->redundant_indices.size();
     
     if (r == 0) {
+        // No redundant set, so none of what this function builds for one: a
+        // box rerun after its first pass was abandoned (an entry not fetched
+        // yet, H2EntryMiss at entry_checkpoint) still holds that pass's, whose
+        // ID, on placeholder entries, found a lower rank.  Left in place, the
+        // box reads as one with fill (emit_lazy_generators: incomplete state;
+        // seen with METIS orderings in STRUMPACK, whose small boxes come out
+        // full rank on the rerun).
+        box->X_RR = MatrixStorage<DataType>{};
+        box->X_RR_pivots.clear();
+        box->X_SR = MatrixStorage<DataType>{};
+        box->X_RS = MatrixStorage<DataType>{};
+        box->X_RR_full = MatrixStorage<DataType>{};
+        box->X_NR = MatrixStorage<DataType>{};
+        box->X_RN = MatrixStorage<DataType>{};
         if (store) {
             // A full-rank box has no X_NR rows, but owner payloads still carry
             // one row-count entry per one-hop slot.
@@ -10353,16 +10592,28 @@ void compute_and_modify(
     // Compute X_RR, X_RS, X_SR using BLAS
     box->X_RR.set_owned(r, r, std::move(A_RR), MatrixStorage<DataType>::FULL);
     
+    // (a small wave: the r x r products in column pieces over the idle
+    // threads, the same bits as one call)
+    auto r_by_r = [&](const auto& product) {
+        if (h2_pieces(scratch.split_threads)) {
+            gemm_column_pieces(r, product);
+        } else {
+            product(0, r);
+        }
+    };
     if (is_symmetric || is_hermitian) {
         std::vector<DataType> temp1(r * r, 0.0);
         int M = r, N = r, K = k;
         DataType alpha = -1.0, beta = 0.0;
         
         // Compute temp1 = -A_SR^T * T (use transpose since A_RS not allocated)
-        gemm_("T", "N", &M, &N, &K,
-               &alpha, A_SR.data(), &K,  // A_SR is (k × r), transposed to (r × k)
-               T.data.data(), &K,
-               &beta, temp1.data(), &M);
+        r_by_r([&](int64_t c0, int64_t c1) {
+            int columns = static_cast<int>(c1 - c0);
+            gemm_("T", "N", &M, &columns, &K,
+                   &alpha, A_SR.data(), &K,  // A_SR is (k × r), transposed to (r × k)
+                   T.data.data() + c0 * K, &K,
+                   &beta, temp1.data() + c0 * M, &M);
+        });
         
         for (int64_t j = 0; j < r; ++j) {
             for (int64_t i = 0; i < r; ++i) {
@@ -10382,10 +10633,13 @@ void compute_and_modify(
         M = r; N = r; K = k;
         alpha = 1.0; beta = 1.0;
         
-        gemm_("T", "N", &M, &N, &K,
-               &alpha, T.data.data(), &K,
-               temp2.data(), &K,
-               &beta, box->X_RR.data.data(), &M);
+        r_by_r([&](int64_t c0, int64_t c1) {
+            int columns = static_cast<int>(c1 - c0);
+            gemm_("T", "N", &M, &columns, &K,
+                   &alpha, T.data.data(), &K,
+                   temp2.data() + c0 * K, &K,
+                   &beta, box->X_RR.data.data() + c0 * M, &M);
+        });
         
     } else {
         int M = r, N = r, K = k;
@@ -11121,11 +11375,16 @@ void compute_and_modify(
         
         M = total_neighbor_points; N = r; K = k;
         alpha = -1.0; beta = 1.0;
-        
-        gemm_("N", "N", &M, &N, &K,
-               &alpha, A_NS_all.data(), &M,
-               T.data.data(), &K,
-               &beta, box->X_NR.data.data(), &M);
+
+        // (all the neighbours' rows: in a one-box wave of the top levels
+        // the box's largest product, in column pieces as r_by_r's)
+        r_by_r([&](int64_t c0, int64_t c1) {
+            int columns = static_cast<int>(c1 - c0);
+            gemm_("N", "N", &M, &columns, &K,
+                   &alpha, A_NS_all.data(), &M,
+                   T.data.data() + c0 * K, &K,
+                   &beta, box->X_NR.data.data() + c0 * M, &M);
+        });
 
         if (DEBUG) {
             // Check A_NS_all
@@ -12033,6 +12292,7 @@ std::vector<DataType> extract_child_interaction(
         endpoint.morton = child->morton_index;
         endpoint.full_size = child->num_points;
         endpoint.skeleton = &child->skeleton_indices;
+        endpoint.skeleton_before = &child->skeleton_before_f22;
         endpoint.wanted = &child->skeleton_indices;
         endpoint.wanted_count =
             static_cast<int64_t>(child->skeleton_indices.size());
@@ -12580,6 +12840,7 @@ std::vector<DataType> extract_or_evaluate_child_interaction_for_assisting(
         source_endpoint.morton = source_child->morton_index;
         source_endpoint.full_size = source_child->num_points;
         source_endpoint.skeleton = &source_child->skeleton_indices;
+        source_endpoint.skeleton_before = &source_child->skeleton_before_f22;
         source_endpoint.wanted = &source_child->skeleton_indices;
         source_endpoint.wanted_count = n_source;
         source_endpoint.indices = source_indices.data();
@@ -12597,6 +12858,7 @@ std::vector<DataType> extract_or_evaluate_child_interaction_for_assisting(
         if (target_box != nullptr) {
             target_endpoint.full_size = target_box->num_points;
             target_endpoint.skeleton = &target_box->skeleton_indices;
+            target_endpoint.skeleton_before = &target_box->skeleton_before_f22;
             target_endpoint.wanted = &target_box->skeleton_indices;
         } else {
             auto assist_it =
@@ -12612,6 +12874,7 @@ std::vector<DataType> extract_or_evaluate_child_interaction_for_assisting(
             target_endpoint.full_size =
                 static_cast<int64_t>(assist.indices.size());
             target_endpoint.skeleton = &assist.skel_indices;
+            target_endpoint.skeleton_before = &assist.skel_before;
             target_endpoint.wanted = &assist.skel_indices;
         }
 
@@ -12860,601 +13123,432 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions(
     std::atomic<bool> build_failed{false};
     const bool parallel_build = is_symmetric || is_hermitian;
 
-    omp_parallel_if(parallel_build && parent_boxes.size() > 1, [&] {
-        #pragma omp for schedule(dynamic)
-        for (int64_t b1_i = 0;
-             b1_i < static_cast<int64_t>(parent_boxes.size()); ++b1_i) {
-            const size_t b1_idx = static_cast<size_t>(b1_i);
-            if (build_failed.load(std::memory_order_relaxed)) continue;
-            try {
-            auto& B1 = parent_boxes[b1_idx];
-            // printf("Assembling interactions for parent box %lu (morton %lu)\n", 
-            //        b1_idx, B1.morton_index);
-            // fflush(stdout);
-            // Get relevant neighbors: [self, 1-hop]
-            std::vector<uint64_t> relevant_neighbors;
-            relevant_neighbors.push_back(B1.morton_index);
-        
-            std::vector<uint64_t> one_hop =
-                morton::neighbors_nd(dimension, B1.morton_index, grid_size);
-            relevant_neighbors.insert(relevant_neighbors.end(), one_hop.begin(), one_hop.end());
-        
-            for (uint64_t neighbor_morton : relevant_neighbors) {
-                LazyFarTransitionCache<DataType> pair_lazy_cache;
-            
-            
-            
-                // Check if neighbor is on-process or off-process
-                bool is_on_process = (neighbor_morton >= local_morton_start && 
-                                     neighbor_morton <= local_morton_end);
-            
-                // ===== DIAGONAL CASE =====
-                if (neighbor_morton == B1.morton_index) {
-                    int64_t total_rows = B1.num_points;
-                    int64_t total_cols = B1.num_points;
-                    std::vector<DataType> I_B1_B1(total_rows * total_cols);
-                
-                    int64_t row_offset = 0;
-                    int64_t first_child_b1 = b1_idx * num_children;
-                
-                    for (int ci = 0; ci < num_children; ++ci) {
-                        auto& child_i = child_level.local_boxes[first_child_b1 + ci];
-                        int64_t n_i = child_i.skeleton_indices.size();
-                    
-                        int64_t col_offset = 0;
-                        for (int cj = 0; cj < num_children; ++cj) {
-                            auto& child_j = child_level.local_boxes[first_child_b1 + cj];
-                            int64_t n_j = child_j.skeleton_indices.size();
-                        
-                            std::vector<DataType> C_block = extract_child_interaction(
-                                &child_i, &child_j, child_level, dimension, kernel,
-                                false, &pair_lazy_cache);
-                        
-                            for (int64_t col = 0; col < n_j; ++col) {
-                                for (int64_t row = 0; row < n_i; ++row) {
-                                    I_B1_B1[(row_offset + row) + (col_offset + col) * total_rows] = 
-                                        C_block[row + col * n_i];
-                                }
-                            }
-                            col_offset += n_j;
-                        }
-                        row_offset += n_i;
-                    }
-                
-                    B1.schur_complement.set_owned(
-                        total_rows, total_cols, std::move(I_B1_B1), MatrixStorage<DataType>::FULL);
-                    continue;
+    // A parent's blocks in three steps: a plan for each relevant neighbour
+    // (its case, its children, the assembled block allocated), the child
+    // blocks filled, then the blocks stored in neighbour order.  The fill is
+    // tasks (neighbour, column child), each over the row children with a lazy
+    // far cache of its own (the cache is keyed by the column child, so this
+    // reuses what one cache per neighbour did), each writing its own columns.
+    // With fewer parents than half the team (the top levels: one parent a
+    // rank) the parents go one after the other and the team takes the fill
+    // tasks; one parent a thread left 127 of 128 threads idle (the 160^3
+    // level-2 transition, 67 s on one thread, 2026-11-01).  Otherwise
+    // (symmetric) the team takes the parents, each filled by its thread.
+    enum class PlanKind { Diagonal, OnProcess, OffProcess };
+    struct NeighborPlan {
+        PlanKind kind = PlanKind::Diagonal;
+        uint64_t neighbor_morton = 0;
+        size_t b2_idx = 0;                          // OnProcess
+        std::vector<ChildInfo> b2_children;         // OffProcess
+        int64_t total_rows = 0;                     // B1's points
+        int64_t total_cols = 0;                     // the neighbour's points
+        std::vector<int64_t> b1_offsets;            // B1's children in its points
+        std::vector<int64_t> b2_offsets;            // the neighbour's children in its points
+        std::vector<DataType> I_B1_B2;              // total_rows x total_cols
+        std::vector<DataType> I_B2_B1;              // total_cols x total_rows (nonsymmetric, off process)
+    };
+    struct FillTask {
+        size_t plan;
+        int column_child;
+        bool reverse;   // I_B2_B1 of a nonsymmetric off-process plan
+    };
+    const int team = omp_in_parallel() ? 1 : std::max(1, omp_get_max_threads());
+    const bool fill_on_team =
+        team > 1 && 2 * static_cast<int64_t>(parent_boxes.size()) < team &&
+        !kernel_entries_collective(kernel, 0);
+
+    auto build_parent = [&](size_t b1_idx, bool parallel_fill) {
+        auto& B1 = parent_boxes[b1_idx];
+        const int64_t first_child_b1 = static_cast<int64_t>(b1_idx) * num_children;
+        auto b1_child = [&](int c) -> BoxData<CoordType, DataType>& {
+            return child_level.local_boxes[static_cast<size_t>(first_child_b1 + c)];
+        };
+
+        // Get relevant neighbors: [self, 1-hop]
+        std::vector<uint64_t> relevant_neighbors;
+        relevant_neighbors.push_back(B1.morton_index);
+        std::vector<uint64_t> one_hop =
+            morton::neighbors_nd(dimension, B1.morton_index, grid_size);
+        relevant_neighbors.insert(relevant_neighbors.end(), one_hop.begin(), one_hop.end());
+
+        // ===== plans =====
+        std::vector<int64_t> b1_offsets(static_cast<size_t>(num_children) + 1, 0);
+        for (int c = 0; c < num_children; ++c) {
+            b1_offsets[static_cast<size_t>(c) + 1] =
+                b1_offsets[static_cast<size_t>(c)] +
+                static_cast<int64_t>(b1_child(c).skeleton_indices.size());
+        }
+        std::vector<NeighborPlan> plans;
+        plans.reserve(relevant_neighbors.size());
+        for (uint64_t neighbor_morton : relevant_neighbors) {
+            // Check if neighbor is on-process or off-process
+            const bool is_on_process = (neighbor_morton >= static_cast<uint64_t>(local_morton_start) &&
+                                        neighbor_morton <= static_cast<uint64_t>(local_morton_end));
+            NeighborPlan plan;
+            plan.neighbor_morton = neighbor_morton;
+            plan.b1_offsets = b1_offsets;
+            plan.total_rows = B1.num_points;
+            plan.b2_offsets.assign(static_cast<size_t>(num_children) + 1, 0);
+            if (neighbor_morton == B1.morton_index) {
+                plan.kind = PlanKind::Diagonal;
+                plan.total_cols = B1.num_points;
+                plan.b2_offsets = b1_offsets;
+            } else if (is_on_process) {
+                // Both B1 and B2 on process - symmetric: lower triangular optimization
+                if ((is_symmetric || is_hermitian) && neighbor_morton < B1.morton_index) {
+                    continue; // Skip, already handled
                 }
-            
-                // ===== OFF-DIAGONAL CASES =====
-            
-                if (is_symmetric || is_hermitian) {
-                    // ========== SYMMETRIC CASE ==========
-                
-                    if (is_on_process) {
-                        // Both B1 and B2 on process - lower triangular optimization
-                        if (neighbor_morton < B1.morton_index) {
-                            continue; // Skip, already handled
-                        }
-                    
-                        size_t b2_idx = neighbor_morton - local_morton_start;
-                        auto& B2 = parent_boxes[b2_idx];
-                    
-                        int64_t total_rows = B1.num_points;
-                        int64_t total_cols = B2.num_points;
-                        std::vector<DataType> I_B1_B2(total_rows * total_cols);
-                    
-                        // Assemble I(B1, B2)
-                        int64_t row_offset = 0;
-                        int64_t first_child_b1 = b1_idx * num_children;
-                    
-                        for (int ci = 0; ci < num_children; ++ci) {
-                            auto& child_i = child_level.local_boxes[first_child_b1 + ci];
-                            int64_t n_i = child_i.skeleton_indices.size();
-                        
-                            int64_t col_offset = 0;
-                            int64_t first_child_b2 = b2_idx * num_children;
-                        
-                            for (int cj = 0; cj < num_children; ++cj) {
-                                auto& child_j = child_level.local_boxes[first_child_b2 + cj];
-                                int64_t n_j = child_j.skeleton_indices.size();
-                            
-                                std::vector<DataType> C_block = extract_child_interaction(
-                                    &child_i, &child_j, child_level, dimension, kernel,
-                                    false, &pair_lazy_cache);
-                            
-                                for (int64_t col = 0; col < n_j; ++col) {
-                                    for (int64_t row = 0; row < n_i; ++row) {
-                                        I_B1_B2[(row_offset + row) + (col_offset + col) * total_rows] = 
-                                            C_block[row + col * n_i];
-                                    }
-                                }
-                                col_offset += n_j;
-                            }
-                            row_offset += n_i;
-                        }
-                    
-                        ModifiedBlock<DataType> block_b1;
-                        block_b1.neighbor_morton = B2.morton_index;
-                        ModifiedBlock<DataType> block_b2;
-                        block_b2.neighbor_morton = B1.morton_index;
-
-                        if (is_symmetric && !is_hermitian) {
-                            // B2 owns the already assembled payload; B1 is its
-                            // transpose view of the same allocation.
-                            block_b2.set_a_ns_owned(
-                                total_rows, total_cols, std::move(I_B1_B2),
-                                MatrixStorage<DataType>::FULL);
-                            if (!share_symmetric_a_ns_pair(block_b2, block_b1)) {
-                                throw std::runtime_error(
-                                    "build_parent_level: cannot share symmetric parent edge");
-                            }
-                        } else {
-                            // Preserve the directed Hermitian path until conjugate
-                            // views are represented explicitly.
-                            std::vector<DataType> I_transposed(
-                                static_cast<size_t>(total_rows * total_cols));
-                            for (int64_t i = 0; i < total_rows; ++i) {
-                                for (int64_t j = 0; j < total_cols; ++j) {
-                                    I_transposed[static_cast<size_t>(
-                                        j + i * total_cols)] =
-                                        I_B1_B2[static_cast<size_t>(
-                                            i + j * total_rows)];
-                                }
-                            }
-                            block_b1.set_a_ns_owned(
-                                total_cols, total_rows, std::move(I_transposed),
-                                MatrixStorage<DataType>::FULL);
-                            block_b2.set_a_ns_owned(
-                                total_rows, total_cols, std::move(I_B1_B2),
-                                MatrixStorage<DataType>::FULL);
-                        }
-
-                        int64_t block_idx_b1 =
-                            B1.near_field_modified_interactions.size();
-                        B1.near_field_modified_interactions.push_back(
-                            std::move(block_b1));
-                        B1.near_field_interaction_map[B2.morton_index] =
-                            block_idx_b1;
-
-                        deferred_parent_blocks[b1_idx].push_back(
-                            DeferredParentBlock{b2_idx, std::move(block_b2)});
-                    
-                    } else {
-                    
-                        // B2 is off-process (ghost or assisting) - store only B1's view
-                    
-                        // Find B2's children (check ghost first, then assisting)
-                        std::vector<ChildInfo> b2_children;
-                        for (int c = 0; c < num_children; ++c) {
-                            int64_t child_morton = neighbor_morton * num_children + c;
-                        
-                            // Check ghost boxes first
-                            auto ghost_it = child_level.ghost_id_to_index.find(child_morton);
-                            if (ghost_it != child_level.ghost_id_to_index.end()) {
-                                auto& ghost_box = child_level.ghost_boxes[ghost_it->second];
-                                ChildInfo info;
-                                info.box_ptr = &ghost_box;
-                                info.indices_ptr = ghost_box.point_indices;
-                                info.num_points = ghost_box.skeleton_indices.size();
-                                info.is_ghost = true;
-                                b2_children.push_back(info);
-                                continue;
-                            }
-                        
-                            // Check assisting boxes
-                            // printf("map size: %lu\n", child_level.assisting_box_points_for_kernel_evaluation.size());
-                            auto assist_it = child_level.assisting_box_points_for_kernel_evaluation.find(child_morton);
-                            if (assist_it != child_level.assisting_box_points_for_kernel_evaluation.end()) {
-                            
-                                auto& assist_box = child_level.assisting_boxes[assist_it->second];
-                                ChildInfo info;
-                                info.box_ptr = nullptr; 
-                                info.indices_ptr = extract_skeleton_indices(assist_box, dimension);
-                                info.num_points = assist_box.skel_indices.size();
-                                info.is_ghost = false;
-                                b2_children.push_back(info); 
-                                continue;
-                            }
-
-                        
-                        
-                            // Not found anywhere
-                            throw std::runtime_error(
-                                "build_parent_level: Child " + std::to_string(child_morton) + 
-                                " not found in ghost_boxes or assisting_boxes");
-                        }
-                    
-                        // Calculate B2's total points
-                        int64_t total_cols = 0;
-                        for (const auto& info : b2_children) {
-                            total_cols += info.num_points;
-                        }
-                    
-                        int64_t total_rows = B1.num_points;
-                        std::vector<DataType> I_B1_B2(total_rows * total_cols);
-                    
-                        // Assemble I(B1, B2) using only B1's children
-                        int64_t row_offset = 0;
-                        int64_t first_child_b1 = b1_idx * num_children;
-                    
-                        std::vector<DataType> C_block;
-                        for (int ci = 0; ci < num_children; ++ci) {
-                            auto& child_i = child_level.local_boxes[first_child_b1 + ci];
-                            int64_t n_i = child_i.skeleton_indices.size();
-                        
-                            int64_t col_offset = 0;
-                            for (int cj = 0; cj < num_children; ++cj) {
-                                const auto& child_j_info = b2_children[cj];
-                                int64_t n_j = child_j_info.num_points;
-                            
-                            
-                            
-                                if (child_j_info.is_ghost) {
-                                    // Use extract_child_interaction for ghost boxes
-                                    C_block = extract_child_interaction(
-                                        &child_i, child_j_info.box_ptr, child_level,
-                                        dimension, kernel, false, &pair_lazy_cache);
-                                
-                                } else {
-                                    // // Direct kernel evaluation for assisting boxes
-                                    // C_block.resize(n_i * n_j);
-                                
-                                    // // Extract skeleton coords from child_i
-                                    // std::vector<CoordType> child_i_skel_coords(n_i * dimension);
-                                    // for (int64_t idx = 0; idx < n_i; ++idx) {
-                                    //     int64_t skel_idx = child_i.skeleton_indices[idx];
-                                    //     for (int d = 0; d < dimension; ++d) {
-                                    //         child_i_skel_coords[idx * dimension + d] = 
-                                    //             child_i.point_coords[skel_idx * dimension + d];
-                                    //     }
-                                    // }
-                                
-                                    // kernel->evaluate_block(
-                                    //     child_i_skel_coords.data(), n_i,
-                                    //     child_j_info.coords_ptr.data(), n_j,
-                                    //     C_block.data(), n_i);
-                                    // Assisting box - try to find in child_i's modified interactions first
-                                    int64_t child_j_morton = neighbor_morton * num_children + cj;
-                                    C_block = extract_or_evaluate_child_interaction_for_assisting(
-                                        &child_i,           // Looking in child_i's storage
-                                        child_j_morton,     // For neighbor child_j
-                                        child_j_info.indices_ptr,
-                                        n_i, 
-                                        n_j,
-                                        child_level,
-                                        dimension,
-                                        kernel,
-                                        true, // transpose source-owned A_NS
-                                        &pair_lazy_cache
-                                    );
-                                }
-                            
-                                for (int64_t col = 0; col < n_j; ++col) {
-                                    for (int64_t row = 0; row < n_i; ++row) {
-                                        I_B1_B2[(row_offset + row) + (col_offset + col) * total_rows] = 
-                                            C_block[row + col * n_i];
-                                    }
-                                }
-                                col_offset += n_j;
-                            }
-                            row_offset += n_i;
-                        }
-                    
-                        // Transpose for B1's A_NS view (B2 × B1)
-                        std::vector<DataType> I_transposed(total_rows * total_cols);
-                        for (int64_t i = 0; i < total_rows; ++i) {
-                            for (int64_t j = 0; j < total_cols; ++j) {
-                                I_transposed[j + i * total_cols] = I_B1_B2[i + j * total_rows];
-                            }
-                        }
-                    
-                        // Store only B1's view
-                        ModifiedBlock<DataType> block_b1;
-                        block_b1.neighbor_morton = neighbor_morton;
-                        block_b1.set_a_ns_owned(
-                            total_cols, total_rows, std::move(I_transposed), MatrixStorage<DataType>::FULL);
-                    
-                        int64_t block_idx_b1 = B1.near_field_modified_interactions.size();
-                        B1.near_field_modified_interactions.push_back(std::move(block_b1));
-                        B1.near_field_interaction_map[neighbor_morton] = block_idx_b1;
+                plan.kind = PlanKind::OnProcess;
+                plan.b2_idx = neighbor_morton - local_morton_start;
+                plan.total_cols = parent_boxes[plan.b2_idx].num_points;
+                const int64_t first_child_b2 = static_cast<int64_t>(plan.b2_idx) * num_children;
+                for (int c = 0; c < num_children; ++c) {
+                    plan.b2_offsets[static_cast<size_t>(c) + 1] =
+                        plan.b2_offsets[static_cast<size_t>(c)] +
+                        static_cast<int64_t>(child_level.local_boxes[
+                            static_cast<size_t>(first_child_b2 + c)].skeleton_indices.size());
+                }
+            } else {
+                // B2 is off-process (ghost or assisting)
+                plan.kind = PlanKind::OffProcess;
+                // Find B2's children (check ghost first, then assisting)
+                for (int c = 0; c < num_children; ++c) {
+                    int64_t child_morton = neighbor_morton * num_children + c;
+                    auto ghost_it = child_level.ghost_id_to_index.find(child_morton);
+                    if (ghost_it != child_level.ghost_id_to_index.end()) {
+                        auto& ghost_box = child_level.ghost_boxes[ghost_it->second];
+                        ChildInfo info;
+                        info.box_ptr = &ghost_box;
+                        info.indices_ptr = ghost_box.point_indices;
+                        info.num_points = ghost_box.skeleton_indices.size();
+                        info.is_ghost = true;
+                        plan.b2_children.push_back(info);
+                        continue;
                     }
-                
-                } else {
-                    // ========== NONSYMMETRIC CASE ==========
-                
-                    if (is_on_process) {
-                        // Both on process - always process (no triangular optimization)
-                    
-                        size_t b2_idx = neighbor_morton - local_morton_start;
-                        auto& B2 = parent_boxes[b2_idx];
-                    
-                        int64_t total_rows = B1.num_points;
-                        int64_t total_cols = B2.num_points;
-                        std::vector<DataType> I_B1_B2(total_rows * total_cols);
-                    
-                        // Assemble I(B1, B2)
-                        int64_t row_offset = 0;
-                        int64_t first_child_b1 = b1_idx * num_children;
-                    
-                        for (int ci = 0; ci < num_children; ++ci) {
-                            auto& child_i = child_level.local_boxes[first_child_b1 + ci];
-                            int64_t n_i = child_i.skeleton_indices.size();
-                        
-                            int64_t col_offset = 0;
-                            int64_t first_child_b2 = b2_idx * num_children;
-                        
-                            for (int cj = 0; cj < num_children; ++cj) {
-                                auto& child_j = child_level.local_boxes[first_child_b2 + cj];
-                                int64_t n_j = child_j.skeleton_indices.size();
-                            
-                                std::vector<DataType> C_block = extract_child_interaction(
-                                    &child_i, &child_j, child_level, dimension, kernel,
-                                    false, &pair_lazy_cache);
-                            
-                                for (int64_t col = 0; col < n_j; ++col) {
-                                    for (int64_t row = 0; row < n_i; ++row) {
-                                        I_B1_B2[(row_offset + row) + (col_offset + col) * total_rows] = 
-                                            C_block[row + col * n_i];
-                                    }
-                                }
-                                col_offset += n_j;
-                            }
-                            row_offset += n_i;
-                        }
-                    
-                        // Transpose for A_NS (B2 × B1)
-                        std::vector<DataType> I_transposed(total_rows * total_cols);
-                        for (int64_t i = 0; i < total_rows; ++i) {
-                            for (int64_t j = 0; j < total_cols; ++j) {
-                                I_transposed[j + i * total_cols] = I_B1_B2[i + j * total_rows];
-                            }
-                        }
-                    
-                        // Store A_NS for B1
-                        ModifiedBlock<DataType> block_b1;
-                        block_b1.neighbor_morton = B2.morton_index;
-                        block_b1.A_NS.allocate(total_cols, total_rows, MatrixStorage<DataType>::FULL);
-                        block_b1.A_NS.data = I_transposed;
-                    
-                        int64_t block_idx_b1 = B1.near_field_modified_interactions.size();
-                        B1.near_field_modified_interactions.push_back(std::move(block_b1));
-                        B1.near_field_interaction_map_nonsymmetry[B2.morton_index] = block_idx_b1;
-                    
-                        // Store A_SN for B2
-                        ModifiedBlock<DataType> block_b2;
-                        block_b2.neighbor_morton = B1.morton_index;
-                        block_b2.A_SN.set_owned(
-                            total_cols, total_rows, std::move(I_transposed), MatrixStorage<DataType>::FULL);
-                    
-                        int64_t block_idx_b2 = B2.near_field_modified_interactions.size();
-                        B2.near_field_modified_interactions.push_back(std::move(block_b2));
-                        B2.near_field_interaction_map_nonsymmetry[B1.morton_index] = block_idx_b2;
-                    
+                    auto assist_it = child_level.assisting_box_points_for_kernel_evaluation.find(child_morton);
+                    if (assist_it != child_level.assisting_box_points_for_kernel_evaluation.end()) {
+                        auto& assist_box = child_level.assisting_boxes[assist_it->second];
+                        ChildInfo info;
+                        info.box_ptr = nullptr;
+                        info.indices_ptr = extract_skeleton_indices(assist_box, dimension);
+                        info.num_points = assist_box.skel_indices.size();
+                        info.is_ghost = false;
+                        plan.b2_children.push_back(info);
+                        continue;
+                    }
+                    // Not found anywhere
+                    throw std::runtime_error(
+                        "build_parent_level: Child " + std::to_string(child_morton) +
+                        " not found in ghost_boxes or assisting_boxes");
+                }
+                for (int c = 0; c < num_children; ++c) {
+                    plan.b2_offsets[static_cast<size_t>(c) + 1] =
+                        plan.b2_offsets[static_cast<size_t>(c)] +
+                        plan.b2_children[static_cast<size_t>(c)].num_points;
+                }
+                plan.total_cols = plan.b2_offsets[static_cast<size_t>(num_children)];
+                if (!is_symmetric && !is_hermitian) {
+                    plan.I_B2_B1.resize(static_cast<size_t>(plan.total_cols * plan.total_rows));
+                }
+            }
+            plan.I_B1_B2.resize(static_cast<size_t>(plan.total_rows * plan.total_cols));
+            plans.push_back(std::move(plan));
+        }
+
+        // ===== the child blocks =====
+        std::vector<FillTask> tasks;
+        for (size_t p = 0; p < plans.size(); ++p) {
+            for (int cj = 0; cj < num_children; ++cj) {
+                tasks.push_back(FillTask{p, cj, false});
+                if (!plans[p].I_B2_B1.empty()) tasks.push_back(FillTask{p, cj, true});
+            }
+        }
+        auto fill = [&](const FillTask& task) {
+            auto& plan = plans[task.plan];
+            const int cj = task.column_child;
+            LazyFarTransitionCache<DataType> pair_lazy_cache;
+            if (!task.reverse) {
+                // I(B1, B2), column child cj of B2, its rows from B1's children
+                const int64_t ld = plan.total_rows;
+                const int64_t col_offset = plan.b2_offsets[static_cast<size_t>(cj)];
+                const int64_t n_j = plan.b2_offsets[static_cast<size_t>(cj) + 1] - col_offset;
+                for (int ci = 0; ci < num_children; ++ci) {
+                    auto& child_i = b1_child(ci);
+                    const int64_t n_i = static_cast<int64_t>(child_i.skeleton_indices.size());
+                    const int64_t row_offset = plan.b1_offsets[static_cast<size_t>(ci)];
+                    std::vector<DataType> C_block;
+                    if (plan.kind == PlanKind::Diagonal) {
+                        C_block = extract_child_interaction(
+                            &child_i, &b1_child(cj), child_level, dimension, kernel,
+                            false, &pair_lazy_cache);
+                    } else if (plan.kind == PlanKind::OnProcess) {
+                        auto& child_j = child_level.local_boxes[
+                            plan.b2_idx * static_cast<size_t>(num_children) + static_cast<size_t>(cj)];
+                        C_block = extract_child_interaction(
+                            &child_i, &child_j, child_level, dimension, kernel,
+                            false, &pair_lazy_cache);
                     } else {
-                        // B2 is off-process (ghost or assisting) - store both A_NS and A_SN for B1
-                    
-                        // Find B2's children (check ghost first, then assisting)
-                        std::vector<ChildInfo> b2_children;
-                        for (int c = 0; c < num_children; ++c) {
-                            int64_t child_morton = neighbor_morton * num_children + c;
-                        
-                            // Check ghost boxes first
-                            auto ghost_it = child_level.ghost_id_to_index.find(child_morton);
-                            if (ghost_it != child_level.ghost_id_to_index.end()) {
-                                auto& ghost_box = child_level.ghost_boxes[ghost_it->second];
-                                ChildInfo info;
-                                info.box_ptr = &ghost_box;
-                                info.indices_ptr = ghost_box.point_indices;
-                                info.num_points = ghost_box.skeleton_indices.size();
-                                info.is_ghost = true;
-                                b2_children.push_back(info);
-                                continue;
-                            }
-                        
-                            // Check assisting boxes
-                            auto assist_it = child_level.assisting_box_points_for_kernel_evaluation.find(child_morton);
-                            if (assist_it != child_level.assisting_box_points_for_kernel_evaluation.end()) {
-                                auto& assist_box = child_level.assisting_boxes[assist_it->second];
-                                ChildInfo info;
-                                info.box_ptr = nullptr;
-                                info.indices_ptr = extract_skeleton_indices(assist_box, dimension);
-                                info.num_points = assist_box.skel_indices.size();
-                                info.is_ghost = false;
-                                b2_children.push_back(info);
-                                continue;
-                            }
-                        
-                            // Not found anywhere
-                            throw std::runtime_error(
-                                "build_parent_level: Child " + std::to_string(child_morton) + 
-                                " not found in ghost_boxes or assisting_boxes");
+                        const auto& child_j_info = plan.b2_children[static_cast<size_t>(cj)];
+                        if (child_j_info.is_ghost) {
+                            C_block = extract_child_interaction(
+                                &child_i, child_j_info.box_ptr, child_level,
+                                dimension, kernel, false, &pair_lazy_cache);
+                        } else {
+                            // Assisting box - try to find in child_i's modified interactions first
+                            int64_t child_j_morton = plan.neighbor_morton * num_children + cj;
+                            C_block = extract_or_evaluate_child_interaction_for_assisting(
+                                &child_i,           // Looking in child_i's storage
+                                child_j_morton,     // For neighbor child_j
+                                child_j_info.indices_ptr,
+                                n_i,
+                                n_j,
+                                child_level,
+                                dimension,
+                                kernel,
+                                true, // transpose source-owned A_NS
+                                &pair_lazy_cache);
                         }
-                    
-                        // Calculate B2's total points
-                        int64_t total_cols = 0;
-                        for (const auto& info : b2_children) {
-                            total_cols += info.num_points;
+                    }
+                    for (int64_t col = 0; col < n_j; ++col) {
+                        for (int64_t row = 0; row < n_i; ++row) {
+                            plan.I_B1_B2[(row_offset + row) + (col_offset + col) * ld] =
+                                C_block[row + col * n_i];
                         }
-                    
-                        int64_t total_rows = B1.num_points;
-                        int64_t first_child_b1 = b1_idx * num_children;
-                    
-                        // ===== Assemble I(B1, B2) for A_SN =====
-                        std::vector<DataType> I_B1_B2(total_rows * total_cols);
-                    
-                        int64_t row_offset = 0;
-                        for (int ci = 0; ci < num_children; ++ci) {
-                            auto& child_i = child_level.local_boxes[first_child_b1 + ci];
-                            int64_t n_i = child_i.skeleton_indices.size();
-                        
-                            // Extract skeleton coords from child_i
-                            std::vector<CoordType> child_i_skel_coords(n_i * dimension);
-                            for (int64_t idx = 0; idx < n_i; ++idx) {
-                                int64_t skel_idx = child_i.skeleton_indices[idx];
-                                for (int d = 0; d < dimension; ++d) {
-                                    child_i_skel_coords[idx * dimension + d] = 
-                                        child_i.point_coords[skel_idx * dimension + d];
-                                }
-                            }
-                        
-                            int64_t col_offset = 0;
-                            for (int cj = 0; cj < num_children; ++cj) {
-                                const auto& child_j_info = b2_children[cj];
-                                int64_t n_j = child_j_info.num_points;
-                            
-                                std::vector<DataType> C_block;
-                            
-                                if (child_j_info.is_ghost) {
-                                    C_block = extract_child_interaction(
-                                        &child_i, child_j_info.box_ptr, child_level,
-                                        dimension, kernel, false, &pair_lazy_cache);
-                                } else {
-                                    // // Direct kernel evaluation
-                                    // C_block.resize(n_i * n_j);
-                                    // kernel->evaluate_block(
-                                    //     child_i_skel_coords.data(), n_i,
-                                    //     child_j_info.coords_ptr.data(), n_j,
-                                    //     C_block.data(), n_i);
-                                    // Assisting box - try to find in child_i's modified interactions first
-                                    int64_t child_j_morton = neighbor_morton * num_children + cj;
-                                    C_block = extract_or_evaluate_child_interaction_for_assisting(
-                                        &child_i,           // Looking in child_i's storage
-                                        child_j_morton,     // For neighbor child_j
-                                        child_j_info.indices_ptr,
-                                        n_i, 
-                                        n_j,
-                                        child_level,
-                                        dimension,
-                                        kernel,
-                                        true,
-                                        &pair_lazy_cache
-                                    );
-                                }
-                            
-                                for (int64_t col = 0; col < n_j; ++col) {
-                                    for (int64_t row = 0; row < n_i; ++row) {
-                                        I_B1_B2[(row_offset + row) + (col_offset + col) * total_rows] = 
-                                            C_block[row + col * n_i];
-                                    }
-                                }
-                                col_offset += n_j;
-                            }
-                            row_offset += n_i;
-                        }
-                    
-                        // ===== Assemble I(B2, B1) for A_NS =====
-                        std::vector<DataType> I_B2_B1(total_cols * total_rows);
-                    
-                        row_offset = 0;
-                        for (int ci = 0; ci < num_children; ++ci) {
-                            const auto& child_i_info = b2_children[ci];
-                            int64_t n_i = child_i_info.num_points;
-                        
-                            int64_t col_offset = 0;
-                            for (int cj = 0; cj < num_children; ++cj) {
-                                auto& child_j = child_level.local_boxes[first_child_b1 + cj];
-                                int64_t n_j = child_j.skeleton_indices.size();
-                            
-                                // Extract skeleton coords from child_j
-                                std::vector<CoordType> child_j_skel_coords(n_j * dimension);
-                                for (int64_t idx = 0; idx < n_j; ++idx) {
-                                    int64_t skel_idx = child_j.skeleton_indices[idx];
-                                    for (int d = 0; d < dimension; ++d) {
-                                        child_j_skel_coords[idx * dimension + d] = 
-                                            child_j.point_coords[skel_idx * dimension + d];
-                                    }
-                                }
-                            
-                                std::vector<DataType> C_block;
-                            
-                                if (child_i_info.is_ghost) {
-                                    C_block = extract_child_interaction(
-                                        child_i_info.box_ptr, &child_j, child_level,
-                                        dimension, kernel, false, &pair_lazy_cache);
-                                } else {
-                                    // // Direct kernel evaluation
-                                    // C_block.resize(n_i * n_j);
-                                    // kernel->evaluate_block(
-                                    //     child_i_info.coords_ptr.data(), n_i,
-                                    //     child_j_skel_coords.data(), n_j,
-                                    //     C_block.data(), n_i);
-                                    // Assisting box - try to find in child_j's modified interactions first
-                                    int64_t child_i_morton = neighbor_morton * num_children + ci;
-                                
-                                    // Looking in child_j for child_i
-                                    // child_j.A_NS[child_i] is (n_i × n_j)
-                                    // Function call: extract from child_j (source), looking for child_i (target)
-                                    // Returns: (n_source × n_target) = (n_j × n_i) after transpose
-                                    C_block = extract_or_evaluate_child_interaction_for_assisting(
-                                        &child_j,           // Looking in child_j's storage
-                                        child_i_morton,     // For neighbor child_i
-                                        child_i_info.indices_ptr,
-                                        n_j,                // n_source = child_j skeleton size
-                                        n_i,                // n_target = child_i skeleton size  
-                                        child_level,
-                                        dimension,
-                                        kernel,
-                                        true,
-                                        &pair_lazy_cache
-                                    );
-                                
-                                    // C_block is now (n_j × n_i), but we need (n_i × n_j) for I(B2, B1)
-                                    // Transpose again
-                                    std::vector<DataType> C_block_transposed(n_i * n_j);
-                                    for (int64_t i = 0; i < n_j; ++i) {
-                                        for (int64_t j = 0; j < n_i; ++j) {
-                                            C_block_transposed[j + i * n_i] = C_block[i + j * n_j];
-                                        }
-                                    }
-                                    C_block = std::move(C_block_transposed);
-                                }
-                            
-                                for (int64_t col = 0; col < n_j; ++col) {
-                                    for (int64_t row = 0; row < n_i; ++row) {
-                                        I_B2_B1[(row_offset + row) + (col_offset + col) * total_cols] = 
-                                            C_block[row + col * n_i];
-                                    }
-                                }
-                                col_offset += n_j;
-                            }
-                            row_offset += n_i;
-                        }
-                    
-                        // Transpose I_B2_B1 for A_NS (B1 × B2)
-                        std::vector<DataType> I_B2_B1_transposed(total_cols * total_rows);
-                        for (int64_t i = 0; i < total_cols; ++i) {
-                            for (int64_t j = 0; j < total_rows; ++j) {
-                                I_B2_B1_transposed[j + i * total_rows] = I_B2_B1[i + j * total_cols];
+                    }
+                }
+            } else {
+                // I(B2, B1) (nonsymmetric, B2 off process), column child cj of B1
+                auto& child_j = b1_child(cj);
+                const int64_t ld = plan.total_cols;
+                const int64_t col_offset = plan.b1_offsets[static_cast<size_t>(cj)];
+                const int64_t n_j = static_cast<int64_t>(child_j.skeleton_indices.size());
+                for (int ci = 0; ci < num_children; ++ci) {
+                    const auto& child_i_info = plan.b2_children[static_cast<size_t>(ci)];
+                    const int64_t n_i = child_i_info.num_points;
+                    const int64_t row_offset = plan.b2_offsets[static_cast<size_t>(ci)];
+                    std::vector<DataType> C_block;
+                    if (child_i_info.is_ghost) {
+                        C_block = extract_child_interaction(
+                            child_i_info.box_ptr, &child_j, child_level,
+                            dimension, kernel, false, &pair_lazy_cache);
+                    } else {
+                        int64_t child_i_morton = plan.neighbor_morton * num_children + ci;
+                        // child_j.A_NS[child_i] is (n_i x n_j): extracted from
+                        // child_j (source) for child_i (target), (n_j x n_i)
+                        // after transpose
+                        C_block = extract_or_evaluate_child_interaction_for_assisting(
+                            &child_j,           // Looking in child_j's storage
+                            child_i_morton,     // For neighbor child_i
+                            child_i_info.indices_ptr,
+                            n_j,                // n_source = child_j skeleton size
+                            n_i,                // n_target = child_i skeleton size
+                            child_level,
+                            dimension,
+                            kernel,
+                            true,
+                            &pair_lazy_cache);
+                        // C_block is (n_j x n_i); I(B2, B1) needs (n_i x n_j)
+                        std::vector<DataType> C_block_transposed(n_i * n_j);
+                        for (int64_t i = 0; i < n_j; ++i) {
+                            for (int64_t j = 0; j < n_i; ++j) {
+                                C_block_transposed[j + i * n_i] = C_block[i + j * n_j];
                             }
                         }
-                    
-                        // Store both blocks for B1
-                        ModifiedBlock<DataType> block_b1;
-                        block_b1.neighbor_morton = neighbor_morton;
-                    
-                        // A_NS (B1 × B2)
-                        block_b1.A_NS.set_owned(
-                            total_rows, total_cols, std::move(I_B2_B1_transposed), MatrixStorage<DataType>::FULL);
-                    
-                        // A_SN (B1 × B2)
-                        block_b1.A_SN.set_owned(
-                            total_rows, total_cols, std::move(I_B1_B2), MatrixStorage<DataType>::FULL);
-                    
-                        int64_t block_idx_b1 = B1.near_field_modified_interactions.size();
-                        B1.near_field_modified_interactions.push_back(std::move(block_b1));
-                        B1.near_field_interaction_map_nonsymmetry[neighbor_morton] = block_idx_b1;
+                        C_block = std::move(C_block_transposed);
+                    }
+                    for (int64_t col = 0; col < n_j; ++col) {
+                        for (int64_t row = 0; row < n_i; ++row) {
+                            plan.I_B2_B1[(row_offset + row) + (col_offset + col) * ld] =
+                                C_block[row + col * n_i];
+                        }
                     }
                 }
             }
-            } catch (...) {
-                if (!build_failed.exchange(true, std::memory_order_relaxed)) {
-                    std::lock_guard<std::mutex> lock(build_exception_mutex);
-                    build_exception = std::current_exception();
+        };
+        if (parallel_fill) {
+            std::exception_ptr fill_exception;
+            std::mutex fill_exception_mutex;
+            std::atomic<bool> fill_failed{false};
+            #pragma omp parallel for schedule(dynamic)
+            for (int64_t t = 0; t < static_cast<int64_t>(tasks.size()); ++t) {
+                if (fill_failed.load(std::memory_order_relaxed)) continue;
+                try {
+                    fill(tasks[static_cast<size_t>(t)]);
+                } catch (...) {
+                    if (!fill_failed.exchange(true, std::memory_order_relaxed)) {
+                        std::lock_guard<std::mutex> lock(fill_exception_mutex);
+                        fill_exception = std::current_exception();
+                    }
+                }
+            }
+            if (fill_exception) std::rethrow_exception(fill_exception);
+        } else {
+            for (const auto& task : tasks) fill(task);
+        }
+
+        // ===== the blocks stored, in neighbour order =====
+        for (auto& plan : plans) {
+            const uint64_t neighbor_morton = plan.neighbor_morton;
+            const int64_t total_rows = plan.total_rows;
+            const int64_t total_cols = plan.total_cols;
+            auto& I_B1_B2 = plan.I_B1_B2;
+            if (plan.kind == PlanKind::Diagonal) {
+                B1.schur_complement.set_owned(
+                    total_rows, total_cols, std::move(I_B1_B2), MatrixStorage<DataType>::FULL);
+                continue;
+            }
+            if (is_symmetric || is_hermitian) {
+                // ========== SYMMETRIC CASE ==========
+                if (plan.kind == PlanKind::OnProcess) {
+                    auto& B2 = parent_boxes[plan.b2_idx];
+                    ModifiedBlock<DataType> block_b1;
+                    block_b1.neighbor_morton = B2.morton_index;
+                    ModifiedBlock<DataType> block_b2;
+                    block_b2.neighbor_morton = B1.morton_index;
+
+                    if (is_symmetric && !is_hermitian) {
+                        // B2 owns the already assembled payload; B1 is its
+                        // transpose view of the same allocation.
+                        block_b2.set_a_ns_owned(
+                            total_rows, total_cols, std::move(I_B1_B2),
+                            MatrixStorage<DataType>::FULL);
+                        if (!share_symmetric_a_ns_pair(block_b2, block_b1)) {
+                            throw std::runtime_error(
+                                "build_parent_level: cannot share symmetric parent edge");
+                        }
+                    } else {
+                        // Preserve the directed Hermitian path until conjugate
+                        // views are represented explicitly.
+                        std::vector<DataType> I_transposed(
+                            static_cast<size_t>(total_rows * total_cols));
+                        for (int64_t i = 0; i < total_rows; ++i) {
+                            for (int64_t j = 0; j < total_cols; ++j) {
+                                I_transposed[static_cast<size_t>(
+                                    j + i * total_cols)] =
+                                    I_B1_B2[static_cast<size_t>(
+                                        i + j * total_rows)];
+                            }
+                        }
+                        block_b1.set_a_ns_owned(
+                            total_cols, total_rows, std::move(I_transposed),
+                            MatrixStorage<DataType>::FULL);
+                        block_b2.set_a_ns_owned(
+                            total_rows, total_cols, std::move(I_B1_B2),
+                            MatrixStorage<DataType>::FULL);
+                    }
+
+                    int64_t block_idx_b1 =
+                        B1.near_field_modified_interactions.size();
+                    B1.near_field_modified_interactions.push_back(
+                        std::move(block_b1));
+                    B1.near_field_interaction_map[B2.morton_index] =
+                        block_idx_b1;
+
+                    deferred_parent_blocks[b1_idx].push_back(
+                        DeferredParentBlock{plan.b2_idx, std::move(block_b2)});
+                } else {
+                    // B2 off-process: store only B1's view (B2 x B1)
+                    std::vector<DataType> I_transposed(total_rows * total_cols);
+                    for (int64_t i = 0; i < total_rows; ++i) {
+                        for (int64_t j = 0; j < total_cols; ++j) {
+                            I_transposed[j + i * total_cols] = I_B1_B2[i + j * total_rows];
+                        }
+                    }
+                    std::vector<DataType>().swap(I_B1_B2);
+                    ModifiedBlock<DataType> block_b1;
+                    block_b1.neighbor_morton = neighbor_morton;
+                    block_b1.set_a_ns_owned(
+                        total_cols, total_rows, std::move(I_transposed), MatrixStorage<DataType>::FULL);
+
+                    int64_t block_idx_b1 = B1.near_field_modified_interactions.size();
+                    B1.near_field_modified_interactions.push_back(std::move(block_b1));
+                    B1.near_field_interaction_map[neighbor_morton] = block_idx_b1;
+                }
+            } else {
+                // ========== NONSYMMETRIC CASE ==========
+                if (plan.kind == PlanKind::OnProcess) {
+                    auto& B2 = parent_boxes[plan.b2_idx];
+                    // Transpose for A_NS (B2 x B1)
+                    std::vector<DataType> I_transposed(total_rows * total_cols);
+                    for (int64_t i = 0; i < total_rows; ++i) {
+                        for (int64_t j = 0; j < total_cols; ++j) {
+                            I_transposed[j + i * total_cols] = I_B1_B2[i + j * total_rows];
+                        }
+                    }
+                    std::vector<DataType>().swap(I_B1_B2);
+
+                    // Store A_NS for B1
+                    ModifiedBlock<DataType> block_b1;
+                    block_b1.neighbor_morton = B2.morton_index;
+                    block_b1.A_NS.allocate(total_cols, total_rows, MatrixStorage<DataType>::FULL);
+                    block_b1.A_NS.data = I_transposed;
+
+                    int64_t block_idx_b1 = B1.near_field_modified_interactions.size();
+                    B1.near_field_modified_interactions.push_back(std::move(block_b1));
+                    B1.near_field_interaction_map_nonsymmetry[B2.morton_index] = block_idx_b1;
+
+                    // Store A_SN for B2
+                    ModifiedBlock<DataType> block_b2;
+                    block_b2.neighbor_morton = B1.morton_index;
+                    block_b2.A_SN.set_owned(
+                        total_cols, total_rows, std::move(I_transposed), MatrixStorage<DataType>::FULL);
+
+                    int64_t block_idx_b2 = B2.near_field_modified_interactions.size();
+                    B2.near_field_modified_interactions.push_back(std::move(block_b2));
+                    B2.near_field_interaction_map_nonsymmetry[B1.morton_index] = block_idx_b2;
+                } else {
+                    // B2 off-process: store both A_NS and A_SN for B1
+                    auto& I_B2_B1 = plan.I_B2_B1;
+                    // Transpose I_B2_B1 for A_NS (B1 x B2)
+                    std::vector<DataType> I_B2_B1_transposed(total_cols * total_rows);
+                    for (int64_t i = 0; i < total_cols; ++i) {
+                        for (int64_t j = 0; j < total_rows; ++j) {
+                            I_B2_B1_transposed[j + i * total_rows] = I_B2_B1[i + j * total_cols];
+                        }
+                    }
+                    std::vector<DataType>().swap(I_B2_B1);
+
+                    // Store both blocks for B1
+                    ModifiedBlock<DataType> block_b1;
+                    block_b1.neighbor_morton = neighbor_morton;
+
+                    // A_NS (B1 x B2)
+                    block_b1.A_NS.set_owned(
+                        total_rows, total_cols, std::move(I_B2_B1_transposed), MatrixStorage<DataType>::FULL);
+
+                    // A_SN (B1 x B2)
+                    block_b1.A_SN.set_owned(
+                        total_rows, total_cols, std::move(I_B1_B2), MatrixStorage<DataType>::FULL);
+
+                    int64_t block_idx_b1 = B1.near_field_modified_interactions.size();
+                    B1.near_field_modified_interactions.push_back(std::move(block_b1));
+                    B1.near_field_interaction_map_nonsymmetry[neighbor_morton] = block_idx_b1;
                 }
             }
         }
-    });
+    };
+
+    if (fill_on_team) {
+        for (size_t b1_idx = 0; b1_idx < parent_boxes.size(); ++b1_idx) {
+            build_parent(b1_idx, true);
+        }
+    } else {
+        omp_parallel_if(parallel_build && parent_boxes.size() > 1, [&] {
+            #pragma omp for schedule(dynamic)
+            for (int64_t b1_i = 0;
+                 b1_i < static_cast<int64_t>(parent_boxes.size()); ++b1_i) {
+                if (build_failed.load(std::memory_order_relaxed)) continue;
+                try {
+                    build_parent(static_cast<size_t>(b1_i), false);
+                } catch (...) {
+                    if (!build_failed.exchange(true, std::memory_order_relaxed)) {
+                        std::lock_guard<std::mutex> lock(build_exception_mutex);
+                        build_exception = std::current_exception();
+                    }
+                }
+            }
+        });
+    }
 
     if (build_exception) std::rethrow_exception(build_exception);
 

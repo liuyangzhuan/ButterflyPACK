@@ -845,7 +845,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer:: CA_level !< first H2 level using communication-avoiding factorization; 10000 selects color
         integer:: H2_use_sketch !< H2 ID mode: 0 full workspace, 1 materialized sketch, 2 streamed sketch when H2_ID_proxy!=2
         integer:: H2_lazy_schur !< H2 color Schur mode: 0 eager, 1 lazy far, 2 lazy far plus generated near
-        integer:: H2_compress_factors !< H2 GPU lossy compression (nvCOMP bitcomp) at tol_comp: 0 off, 1 on: the factors kept on the device for the solve (X_NR, T, X_SR) and the factorization's own data (the fill sources later waves and the level transition read, the near and parent blocks held under memory pressure, the CA blocks on more than one rank), so the factorization is lossy too, within the tolerance; no other value
+        integer:: H2_compress_factors !< H2 GPU lossy compression (nvCOMP bitcomp) at tol_comp: 0 off, 1 on: the factors kept on the device for the solve (X_NR, T, X_SR) and the factorization's own data (the fill sources later waves and the level transition read, the near and parent blocks held under memory pressure, the CA blocks on more than one rank), so the factorization is lossy too, within the tolerance; with H2_partial instead the F22 records the Schur complement's entries and products read, kept on the host at 0.02 tol_comp (the partial solves' factors uncompressed); for a compression-only H2 (precon 2, GPU compression, symmetric kernel) its coupling and leaf near blocks: not stored with a GPU entry evaluator (the device matvec evaluates each block where it reads it; the host matvec and entry extraction then cannot read them), otherwise kept compressed at 0.02 tol_comp on the device and the host; no other value
         integer:: H2_GEMM_split !< maximum OpenMP task split for one H2 color work item; 0 disables splitting
         integer:: H2_XRR_factor !< H2 X_RR pivot factorization: 0 Bunch-Kaufman, 1 LU with partial pivoting
         integer:: H2_use_gpu !< H2 Color levels: 0 CPU, 1 GPU backend, its real double GEMMs on the FP64 tensor cores (2, the old tensor-core mode, is taken as 1; requires a build with enable_h2_gpu)
@@ -859,6 +859,9 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer:: H2_ID_radius !< diagnostic H2 ID neighborhood radius; 2 keeps the standard workspace
         integer:: H2_ID_proxy !< H2 ID proxy mode: 0 none, 1 geometric surface, 2 adaptive row sampling
         integer:: H2_ID_proxy_points !< geometric surface samples for H2 ID proxy mode 1
+        integer:: H2_partial !< H2 partial factorization (H2_unstructured 1, sym 0): the first H2_partial points in input order (F11) are eliminated, the rest (F22) retained; the object then serves the front's partial solves and the Schur complement F22 - F21 F11^-1 F12 (c_bpack_partial_*); 0 (default): full factorization
+        integer:: H2_partial_extract !< H2 partial factorization (H2_partial > 0, H2_use_gpu 1): where the Schur complement's entries (c_bpack_extractelement) are computed: 0 auto (default: the device when the records are on it and the call is large enough, else the host), 1 the device when the records are on it, 2 the host
+        integer:: H2_extract !< compression-only H2 (precon 2, H2_use_gpu 1): where a compressed H2's entries (c_bpack_extractelement) are computed: 0 auto (default: the host - the device path is measurably slower in situ, see the measurement in GPU_BACKEND/h2_gpu/extract_device.hpp), 1 the device when the compression kept its blocks there, 2 the host
         real(kind=8):: H2_s_op !< H2 IDs: absolute floor tol_comp*H2_s_op on the rank rule, |R_kk| > max(tol_comp |R_11|, tol_comp H2_s_op); 0 off (default). At most ||A|| for compression-only H2 (precon 2), at most 1/||A^-1|| for the factorization (K + tau^2 I: tau^2)
         integer:: use_fft_circulant !< 1: use reduced-kernel FFT circulant MVP, 2: build FFT circulant from fullmat then free fullmat
         integer:: fftw_plan_mode !< FFTW apply-plan mode: 0 estimate, 1 measure, 2 patient, 3 exhaustive
@@ -915,6 +918,13 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         real(kind=8) Time_Direct_LU, Time_Add_Multiply, Time_Multiply, Time_XLUM, Time_Split, Time_Comm, Time_Idle, Time_Factor
         real(kind=8) Mem_Current, Mem_peak, Mem_Sblock, Mem_SMW, Mem_Direct_inv, Mem_Direct_for, Mem_int_vec, Mem_Comp_for, Mem_Fill, Mem_Factor
         real(kind=8) Flop_Fill, Flop_Factor, Flop_Sol, Flop_C_Mult, Flop_C_Extract, Flop_BF_MVP_Gemm_Leaf, Flop_BF_MVP_Gemm_Kernel, Flop_Tmp
+        !< the butterfly extraction's gemms (BF_block_extraction): how many
+        !< and the seconds inside them, to separate the arithmetic from the
+        !< per-block work around it.  Reset with Flop_Tmp.
+        real(kind=8) :: Cnt_Extract_Gemm = 0d0, Time_Extract_Gemm = 0d0
+        !< the GPU backend's first-use costs a construction paid (a GPU evaluator's
+        !< warm-up: an NVRTC compile, a first launch), left out of Time_Fill
+        real(kind=8) :: Time_GPU_Warmup = 0d0
         integer, allocatable:: rankmax_of_level(:), rankmin_of_level(:) !< maximum and minimum ranks observed at each level of BPACK during matrix fill
         integer, allocatable:: rankmax_of_level_global(:) !< maximum ranks among all processes observed at each level of BPACK during matrix fill
         integer, allocatable:: rankmax_of_level_global_factor(:) !< maximum ranks among all processes observed at each level of BPACK during matrix factorization
@@ -964,6 +974,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
 
         DT, allocatable :: matZ_glo(:, :) !< Full Matrix: the full matrix to sample its entries
         type(entry_addend), allocatable :: addend !< a low-rank term added to every entry the matrix's construction takes (c_bpack_set_entry_addend)
+        type(c_ptr) :: gpu_entries = c_null_ptr !< a butterfly's GPU evaluator (c_bf_set_gpu_*), bound by its construction: element_Zmn_blocklist_user takes the entries from the device
 
         class(*), pointer :: QuantApp => null() !< Kernels Defined in Fortran: pointer to the user-supplied derived type for computing one element of Z
         procedure(F_Zelem), nopass, pointer :: FuncZmn => null() !< Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing one element of Z

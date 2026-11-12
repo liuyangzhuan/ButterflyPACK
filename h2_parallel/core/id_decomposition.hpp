@@ -15,6 +15,7 @@
 #include <cstring>
 #include <chrono>
 #include "blas_declare.hpp"
+#include "parallel_geqp3.hpp"
 #include <cassert>
 
 /*used blas functions*/
@@ -326,6 +327,8 @@ IDResult<DataType> compute_id(
 // abs_tolerance: the absolute floor (id_absolute_tolerance; 0: the relative
 // rule |R_kk| > tolerance |R_11| only).  With a floor the rank can be 0 for a
 // nonzero A, which the callers treat as a zero A (ensure_nonempty_box_id_rank).
+// split_threads: the QRCP's products over up to that many threads (a small
+// wave's idle ones; geqp3_tasks, bitwise the reference's).
 template<typename DataType>
 IDResult<DataType> compute_id_complex(
     DataType* A,
@@ -334,7 +337,8 @@ IDResult<DataType> compute_id_complex(
     int64_t lda,
     double tolerance,
     int64_t max_rank,
-    double abs_tolerance) {
+    double abs_tolerance,
+    int split_threads = 1) {
     
     static_assert(std::is_same_v<DataType, double> || 
                   std::is_same_v<DataType, std::complex<double>>,
@@ -364,54 +368,8 @@ IDResult<DataType> compute_id_complex(
     // Permutation and Householder reflectors
     std::vector<int> JPIV(N, 0);  // Initialize to 0: all columns free
     std::vector<DataType> TAU(minMN);
-    
-    // Workspace query
-    int LWORK = -1;
-    std::vector<DataType> WORK(1);
     int INFO = 0;
-    
-    if constexpr (std::is_same_v<DataType, double>) {
-        dgeqp3_(&M, &N, A, &LDA,
-                JPIV.data(), TAU.data(),
-                WORK.data(), &LWORK, &INFO);
-        
-        if (INFO != 0) {
-            throw std::runtime_error("RRQR workspace query failed with INFO = " + 
-                                   std::to_string(INFO));
-        }
-        
-        LWORK = static_cast<int>(WORK[0]);
-        WORK.resize(LWORK);
-        
-        dgeqp3_(&M, &N, A, &LDA,
-                JPIV.data(), TAU.data(),
-                WORK.data(), &LWORK, &INFO);
-    } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-        std::vector<double> RWORK(2 * N);
-        
-        zgeqp3_(&M, &N, A, &LDA,
-                JPIV.data(), TAU.data(),
-                WORK.data(), &LWORK,
-                RWORK.data(), &INFO);
-        
-        if (INFO != 0) {
-            throw std::runtime_error("RRQR workspace query failed with INFO = " + 
-                                   std::to_string(INFO));
-        }
-        
-        LWORK = static_cast<int>(WORK[0].real());
-        WORK.resize(LWORK);
-        
-        zgeqp3_(&M, &N, A, &LDA,
-                JPIV.data(), TAU.data(),
-                WORK.data(), &LWORK,
-                RWORK.data(), &INFO);
-    }
-    
-    if (INFO != 0) {
-        throw std::runtime_error("RRQR factorization failed with INFO = " + 
-                               std::to_string(INFO));
-    }
+    geqp3_tasks(M, N, A, LDA, JPIV.data(), TAU.data(), split_threads);
     
     // Determine rank from diagonal of R
     // |R(i,i)| <= max(tolerance * |R(1,1)|, abs_tolerance) means we stop
@@ -508,6 +466,60 @@ IDResult<DataType> compute_id_complex(
 }
 
 
+
+/**
+ * @brief The ID of a box's F11 columns only (H2_partial): the F22 columns
+ * (point id >= partial_count) are forced into the skeleton, with zero rows
+ * of T.  A box without F11 columns is all skeleton (rank 0 for the F11 part).
+ *
+ * The input is the ID target (rows x cols, column c = the box's point c);
+ * the F11 columns are gathered into a contiguous copy and factored as
+ * compute_id_complex does.  The result's indices are the box's slots.
+ */
+template<typename DataType>
+IDResult<DataType> compute_id_partial(
+    const DataType* A, int64_t m, int64_t n, int64_t lda,
+    double tolerance, double abs_tolerance,
+    const std::vector<int64_t>& point_ids, int64_t partial_count) {
+    std::vector<int64_t> keep, forced;
+    for (int64_t c = 0; c < n; ++c) {
+        if (point_ids[static_cast<size_t>(c)] < partial_count) keep.push_back(c);
+        else forced.push_back(c);
+    }
+    IDResult<DataType> result;
+    const int64_t nk = static_cast<int64_t>(keep.size());
+    if (nk > 0 && m > 0) {
+        std::vector<DataType> sub(static_cast<size_t>(m * nk));
+        for (int64_t j = 0; j < nk; ++j) {
+            std::copy_n(A + keep[static_cast<size_t>(j)] * lda, m, sub.data() + j * m);
+        }
+        IDResult<DataType> id = compute_id_complex(sub.data(), m, nk, m, tolerance, 0, abs_tolerance);
+        ensure_nonempty_box_id_rank(id, nk);
+        const int64_t k11 = static_cast<int64_t>(id.skeleton_indices.size());
+        const int64_t r = static_cast<int64_t>(id.redundant_indices.size());
+        for (int64_t s : id.skeleton_indices) result.skeleton_indices.push_back(keep[static_cast<size_t>(s)]);
+        for (int64_t s : id.redundant_indices) result.redundant_indices.push_back(keep[static_cast<size_t>(s)]);
+        result.interpolation.allocate(k11 + static_cast<int64_t>(forced.size()), r);
+        for (int64_t j = 0; j < r; ++j) {
+            for (int64_t i = 0; i < k11; ++i) result.interpolation(i, j) = id.interpolation(i, j);
+        }
+    } else {
+        result.interpolation.allocate(static_cast<int64_t>(forced.size()), 0);
+    }
+    if (result.redundant_indices.empty()) {
+        // nothing eliminated: the box's points in their order, as the full-rank
+        // ID gives them (a live set as long as the point list is that list,
+        // which the lazy fill's row lookup assumes)
+        result.skeleton_indices.resize(static_cast<size_t>(n));
+        for (int64_t c = 0; c < n; ++c) result.skeleton_indices[static_cast<size_t>(c)] = c;
+        result.interpolation.allocate(n, 0);
+        result.rank = n;
+        return result;
+    }
+    for (int64_t c : forced) result.skeleton_indices.push_back(c);
+    result.rank = static_cast<int64_t>(result.skeleton_indices.size());
+    return result;
+}
 
 /**
  * @brief Generate sparse sketch of matrix using stratified random projection

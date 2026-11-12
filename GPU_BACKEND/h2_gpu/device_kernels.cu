@@ -40,6 +40,106 @@ __global__ void gather_kernel(const GatherItemT<T>* items, const char* meta) {
 }
 
 template<typename T>
+__global__ void index_copy_kernel(const IndexCopyItemT<T>* items, const char* meta) {
+    const IndexCopyItemT<T> item = items[blockIdx.x];
+    const int i = blockIdx.y * kTile + threadIdx.x;
+    const int j0 = blockIdx.z * kTile;
+    if (i >= item.m || j0 >= item.n) return;
+    const int64_t so = static_cast<int64_t>(index_at(meta, item.src_rows, i)) * item.rs;
+    const int64_t oo = static_cast<int64_t>(index_at(meta, item.out_rows, i)) * item.ors;
+    for (int jj = threadIdx.y; jj < kTile; jj += kTileRows) {
+        const int j = j0 + jj;
+        if (j >= item.n) break;
+        const T v = item.src[so + j * item.cs];
+        T& o = item.out[oo + j * item.ocs];
+        o = item.add ? o + v : v;
+    }
+}
+
+__device__ __forceinline__ void atomic_add_to(double* at, double v) { atomicAdd(at, v); }
+__device__ __forceinline__ void atomic_add_to(dcomplex* at, dcomplex v) {
+    atomicAdd(&at->re, v.re);
+    atomicAdd(&at->im, v.im);
+}
+
+template<typename T>
+__global__ void block_copy_kernel(const BlockCopyItemT<T>* items, const char* meta) {
+    const BlockCopyItemT<T> item = items[blockIdx.x];
+    const int i = blockIdx.y * kTile + threadIdx.x;
+    const int j0 = blockIdx.z * kTile;
+    if (i >= item.m || j0 >= item.n) return;
+    const int64_t so = static_cast<int64_t>(index_at(meta, item.src_rows, i)) * item.rs;
+    const int64_t oo = static_cast<int64_t>(index_at(meta, item.out_rows, i)) * item.ors;
+    const double wi = item.row_w < 0 ? 1.0 : reinterpret_cast<const double*>(meta + item.row_w)[i];
+    const double* wj = item.col_w < 0 ? nullptr : reinterpret_cast<const double*>(meta + item.col_w);
+    for (int jj = threadIdx.y; jj < kTile; jj += kTileRows) {
+        const int j = j0 + jj;
+        if (j >= item.n) break;
+        T v = item.src[so + static_cast<int64_t>(index_at(meta, item.src_cols, j)) * item.cs];
+        if (item.row_w >= 0 || wj != nullptr) v = (wj != nullptr ? wi * wj[j] : wi) * v;
+        T* at = item.out + oo + static_cast<int64_t>(index_at(meta, item.out_cols, j)) * item.ocs;
+        if (item.add == 2) atomic_add_to(at, v);
+        else if (item.add) *at += v;
+        else *at = v;
+    }
+}
+
+// (a kTile x kTile output tile a thread block, the k dimension kTileK at a time
+// through shared memory)
+constexpr int kTileK = 16;
+
+template<typename T>
+__global__ void indexed_gemm_kernel(const IndexedGemmItemT<T>* items, const char* meta) {
+    const IndexedGemmItemT<T> it = items[blockIdx.x];
+    const int i0 = blockIdx.y * kTile, j0 = blockIdx.z * kTile;
+    if (i0 >= it.m || j0 >= it.n) return;
+    __shared__ T Ls[kTile][kTileK + 1];
+    __shared__ T Rs[kTileK][kTile + 1];
+    const int tx = threadIdx.x, ty = threadIdx.y;
+    const int i = i0 + tx, jl = j0 + tx;
+    const int64_t lrow = i < it.m ? static_cast<int64_t>(index_at(meta, it.l_rows, i)) * it.lrs : 0;
+    const int64_t rcol = jl < it.n ? static_cast<int64_t>(index_at(meta, it.r_cols, jl)) * it.rcs : 0;
+    T acc[kTile / kTileRows] = {};
+    for (int x0 = 0; x0 < it.k; x0 += kTileK) {
+        for (int xx = ty; xx < kTileK; xx += kTileRows) {
+            const int x = x0 + xx;
+            Ls[tx][xx] = i < it.m && x < it.k ? it.l[lrow + static_cast<int64_t>(index_at(meta, it.l_x, x)) * it.lxs] : T(0);
+            Rs[xx][tx] = jl < it.n && x < it.k ? it.r[static_cast<int64_t>(index_at(meta, it.r_x, x)) * it.rxs + rcol] : T(0);
+        }
+        __syncthreads();
+        for (int xx = 0; xx < kTileK; ++xx) {
+            const T a = Ls[tx][xx];
+            for (int q = 0; q < kTile / kTileRows; ++q) acc[q] += a * Rs[xx][ty + q * kTileRows];
+        }
+        __syncthreads();
+    }
+    if (i >= it.m) return;
+    const int64_t orow = static_cast<int64_t>(index_at(meta, it.out_rows, i)) * it.ors;
+    for (int q = 0; q < kTile / kTileRows; ++q) {
+        const int j = j0 + ty + q * kTileRows;
+        if (j >= it.n) break;
+        atomic_add_to(it.out + orow + static_cast<int64_t>(index_at(meta, it.out_cols, j)) * it.ocs, acc[q]);
+    }
+}
+
+template<typename T>
+__global__ void chunk_gather_kernel(const ChunkGatherItemT<T>* items, const char* meta) {
+    const ChunkGatherItemT<T> item = items[blockIdx.x];
+    const int i = blockIdx.y * kTile + threadIdx.x;
+    const int j0 = blockIdx.z * kTile;
+    if (i >= item.m || j0 >= item.n) return;
+    const int64_t row = index_at(meta, item.rows, i);
+    for (int jj = threadIdx.y; jj < kTile; jj += kTileRows) {
+        const int j = j0 + jj;
+        if (j >= item.n) break;
+        const int64_t e = row + static_cast<int64_t>(index_at(meta, item.cols, j)) * item.lda;
+        const int64_t k = e / item.chunk;
+        item.out[i + static_cast<int64_t>(j) * item.ld] =
+            item.pool[static_cast<int64_t>(index_at(meta, item.slot, static_cast<int>(k))) * item.chunk + (e - k * item.chunk)];
+    }
+}
+
+template<typename T>
 __global__ void add_store_kernel(const AddStoreItemT<T>* items) {
     const AddStoreItemT<T> item = items[blockIdx.x];
     const int i = blockIdx.y * kTile + threadIdx.x;
@@ -223,6 +323,38 @@ void launch_gather(const GatherItemT<T>* items, int count, int max_m, int max_n,
 }
 
 template<typename T>
+void launch_index_copy(const IndexCopyItemT<T>* items, int count, int max_m, int max_n, const char* meta,
+                       cudaStream_t stream) {
+    if (count <= 0 || max_m <= 0 || max_n <= 0) return;
+    index_copy_kernel<T><<<tile_grid(count, max_m, max_n), dim3(kTile, kTileRows), 0, stream>>>(items, meta);
+    check_launch("index_copy_kernel");
+}
+
+template<typename T>
+void launch_indexed_gemm(const IndexedGemmItemT<T>* items, int count, int max_m, int max_n, const char* meta,
+                         cudaStream_t stream) {
+    if (count <= 0 || max_m <= 0 || max_n <= 0) return;
+    indexed_gemm_kernel<T><<<tile_grid(count, max_m, max_n), dim3(kTile, kTileRows), 0, stream>>>(items, meta);
+    check_launch("indexed_gemm_kernel");
+}
+
+template<typename T>
+void launch_block_copy(const BlockCopyItemT<T>* items, int count, int max_m, int max_n, const char* meta,
+                       cudaStream_t stream) {
+    if (count <= 0 || max_m <= 0 || max_n <= 0) return;
+    block_copy_kernel<T><<<tile_grid(count, max_m, max_n), dim3(kTile, kTileRows), 0, stream>>>(items, meta);
+    check_launch("block_copy_kernel");
+}
+
+template<typename T>
+void launch_chunk_gather(const ChunkGatherItemT<T>* items, int count, int max_m, int max_n, const char* meta,
+                         cudaStream_t stream) {
+    if (count <= 0 || max_m <= 0 || max_n <= 0) return;
+    chunk_gather_kernel<T><<<tile_grid(count, max_m, max_n), dim3(kTile, kTileRows), 0, stream>>>(items, meta);
+    check_launch("chunk_gather_kernel");
+}
+
+template<typename T>
 void launch_add_store(const AddStoreItemT<T>* items, int count, int max_m, int max_n,
                       cudaStream_t stream) {
     if (count <= 0 || max_m <= 0 || max_n <= 0) return;
@@ -326,6 +458,10 @@ void launch_abs_max(const AbsMaxItem* items, int count, cudaStream_t stream) {
 #define H2_ELEMENT_LAUNCHES(T)                                                                                     \
     template void launch_gather<T>(const GatherItemT<T>*, int, int, int, const char*, cudaStream_t);               \
     template void launch_add_store<T>(const AddStoreItemT<T>*, int, int, int, cudaStream_t);                       \
+    template void launch_index_copy<T>(const IndexCopyItemT<T>*, int, int, int, const char*, cudaStream_t);        \
+    template void launch_block_copy<T>(const BlockCopyItemT<T>*, int, int, int, const char*, cudaStream_t);        \
+    template void launch_indexed_gemm<T>(const IndexedGemmItemT<T>*, int, int, int, const char*, cudaStream_t);    \
+    template void launch_chunk_gather<T>(const ChunkGatherItemT<T>*, int, int, int, const char*, cudaStream_t);    \
     template void launch_sym_add<T>(const SymAddItemT<T>*, int, int, cudaStream_t);                               \
     template void launch_symmetrize<T>(const IdentityItemT<T>*, int, int, cudaStream_t);                          \
     template void launch_symmetrize<T>(T*, int, int, cudaStream_t);                                               \
@@ -356,6 +492,43 @@ void launch_copy_bytes(void* dst, const void* src, size_t bytes, cudaStream_t st
     const unsigned blocks = static_cast<unsigned>(std::min<size_t>((count + 255) / 256, 1024));
     copy_bytes_kernel<<<blocks, 256, 0, stream>>>(static_cast<int4*>(dst), static_cast<const int4*>(src), count);
     check_launch("copy_bytes_kernel");
+}
+
+namespace {
+
+struct Word16 {  // (a 16-byte element, 8-byte aligned)
+    uint64_t lo, hi;
+};
+
+// (an item a grid column; its entries in order over the column's blocks)
+template<typename W>
+__global__ void image_copy_kernel(const ImageCopyItem* items) {
+    const ImageCopyItem it = items[blockIdx.x];
+    const W* src = static_cast<const W*>(it.src);
+    W* dst = static_cast<W*>(it.dst);
+    const int64_t total = static_cast<int64_t>(it.m) * it.n;
+    for (int64_t e = static_cast<int64_t>(blockIdx.y) * blockDim.x + threadIdx.x; e < total;
+         e += static_cast<int64_t>(gridDim.y) * blockDim.x) {
+        const int64_t j = e / it.m;
+        dst[e - j * it.m + j * it.ld] = src[e];
+    }
+}
+
+}  // namespace
+
+void launch_image_copy(const ImageCopyItem* items, int count, int64_t max_entries, int elem_bytes,
+                       cudaStream_t stream) {
+    if (count <= 0 || max_entries <= 0) return;
+    constexpr int kThreads = 256;
+    const dim3 grid(static_cast<unsigned>(count),
+                    static_cast<unsigned>(std::min<int64_t>((max_entries + kThreads - 1) / kThreads, 64)));
+    switch (elem_bytes) {
+    case 4: image_copy_kernel<uint32_t><<<grid, kThreads, 0, stream>>>(items); break;
+    case 8: image_copy_kernel<uint64_t><<<grid, kThreads, 0, stream>>>(items); break;
+    case 16: image_copy_kernel<Word16><<<grid, kThreads, 0, stream>>>(items); break;
+    default: throw std::invalid_argument("launch_image_copy: elements of 4, 8 or 16 bytes");
+    }
+    check_launch("image_copy_kernel");
 }
 
 }  // namespace gpu

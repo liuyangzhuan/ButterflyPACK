@@ -1,0 +1,10 @@
+# built harness, its objects and job output
+bf_layout_check
+bf_roundtrip
+bf_id_check
+obj/
+*.out
+# run scripts stay local
+run.sh
+run_id.sh
+run_construct.sh
