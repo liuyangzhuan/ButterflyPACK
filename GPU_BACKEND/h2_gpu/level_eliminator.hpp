@@ -56,6 +56,7 @@
 #include <array>
 #include <chrono>
 #include <cstdio>
+#include <exception>
 #include <cstring>
 #include <deque>
 #include <map>
@@ -2891,6 +2892,29 @@ private:
     std::unique_ptr<HostCopier> f22_copier_;
     std::unordered_map<char*, size_t> f22_inflight_;
     size_t f22_inflight_bytes_ = 0;
+    // An exception leaving the F22 phase unwinds partial_f22_phase's local
+    // `works` vector, whose PartialRecords are the host destinations of jobs
+    // this copier may still hold.  ~HostCopier *processes* its queue rather
+    // than dropping it, so a job left in flight then writes into freed memory
+    // and smashes the host heap (seen as glibc "corrupted unsorted chunks" in
+    // HostCopier::process, or "corrupted double-linked list" in
+    // ~vector<PartialF22Work>).  Drain while the destinations are still alive.
+    void drain_f22_copier_noexcept() noexcept {
+        if (!f22_copier_) return;
+        try {
+            f22_released(f22_copier_->wait_all());
+        } catch (...) {  // (a drain failure must not replace the exception unwinding)
+        }
+        f22_copier_.reset();
+    }
+    struct F22Unwind {
+        LevelEliminator* e;
+        int depth;
+        explicit F22Unwind(LevelEliminator* le) : e(le), depth(std::uncaught_exceptions()) {}
+        ~F22Unwind() {
+            if (std::uncaught_exceptions() > depth) e->drain_f22_copier_noexcept();
+        }
+    };
     void f22_released(std::vector<char*>&& blocks) {
         for (char* b : blocks) {
             const auto it = f22_inflight_.find(b);
@@ -8268,6 +8292,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::place_scratch_points(const
 // ---------------------------------------------------------------------------
 template<typename CoordType, typename DataType, typename KernelType>
 void LevelEliminator<CoordType, DataType, KernelType>::f22_ids(std::vector<PartialF22Work<DataType>>& works) {
+    const F22Unwind f22_unwind_guard(this);
     Context& ctx = Context::instance();
     ctx.activate();
     put_back_packed_blocks();
@@ -8302,6 +8327,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::f22_ids(std::vector<Parti
 
 template<typename CoordType, typename DataType, typename KernelType>
 void LevelEliminator<CoordType, DataType, KernelType>::f22_records(std::vector<PartialF22Work<DataType>>& works) {
+    const F22Unwind f22_unwind_guard(this);
     Context& ctx = Context::instance();
     ctx.activate();
     // the sparsified boxes with X_NR rows, in chunks by a device budget for
