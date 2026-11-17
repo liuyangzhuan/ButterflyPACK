@@ -3604,18 +3604,57 @@ void partial_schur_blocks_device(fmm::ParallelTree<CoordType, DataType>& tree, i
         }
         mark(kPlan);
         {
-            size_t bytes = 0;
+            // The images of this level's chains.  These used to be ONE
+            // allocation spanning every chain of the level, which is the
+            // largest single request the partial factorization makes: at NSTX
+            // order 3 it asked for 11.83 GB at 128 ranks and 12.70 GB at 256
+            // (so MORE ranks does not shrink it -- after sketch_merge a
+            // chain's `members` count is the interaction's sketch dimension, a
+            // global width, and the upper levels concentrate onto fewer active
+            // ranks).  One block that big fails two ways: on a 40 GB A100 the
+            // heap simply has no room, and on an 80 GB one it has room but not
+            // CONTIGUOUS room -- rank 4 of job 61156108 asked for 11.96 GB with
+            // 30.4 GB free, in 22 ranges whose largest was 11.31 GB.
+            //
+            // So hand the chains out in chunks instead, each sized against the
+            // heap's largest free block (work.budget(), the same rule and the
+            // same reason as the group budget in partial_device.hpp).  Nothing
+            // downstream wants the chains contiguous: every consumer addresses
+            // b.vp, b.wv and tsub through their own pointers.  A chain stays
+            // whole within one chunk, so the cursor arithmetic below is
+            // unchanged from the single-arena version.
+            std::vector<size_t> need[2];
+            size_t total = 0;
             for (int sd = 0; sd < 2; ++sd) {
+                need[sd].resize(sides[sd].size());
                 for (size_t i = 0; i < sides[sd].size(); ++i) {
                     const Chain& b = sides[sd][i];
                     const size_t n = b.members.size();
-                    bytes += fmm::gpu::align_up(b.ridx.size() * n * D) + fmm::gpu::align_up(b.wrows.size() * n * D);
-                    if (plans[sd][i].dense) bytes += fmm::gpu::align_up(static_cast<size_t>(plans[sd][i].k22) * b.ridx.size() * D);
+                    size_t t = fmm::gpu::align_up(b.ridx.size() * n * D) + fmm::gpu::align_up(b.wrows.size() * n * D);
+                    if (plans[sd][i].dense) t += fmm::gpu::align_up(static_cast<size_t>(plans[sd][i].k22) * b.ridx.size() * D);
+                    need[sd][i] = t;
+                    total += t;
                 }
             }
-            char* arena = work.alloc(bytes);
-            arenas.push_back(arena);
-            work.zero(arena, bytes);
+            char* arena = nullptr;
+            size_t cap = 0;
+            {   // the first chunk, so the cursor below never meets a null one
+                cap = std::max<size_t>(std::min(total, work.budget()), 256);
+                arena = work.alloc(cap);
+                arenas.push_back(arena);
+                work.zero(arena, cap);
+            }
+            // opens a new chunk when this chain will not fit in the current one
+            size_t chunks = 1;
+            auto room = [&](size_t at, size_t want) -> size_t {
+                if (want == 0 || at + want <= cap) return at;
+                cap = std::max(want, work.budget());
+                arena = work.alloc(cap);
+                arenas.push_back(arena);
+                work.zero(arena, cap);
+                ++chunks;
+                return 0;
+            };
             fmm::gpu::MetaBuilder& meta = work.meta();
             std::vector<fmm::gpu::GatherItemT<S>> gathers;
             std::vector<fmm::gpu::IndexCopyItemT<S>> copies;
@@ -3635,6 +3674,7 @@ void partial_schur_blocks_device(fmm::ParallelTree<CoordType, DataType>& tree, i
                     const PartPlan& P = plans[sd][i];
                     const int n = static_cast<int>(b.members.size()), nr = static_cast<int>(b.rows.size());
                     const int nrp = static_cast<int>(b.ridx.size()), nw = static_cast<int>(b.wrows.size());
+                    at = room(at, need[sd][i]);   // may switch `arena` to a new chunk
                     b.vp = reinterpret_cast<DataType*>(arena + at);
                     at += fmm::gpu::align_up(static_cast<size_t>(nrp) * static_cast<size_t>(n) * D);
                     b.wv = reinterpret_cast<DataType*>(arena + at);
@@ -3708,6 +3748,10 @@ void partial_schur_blocks_device(fmm::ParallelTree<CoordType, DataType>& tree, i
                     }
                 }
             }
+            if (total > 1.0e9)
+                std::printf("  [gpu] level %d partial CB images: %.2f GB in %zu chunk%s (largest free block %.2f GB)\n", l,
+                            static_cast<double>(total) / 1.0e9, chunks, chunks == 1 ? "" : "s",
+                            static_cast<double>(work.budget()) / 1.0e9);
             const size_t goff = meta.append(gathers), coff2 = meta.append(copies);
             steps.stage(meta);
             char* md = work.upload_meta();
@@ -4311,16 +4355,42 @@ void partial_schur_blocks_device(fmm::ParallelTree<CoordType, DataType>& tree, i
                 width.push_back(nmem);
                 sources.push_back(1);
             }
-            size_t bytes = 0;
-            for (size_t k = 0; k < up.size(); ++k) bytes += fmm::gpu::align_up(up[k].rows.size() * static_cast<size_t>(width[k]) * D);
-            char* arena = work.alloc(bytes);
+            // The parent blocks, chunked for the same reason as the level
+            // arena above: one allocation for every parent block of a side is
+            // a second multi-GB contiguous request, and it is made while the
+            // level arena is still live (it is released only at the end of the
+            // level, below), so the two together set the peak.  Rank 8 of job
+            // 61131018 died exactly here, on the second side's 5.05 GB with
+            // the first side's 5.05 GB and the level's 11.83 GB already held.
+            // Not zeroed, as before: launch_copy_spans covers every column of
+            // every parent block, since width[k] sums its sources' members.
+            size_t total_up = 0;
+            std::vector<size_t> need_up(up.size());
+            for (size_t k = 0; k < up.size(); ++k) {
+                need_up[k] = fmm::gpu::align_up(up[k].rows.size() * static_cast<size_t>(width[k]) * D);
+                total_up += need_up[k];
+            }
+            char* arena = nullptr;
+            size_t cap = std::max<size_t>(std::min(total_up, work.budget()), 256);
+            arena = work.alloc(cap);
             next_arenas.push_back(arena);
             size_t at = 0;
+            size_t chunks_up = 1;
             for (size_t k = 0; k < up.size(); ++k) {
+                if (need_up[k] > 0 && at + need_up[k] > cap) {
+                    cap = std::max(need_up[k], work.budget());
+                    arena = work.alloc(cap);
+                    next_arenas.push_back(arena);
+                    ++chunks_up;
+                    at = 0;
+                }
                 up[k].v = reinterpret_cast<DataType*>(arena + at);
                 up[k].members.resize(static_cast<size_t>(width[k]));
-                at += fmm::gpu::align_up(up[k].rows.size() * static_cast<size_t>(width[k]) * D);
+                at += need_up[k];
             }
+            if (total_up > 1.0e9)
+                std::printf("  [gpu] level %d partial CB parents (side %d): %.2f GB in %zu chunk%s\n", l, side_id,
+                            static_cast<double>(total_up) / 1.0e9, chunks_up, chunks_up == 1 ? "" : "s");
             fmm::gpu::MetaBuilder& meta = work.meta();
             std::vector<fmm::gpu::CopySpan> spans;
             int64_t max_words = 0;
