@@ -55,6 +55,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <deque>
 #include <map>
@@ -2922,6 +2923,7 @@ private:
     DeviceHeap& heap_;
     const Evaluator* evaluator_ = nullptr;  // the application's (H2Kernel::gpu_evaluator)
     bool heap_initialized_ = false;
+    bool spilling_records_ = false;  // reclaim_heap is spilling the kept F22 records (no re-entry)
     std::unique_ptr<Blocks> adopt_;  // blocks from the device transition, if any
     std::unordered_set<const void*> lsch_seen_, ledge_seen_;  // blocks any wave read (the stats)
     std::unordered_set<int64_t> sk_src_all_;         // fill sources any wave read (the stats)
@@ -7768,6 +7770,30 @@ bool LevelEliminator<CoordType, DataType, KernelType>::reclaim_heap() {
         keep_failure_ = 2;
         freed = true;
     }
+    if (!freed && !spilling_records_) {
+        // Last: the F22 records this factorization kept on the device.  They
+        // are spillable by construction - partial_records_to_host gives them
+        // host copies and the host paths read them there - but nothing else
+        // gives them back: the reclaimer above never touched them, and
+        // evict_for_allocation skips the operator being built, so on a
+        // single-operator run (STRUMPACK) this store was unreclaimable and a
+        // resident allocation threw with the pool half free.  Last because it
+        // is a whole-operator download, and latched so it happens once.
+        PartialDeviceStore& ks = partial_device_store();
+        if (!ks.kept_blocks.empty() && ks.spill) {
+            spilling_records_ = true;
+            ks.spill();  // partial_records_to_host(tree, true): local, no collective
+            for (char* b : ks.kept_blocks) heap_.free(b);
+            const size_t gave = ks.kept_bytes;
+            ks.kept_blocks.clear();
+            ks.kept_bytes = 0;
+            ks.keep_stopped = true;
+            spilling_records_ = false;
+            std::fprintf(stderr, "H2 GPU heap short: the kept F22 records went to the host (%.2f GB freed)\n",
+                         static_cast<double>(gave) / 1e9);
+            freed = true;
+        }
+    }
     eliminator_stats().reclaim_wait += std::chrono::duration<double>(std::chrono::steady_clock::now() - tw).count();
     return freed;
 }
@@ -9098,7 +9124,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::f22_submit_records(S* d_r
     PartialDeviceStore& keep_store = partial_device_store();
     // a resident block of `bytes` for kept records, or null (no room)
     auto keep_block = [&](size_t bytes) -> char* {
-        if (bytes == 0) return nullptr;
+        if (bytes == 0 || keep_store.keep_stopped) return nullptr;
         const double room = kPartialKeepFraction * static_cast<double>(heap_.capacity());
         if (static_cast<double>(keep_store.kept_bytes + bytes) > room) return nullptr;
         char* b = heap_.try_alloc_resident(bytes);

@@ -119,6 +119,10 @@ struct PartialDeviceStore {
     // to give them host copies before an eviction (partial_records_to_host)
     std::vector<char*> kept_blocks;
     size_t kept_bytes = 0;
+    // Set once the reclaimer has spilled these records under device pressure:
+    // keep_block stops keeping for the rest of the factorization, so a tight
+    // heap cannot thrash (spill the store, refill it, spill it again).
+    bool keep_stopped = false;
     std::function<void()> spill;
 
     // what the first CB product or entries set up (the kept records stay)
@@ -152,6 +156,7 @@ struct PartialDeviceStore {
         for (char* b : kept_blocks) heap.free(b);
         kept_blocks.clear();
         kept_bytes = 0;
+        keep_stopped = false;
         spill = nullptr;
     }
 };
