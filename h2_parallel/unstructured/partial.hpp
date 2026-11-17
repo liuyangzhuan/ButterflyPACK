@@ -1930,10 +1930,17 @@ struct PartialDeviceTargets {
 // holds nothing (but for the device check); else out is as without it.
 template<typename DataType>
 struct PartialDeviceSum {
-    const int* count = nullptr;
+    const int* count = nullptr;  // the WHOLE request's split by landing rank
     DataType* landed = nullptr;
     bool done = false;
     double seconds = 0.0;  // the sum and its share's download
+    // This call may be one batch of a larger request: out_base is its first
+    // element in the whole request's out layout (0 when it is the whole
+    // request).  force_out_download keeps `out` complete across a batched
+    // request, so that a batch whose device sum did not happen cannot leave
+    // the caller with half a `landed` and half an `out`.
+    int64_t out_base = 0;
+    bool force_out_download = false;
 };
 inline PartialOutLayout partial_out_layout(int64_t ninter, const int64_t* nrows, const int64_t* ncols, const PartialSketch* sk) {
     PartialOutLayout o;
@@ -4544,29 +4551,49 @@ void partial_schur_blocks_device(fmm::ParallelTree<CoordType, DataType>& tree, i
         if (ok != 0) {
             const double t = MPI_Wtime();
             constexpr int64_t kWords = static_cast<int64_t>(D / sizeof(double));
+            // `count` splits the WHOLE request by landing rank and `order` is
+            // sorted by landing rank, so each rank's share is ONE contiguous
+            // range of that layout.  This call covers [b0, b1) of it, so the
+            // batch meets the shares in rank order and tiles exactly: every
+            // rank's piece of the batch is contiguous, the pieces sum to the
+            // batch, and this rank's piece lands in `landed` at a cursor that
+            // only moves forward over the batches.  Unbatched (out_base 0,
+            // b1 == the whole length) this is the original split.
+            const int64_t b0 = dsum->out_base, b1 = b0 + ooff[static_cast<size_t>(ninter)];
             std::vector<int64_t> words(static_cast<size_t>(nranks));
-            int64_t at = 0;
+            int64_t at = 0, mine = 0, mine_lo = b0, at_me = 0;
             for (int p = 0; p < nranks; ++p) {
-                words[static_cast<size_t>(p)] = int64_t{dsum->count[p]} * kWords;
-                if (p < me) at += dsum->count[p];
+                const int64_t lo = std::max(b0, at), hi = std::min(b1, at + dsum->count[p]);
+                const int64_t n = std::max<int64_t>(0, hi - lo);
+                words[static_cast<size_t>(p)] = n * kWords;
+                if (p == me) {
+                    mine = n;
+                    mine_lo = lo;
+                    at_me = at;
+                }
+                at += dsum->count[p];
             }
-            const int64_t mine = dsum->count[me];
-            char* share = work.alloc(static_cast<size_t>(mine) * D);
+            char* share = work.alloc(static_cast<size_t>(std::max<int64_t>(mine, 1)) * D);
             if (bf::gpu::reduce_shares_device(tree.comm, reinterpret_cast<const double*>(out_dev), words.data(),
                                               reinterpret_cast<double*>(share), stream)) {
-                work.download(dsum->landed, share, static_cast<size_t>(mine) * D);
-                // (this rank's blocks: those starting in its share; a share holds whole blocks)
-                const auto first = ooff.begin(), last = ooff.begin() + ninter;
-                fix_repeats(dsum->landed, std::lower_bound(first, last, at) - first,
-                            std::lower_bound(first, last, at + mine) - first, at);
+                if (mine > 0) {
+                    // landed is the whole request's share; this batch fills the
+                    // window starting at mine_lo - at_me.  The block indices and
+                    // the fix's base are batch-local, as ooff is.
+                    work.download(dsum->landed + (mine_lo - at_me), share, static_cast<size_t>(mine) * D);
+                    const auto first = ooff.begin(), last = ooff.begin() + ninter;
+                    const int64_t loc = mine_lo - b0;
+                    fix_repeats(dsum->landed + (mine_lo - at_me), std::lower_bound(first, last, loc) - first,
+                                std::lower_bound(first, last, loc + mine) - first, loc);
+                }
                 dsum->done = true;
             }
             work.release(share);
-            dsum->seconds = MPI_Wtime() - t;
+            dsum->seconds += MPI_Wtime() - t;
         }
     }
     if (out_dev != nullptr && (targets == nullptr || targets->download) &&
-        (dsum == nullptr || !dsum->done || gpu::device_solve_check())) {
+        (dsum == nullptr || !dsum->done || dsum->force_out_download || gpu::device_solve_check())) {
         const double t = trace ? MPI_Wtime() : 0.0;
         work.download(out, out_dev, out_bytes);
         fix_repeats(out, 0, ninter, 0);
@@ -4715,9 +4742,19 @@ void partial_schur_blocks(fmm::ParallelTree<CoordType, DataType>& tree, int64_t 
             // arrays, its roff/coff are rebased, and its out starts at
             // ooff[k0]; a sketch's dims and omega_off are windowed too, while
             // omega_off's values stay absolute into omega_pos/dest/val.
-            const bool batched = targets == nullptr && (replicate || dsum == nullptr);
+            // Batching the request is what bounds the CB arenas: they are sized
+            // by the batch's points, not the whole call's.  An external sum
+            // (dsum) no longer disables it - PartialDeviceSum::out_base tells
+            // each batch where it sits in the request's out layout, so its
+            // reduce-scatter shares and its window of `landed` follow.
+            const bool batched = targets == nullptr;
             const int64_t budget = std::max<int64_t>(1, fmm::gpu::partial_device_store().max_columns);
             int64_t k0 = 0, nbatch = 0;
+            bool sum_all = true, sum_any = false;
+            if (dsum != nullptr && !replicate) {
+                dsum->done = false;
+                dsum->seconds = 0.0;
+            }
             do {
                 int64_t nb = ninter - k0;  // device outputs / an external sum: one call, as before
                 if (batched && nb > 1) {
@@ -4745,14 +4782,35 @@ void partial_schur_blocks(fmm::ParallelTree<CoordType, DataType>& tree, int64_t 
                 }
                 const PartialSketch* sk_b = sketch != nullptr ? &sketch_b : nullptr;
                 const PartialOutLayout layout_b = partial_out_layout(nb, nrows + k0, ncols + k0, sk_b);
+                PartialDeviceSum<DataType> dsum_b;
+                PartialDeviceSum<DataType>* ds_b = nullptr;
+                if (dsum != nullptr && !replicate) {
+                    dsum_b = *dsum;
+                    dsum_b.out_base = ooff[static_cast<size_t>(k0)];
+                    dsum_b.done = false;
+                    dsum_b.seconds = 0.0;
+                    // One batch only: exactly the unbatched call, `out` elided as
+                    // before.  Cut into several, every batch keeps `out` whole, so
+                    // a batch whose device sum did not happen cannot leave the
+                    // caller with half a `landed` and half an `out`.
+                    dsum_b.force_out_download = !(k0 == 0 && nb == ninter);
+                    ds_b = &dsum_b;
+                }
                 partial_schur_blocks_device(tree, nb, rows + roff[static_cast<size_t>(k0)], nrows + k0,
                                             cols + coff[static_cast<size_t>(k0)], ncols + k0,
                                             out + ooff[static_cast<size_t>(k0)], roff_b, coff_b, layout_b, sk_b,
-                                            targets != nullptr && check ? &checked_targets : targets,
-                                            replicate ? nullptr : dsum);
+                                            targets != nullptr && check ? &checked_targets : targets, ds_b);
+                if (ds_b != nullptr) {
+                    sum_all = sum_all && ds_b->done;
+                    sum_any = sum_any || ds_b->done;
+                    dsum->seconds += ds_b->seconds;
+                }
                 ++nbatch;
                 k0 += std::max<int64_t>(nb, 1);
             } while (k0 < ninter);
+            // Mixed is possible - a batch's out_dev depends on the heap at the
+            // time - and then the host path runs on the `out` every batch kept.
+            if (dsum != nullptr && !replicate) dsum->done = sum_any && sum_all;
             if (check) {
                 const double t1 = MPI_Wtime();
                 std::vector<DataType> host(static_cast<size_t>(ooff.back()));
