@@ -162,6 +162,10 @@ PROGRAM ButterflyPACK_Acoustic_SURF_CHEB
 							read (strings1, *) quant%printstruct
 						else if (trim(strings) == '--tensor') then
 							read (strings1, *) quant%tensor
+						else if (trim(strings) == '--tensor_lu') then
+							read (strings1, *) quant%tensor_lu
+						else if (trim(strings) == '--tensor_dump') then
+							read (strings1, *) quant%tensor_dump
 						else
 							if (ptree%MyID == Main_ID) write (*, *) 'ignoring unknown quant: ', trim(strings)
 						endif
