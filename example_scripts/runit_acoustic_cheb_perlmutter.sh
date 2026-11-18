@@ -56,8 +56,8 @@ run() {
 	local quant="-quant --geo sphere --split $S --N 8 --wavenum $k --onthefly 1 --gmres_restart 200 --eigtest 0"
 	local opt="-option --tol_comp 1d-4 --tol_itersol 1d-6 --n_iter 600 --verbosity 1"
 	case $fmt in
-	tbf) quant="$quant --tensor 1"; opt="$opt --sample_para 0.5 --sample_para_outer 0.5 --htensor_mvp_level_batch 100 --lrlevel 100" ;;
-	tlr) quant="$quant --tensor 1"; opt="$opt --sample_para 0.5 --sample_para_outer 0.5 --htensor_mvp_level_batch 100 --lrlevel 0" ;;
+	tbf) quant="$quant --tensor 1"; opt="$opt --precon 2 --sample_para 0.5 --sample_para_outer 0.5 --htensor_mvp_level_batch 100 --lrlevel 100" ;;
+	tlr) quant="$quant --tensor 1"; opt="$opt --precon 2 --sample_para 0.5 --sample_para_outer 0.5 --htensor_mvp_level_batch 100 --lrlevel 0" ;;
 	mbf) quant="$quant --forest 1"; opt="$opt --format 2 --precon 2 --knn 30 --forwardN15flag 0 --less_adapt 1 --lrlevel 100" ;;
 	*) echo "unknown format $fmt"; return ;;
 	esac
