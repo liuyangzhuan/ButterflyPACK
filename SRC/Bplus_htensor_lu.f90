@@ -25,6 +25,8 @@
 !>   - a Schur update of a Tucker block rebuilds the block from products: per-mode bases from a few random products of
 !>     the updated block (every product gives all fibers of its output) and the core by an exact projection;
 !>   - a product with a Tucker factor that updates a hierarchical block is formed in Tucker form and added block by block.
+!> A variant is the block LU with whole-cluster pivots (htlu_BLU): the lower blocks are A_ji S_ii^{-1} with S_ii the whole
+!> current diagonal block, the upper blocks stay the Schur-updated blocks, and solves go through the block factors.
 !> The inverse (HTLU_forest_inverse) is an in-place block Gauss-Jordan sweep on the same trees with the same kernels.
 !> Singular values are dropped below option%tol_rand relative to each block and below option%tol_rand*normest, with
 !> normest an estimate of ||A||_2 (LU) or ||A^{-1}||_2 (inverse) given by the caller.
@@ -71,12 +73,17 @@ module Bplus_htensor_lu
 
    !>**** blocks above this size (rows) create OpenMP tasks for their children
    integer, parameter :: htlu_task_rows = 1024
+   !>**** products with at most this many multiply-adds use matmul instead of BLAS (whose per-call overhead dominates for the
+   !>**** small Tucker factors and cores, and whose buffer allocation contends between threads)
+   real(kind=8), parameter :: htlu_small_gemm = 32768d0
 
    !>**** thread-seconds and counts of the leaf operations of the factorization (diagnostics): 1 Tucker rebuilds of Schur
    !>**** updates, 2 triangular solves of Tucker blocks, 3 Tucker products, 4 Tucker multiplications of the inverse, 5 dense leaf
-   !>**** operations, 6 Tucker rebuilds of sums of Tucker blocks
-   real(kind=8) :: htlu_tsec(6) = 0d0
-   integer(kind=8) :: htlu_tcnt(6) = 0
+   !>**** operations, 6 Tucker rebuilds of sums of Tucker blocks, 7 deterministic Tucker sums (QR of the concatenated factors)
+   real(kind=8) :: htlu_tsec(7) = 0d0
+   integer(kind=8) :: htlu_tcnt(7) = 0
+   !>**** deterministic Tucker sums whose new core would exceed this many entries fall back to the randomized rebuild
+   integer(kind=8), parameter :: htlu_sum_cap = 4000000
    !>**** rebuilds by level of the target and kind (1: Schur product terms, 2: sums of Tucker blocks)
    real(kind=8) :: htlu_rlev_t(0:15, 2) = 0d0
    integer(kind=8) :: htlu_rlev_n(0:15, 2) = 0
@@ -97,10 +104,11 @@ contains
    subroutine HTLU_print_timers(wall, nth)
       real(kind=8) wall
       integer nth, c, l
-      character(len=24), parameter :: cname(6) = (/'Tucker rebuilds (Schur) ', 'Tucker triangular solves', &
-         'Tucker products         ', 'Tucker inverse products ', 'dense leaf operations   ', 'Tucker rebuilds (sums)  '/)
+      character(len=24), parameter :: cname(7) = (/'Tucker rebuilds (Schur) ', 'Tucker solves           ', &
+         'Tucker products         ', 'Tucker inverse products ', 'dense leaf operations   ', 'Tucker rebuilds (sums)  ', &
+         'Tucker sums (QR)        '/)
       write (*, '(A,F10.1,A,I4,A)') ' tensor LU leaf operations (thread-seconds; wall', wall, ' s x', nth, ' threads):'
-      do c = 1, 6
+      do c = 1, 7
          if (htlu_tcnt(c) > 0) write (*, '(4X,A24,F12.1,A,I12,A)') cname(c), htlu_tsec(c), ' s in', htlu_tcnt(c), ' calls'
       enddo
       write (*, '(4X,A24,F12.1,A)') 'sum / (wall x threads)', 100d0*sum(htlu_tsec)/max(1d-30, wall*nth), ' %'
@@ -162,6 +170,26 @@ contains
       if (m*n == 0) return
       if (k == 0) then
          C = 0
+         return
+      endif
+      if (dble(m)*dble(n)*dble(k) <= htlu_small_gemm) then
+         if (ta == 'N' .and. tb == 'N') then
+            C = matmul(A, B)
+         elseif (ta == 'N') then
+            if (tb == 'T') then
+               C = matmul(A, transpose(B))
+            else
+               C = matmul(A, htlu_conj(transpose(B)))
+            endif
+         elseif (tb == 'N') then
+            if (ta == 'T') then
+               C = matmul(transpose(A), B)
+            else
+               C = matmul(htlu_conj(transpose(A)), B)
+            endif
+         else
+            call gemmf90(A, size(A, 1), B, size(B, 1), C, m, ta, tb, m, n, k, BPACK_cone, BPACK_czero)
+         endif
          return
       endif
       call gemmf90(A, size(A, 1), B, size(B, 1), C, m, ta, tb, m, n, k, BPACK_cone, BPACK_czero)
@@ -298,10 +326,10 @@ contains
 
    !>**** one mode product: B = op(M) applied along dimension d of the natural-order tensor A (dims, R columns); op(M) is sout x dims(d)
    subroutine htlu_mode1(Ndim, dims, d, R, A, M, op, sout, B)
-      integer Ndim, dims(Ndim), d, R, sout, pre, sin, k, suf
+      integer Ndim, dims(Ndim), d, R, sout, pre, sin, k, suf, i
       DT :: A(*), B(*), M(:, :)
       character op
-      DT, allocatable :: Mc(:, :)
+      DT, allocatable :: At(:, :), Bt(:, :)
       pre = 1
       do k = 1, d - 1
          pre = pre*dims(k)
@@ -317,25 +345,30 @@ contains
          return
       endif
       if (pre == 1) then
-         call gemmf90(M, size(M, 1), A, sin, B, sout, op, 'N', sout, suf, sin, BPACK_cone, BPACK_czero)
-      else
-         ! slice k: B_k (pre x sout) = A_k (pre x sin) * op(M)^T
-         if (op == 'N') then
-            do k = 1, suf
-               call gemmf90(A((k - 1)*pre*sin + 1), pre, M, size(M, 1), B((k - 1)*pre*sout + 1), pre, 'N', 'T', pre, sout, sin, BPACK_cone, BPACK_czero)
-            enddo
-         elseif (op == 'T') then
-            do k = 1, suf
-               call gemmf90(A((k - 1)*pre*sin + 1), pre, M, size(M, 1), B((k - 1)*pre*sout + 1), pre, 'N', 'N', pre, sout, sin, BPACK_cone, BPACK_czero)
-            enddo
+         if (dble(sout)*dble(suf)*dble(sin) <= htlu_small_gemm) then
+            allocate (At(sin, suf))
+            At = reshape(A(1:sin*suf), (/sin, suf/))
+            call htlu_gemm(op, 'N', M, At, Bt)
+            B(1:sout*suf) = reshape(Bt, (/sout*suf/))
+            deallocate (At, Bt)
          else
-            allocate (Mc(size(M, 1), size(M, 2)))
-            Mc = htlu_conj(M)
-            do k = 1, suf
-               call gemmf90(A((k - 1)*pre*sin + 1), pre, Mc, size(Mc, 1), B((k - 1)*pre*sout + 1), pre, 'N', 'N', pre, sout, sin, BPACK_cone, BPACK_czero)
-            enddo
-            deallocate (Mc)
+            call gemmf90(M, size(M, 1), A, sin, B, sout, op, 'N', sout, suf, sin, BPACK_cone, BPACK_czero)
          endif
+      else
+         ! slice k: B_k (pre x sout) = A_k (pre x sin) * op(M)^T, i.e. B_k^T = op(M) A_k^T: all slices in one product
+         allocate (At(sin, pre*suf))
+         do k = 1, suf
+            do i = 1, sin
+               At(i, (k - 1)*pre + 1:k*pre) = A((k - 1)*pre*sin + (i - 1)*pre + 1:(k - 1)*pre*sin + i*pre)
+            enddo
+         enddo
+         call htlu_gemm(op, 'N', M, At, Bt)
+         do k = 1, suf
+            do i = 1, sout
+               B((k - 1)*pre*sout + (i - 1)*pre + 1:(k - 1)*pre*sout + i*pre) = Bt(i, (k - 1)*pre + 1:k*pre)
+            enddo
+         enddo
+         deallocate (At, Bt)
       endif
    end subroutine htlu_mode1
 
@@ -370,11 +403,11 @@ contains
    !>**** orthonormal bases Q(d) of the mode-d unfoldings of the natural-order tensor Y (dims, columns): singular values below
    !>**** tol(1) times the largest one of the unfolding or below tol(2) are dropped (eigenvalues of the Gram matrix)
    subroutine htlu_mode_bases(Ndim, dims, Y, tol, Q)
-      integer Ndim, dims(Ndim), d, md, pre, suf, k, rank, R
+      integer Ndim, dims(Ndim), d, md, pre, suf, k, rank, R, i
       DT :: Y(:, :)
       real(kind=8) tol(2)
       type(htlu_fmat) :: Q(:)
-      DT, allocatable :: G(:, :), UU(:, :), VV(:, :), w(:)
+      DT, allocatable :: G(:, :), UU(:, :), VV(:, :), w(:), Wd(:, :)
       DTR, allocatable :: S(:)
       R = size(Y, 2)
       allocate (w(max(1, size(Y))))
@@ -389,17 +422,16 @@ contains
          do k = d + 1, Ndim
             suf = suf*dims(k)
          enddo
-         allocate (G(md, md), UU(md, md), VV(md, md), S(md))
-         G = 0
-         if (pre == 1) then
-            if (suf > 0) call gemmf90(w, md, w, md, G, md, 'N', 'C', md, md, suf, BPACK_cone, BPACK_czero)
-         else
-            ! sum_k Y_k^H Y_k over the slices Y_k (pre x md): the conjugate of the Gram matrix
-            do k = 1, suf
-               call gemmf90(w((k - 1)*pre*md + 1), pre, w((k - 1)*pre*md + 1), pre, G, md, 'C', 'N', md, md, pre, BPACK_cone, BPACK_cone)
+         allocate (UU(md, md), VV(md, md), S(md))
+         ! the mode-d unfolding Wd (md x pre*suf), Wd(i, p + pre*(k-1)) = Y(p, i, k), and its Gram matrix Wd Wd^H
+         allocate (Wd(md, pre*suf))
+         do k = 1, suf
+            do i = 1, md
+               Wd(i, (k - 1)*pre + 1:k*pre) = w((k - 1)*pre*md + (i - 1)*pre + 1:(k - 1)*pre*md + i*pre)
             enddo
-            G = htlu_conj(G)
-         endif
+         enddo
+         call htlu_gemm('N', 'C', Wd, Wd, G)
+         deallocate (Wd)
          call SVD_Truncate(G, md, md, md, UU, VV, S, tol(1)**2, max(tol(2)**2, BPACK_SafeUnderflow), rank)
          if (allocated(Q(d)%mat)) deallocate (Q(d)%mat)
          allocate (Q(d)%mat(md, rank))
@@ -908,6 +940,102 @@ contains
       Pc%C = P%C
    end subroutine htlu_restrict
 
+   !>**** thin QR A = Q R (Q: m x k orthonormal columns, R: k x n, k = min(m, n))
+   subroutine htlu_qr(A, Q, R)
+      DT :: A(:, :)
+      DT, allocatable :: Q(:, :), R(:, :), W(:, :), tau(:)
+      integer m, n, k, i, j
+      m = size(A, 1)
+      n = size(A, 2)
+      k = min(m, n)
+      allocate (W(m, n), tau(max(1, k)))
+      W = A
+      if (allocated(Q)) deallocate (Q)
+      if (allocated(R)) deallocate (R)
+      allocate (Q(m, k), R(k, n))
+      R = 0
+      if (k > 0) then
+         call geqrff90(W, tau)
+         do j = 1, n
+            do i = 1, min(j, k)
+               R(i, j) = W(i, j)
+            enddo
+         enddo
+         call un_or_gqrf90(W, tau, m, k, k)
+         Q = W(:, 1:k)
+      endif
+      deallocate (W, tau)
+   end subroutine htlu_qr
+
+   !>**** C = C + alpha*P for Tucker blocks C and P on the same clusters, without random products: per dimension the thin QR
+   !>**** [U_C U_P] = Q [RA RB] and [V_C V_P] = Qc [RcA RcB], the core G = kron(RA) C_C kron(RcA)^T + alpha kron(RB) C_P
+   !>**** kron(RcB)^T, then the truncated HOSVD of G. Returns ok = .false. (C unchanged) if G would exceed htlu_sum_cap entries
+   subroutine htlu_tucker_sum(C, P, alpha, tol, ok)
+      type(htlu_node) :: C, P
+      DT alpha
+      real(kind=8) tol(2)
+      logical ok
+      type(htlu_fmat), allocatable :: Q(:), Qc(:), RA(:), RB(:), RcA(:), RcB(:)
+      DT, allocatable :: Cat(:, :), R(:, :), KA(:, :), KB(:, :), T(:, :), G(:, :)
+      integer Ndim, d, na, nb, k, kc
+      integer(kind=8) gsize
+      real(kind=8) t0
+      t0 = MPI_Wtime()
+      Ndim = C%Ndim
+      gsize = 1
+      do d = 1, Ndim
+         k = min(C%m(d), size(C%U(d)%mat, 2) + size(P%U(d)%mat, 2))
+         kc = min(C%n(d), size(C%V(d)%mat, 2) + size(P%V(d)%mat, 2))
+         gsize = gsize*k*kc
+      enddo
+      ok = gsize <= htlu_sum_cap
+      if (.not. ok) return
+      allocate (Q(Ndim), Qc(Ndim), RA(Ndim), RB(Ndim), RcA(Ndim), RcB(Ndim))
+      do d = 1, Ndim
+         na = size(C%U(d)%mat, 2)
+         nb = size(P%U(d)%mat, 2)
+         allocate (Cat(C%m(d), na + nb))
+         Cat(:, 1:na) = C%U(d)%mat
+         Cat(:, na + 1:na + nb) = P%U(d)%mat
+         call htlu_qr(Cat, Q(d)%mat, R)
+         allocate (RA(d)%mat(size(R, 1), na), RB(d)%mat(size(R, 1), nb))
+         RA(d)%mat = R(:, 1:na)
+         RB(d)%mat = R(:, na + 1:na + nb)
+         deallocate (Cat, R)
+         na = size(C%V(d)%mat, 2)
+         nb = size(P%V(d)%mat, 2)
+         allocate (Cat(C%n(d), na + nb))
+         Cat(:, 1:na) = C%V(d)%mat
+         Cat(:, na + 1:na + nb) = P%V(d)%mat
+         call htlu_qr(Cat, Qc(d)%mat, R)
+         allocate (RcA(d)%mat(size(R, 1), na), RcB(d)%mat(size(R, 1), nb))
+         RcA(d)%mat = R(:, 1:na)
+         RcB(d)%mat = R(:, na + 1:na + nb)
+         deallocate (Cat, R)
+      enddo
+      ! G = kron(RA) C_C kron(RcA)^T + alpha kron(RB) C_P kron(RcB)^T
+      call htlu_kron(Ndim, RA, KA, 0)
+      call htlu_kron(Ndim, RcA, KB, 0)
+      call htlu_gemm('N', 'T', C%C, KB, T)
+      call htlu_gemm('N', 'N', KA, T, G)
+      deallocate (KA, KB, T)
+      call htlu_kron(Ndim, RB, KA, 0)
+      call htlu_kron(Ndim, RcB, KB, 0)
+      call htlu_gemm('N', 'T', P%C, KB, T)
+      call htlu_gemm('N', 'N', KA, T, R)
+      G = G + alpha*R
+      deallocate (KA, KB, T, R)
+      do d = 1, Ndim
+         call move_alloc(Q(d)%mat, C%U(d)%mat)
+         call move_alloc(Qc(d)%mat, C%V(d)%mat)
+         deallocate (RA(d)%mat, RB(d)%mat, RcA(d)%mat, RcB(d)%mat)
+      enddo
+      call move_alloc(G, C%C)
+      deallocate (Q, Qc, RA, RB, RcA, RcB)
+      call htlu_core_trim(C, tol)
+      call htlu_tadd(7, MPI_Wtime() - t0)
+   end subroutine htlu_tucker_sum
+
    !>**** C = C + alpha*P for a block C of any style and a Tucker block P on the same clusters
    recursive subroutine htlu_add_tucker(C, P, alpha, tol)
       type(htlu_node), target :: C, P
@@ -917,17 +1045,21 @@ contains
       type(htlu_node), allocatable :: Pc(:, :)
       DT, allocatable :: D(:, :)
       integer i, j
+      logical ok
       select case (C%style)
       case (1)
          call htlu_dense_of(P, D)
          C%D = C%D + alpha*D
          deallocate (D)
       case (2)
-         terms(1)%coef = BPACK_cone
-         terms(1)%a => C
-         terms(2)%coef = alpha
-         terms(2)%a => P
-         call htlu_tucker_rebuild(C, 2, terms, tol)
+         call htlu_tucker_sum(C, P, alpha, tol, ok)
+         if (.not. ok) then
+            terms(1)%coef = BPACK_cone
+            terms(1)%a => C
+            terms(2)%coef = alpha
+            terms(2)%a => P
+            call htlu_tucker_rebuild(C, 2, terms, tol)
+         endif
       case (4)
          allocate (Pc(C%nch, C%nch))
          do j = 1, C%nch
@@ -953,6 +1085,7 @@ contains
       DT, allocatable :: Bd(:, :)
       integer i, j, k
       real(kind=8) t0
+      logical ok
       select case (C%style)
       case (1)
          t0 = MPI_Wtime()
@@ -961,12 +1094,22 @@ contains
          deallocate (Bd)
          call htlu_tadd(5, MPI_Wtime() - t0)
       case (2)
-         terms(1)%coef = BPACK_cone
-         terms(1)%a => C
-         terms(2)%coef = -BPACK_cone
-         terms(2)%a => A
-         terms(2)%b => B
-         call htlu_tucker_rebuild(C, 2, terms, tol)
+         ! both operands Tucker: closed-form product and deterministic sum; otherwise the randomized rebuild, which is cheaper
+         ! than the weighted product with a hierarchical operand followed by the sum
+         ok = .false.
+         if (A%style == 2 .and. B%style == 2) then
+            call htlu_tucker_product(A, B, P, tol)
+            call htlu_tucker_sum(C, P, -BPACK_cone, tol, ok)
+            call HTLU_delete(P)
+         endif
+         if (.not. ok) then
+            terms(1)%coef = BPACK_cone
+            terms(1)%a => C
+            terms(2)%coef = -BPACK_cone
+            terms(2)%a => A
+            terms(2)%b => B
+            call htlu_tucker_rebuild(C, 2, terms, tol)
+         endif
       case (4)
          if (A%style == 4 .and. B%style == 4) then
             do j = 1, C%nch
@@ -1117,6 +1260,162 @@ contains
          !$omp taskwait
       enddo
    end subroutine htlu_LU
+
+   !>**** block LU with whole-cluster pivots (htlu_BLU) of a diagonal block D = Lb Ub: the lower sons hold X_ji = At_ji S_ii^{-1}
+   !>**** (Lb block unit lower triangular), the upper sons the Schur-updated blocks At_ij and the diagonal sons the factored
+   !>**** current diagonal blocks S_ii (Ub block upper triangular); dense leaves hold their partially pivoted LU.
+   !>**** X = D^{-1} X: y_j = x_j - sum_{i<j} X_ji y_i, then x_i = S_ii^{-1} (y_i - sum_{l>i} At_il x_l) for i = K..1
+   recursive subroutine htlu_bsolve(D, X)
+      type(htlu_node) :: D
+      DT :: X(:, :)
+      type(htlu_fmat), allocatable :: Xc(:)
+      integer i, j
+      if (size(X, 2) == 0) return
+      if (D%style == 1) then
+         call getrsf90(D%D, D%ipiv, X, 'N')
+      else
+         call assert(D%style == 4, 'htlu_bsolve: a Tucker diagonal block')
+         allocate (Xc(D%nch))
+         call htlu_gather(D, 'r', X, Xc)
+         do j = 2, D%nch
+            do i = 1, j - 1
+               call htlu_mult(D%sons(j, i), 'N', Xc(i)%mat, Xc(j)%mat, -BPACK_cone)
+            enddo
+         enddo
+         do i = D%nch, 1, -1
+            do j = i + 1, D%nch
+               call htlu_mult(D%sons(i, j), 'N', Xc(j)%mat, Xc(i)%mat, -BPACK_cone)
+            enddo
+            call htlu_bsolve(D%sons(i, i), Xc(i)%mat)
+         enddo
+         call htlu_scatter(D, 'r', Xc, X, 1)
+         deallocate (Xc)
+      endif
+   end subroutine htlu_bsolve
+
+   !>**** X = D^{-T} X for the block-LU factored diagonal block D: D^{-T} = Lb^{-T} Ub^{-T}, i.e. z_i = S_ii^{-T} (x_i - sum_{l<i}
+   !>**** At_li^T z_l) for i = 1..K, then y_i = z_i - sum_{j>i} X_ji^T y_j for i = K..1
+   recursive subroutine htlu_bsolve_T(D, X)
+      type(htlu_node) :: D
+      DT :: X(:, :)
+      type(htlu_fmat), allocatable :: Xc(:)
+      integer i, j
+      if (size(X, 2) == 0) return
+      if (D%style == 1) then
+         call getrsf90(D%D, D%ipiv, X, 'T')
+      else
+         call assert(D%style == 4, 'htlu_bsolve_T: a Tucker diagonal block')
+         allocate (Xc(D%nch))
+         call htlu_gather(D, 'c', X, Xc)
+         do i = 1, D%nch
+            do j = 1, i - 1
+               call htlu_mult(D%sons(j, i), 'T', Xc(j)%mat, Xc(i)%mat, -BPACK_cone)
+            enddo
+            call htlu_bsolve_T(D%sons(i, i), Xc(i)%mat)
+         enddo
+         do i = D%nch - 1, 1, -1
+            do j = i + 1, D%nch
+               call htlu_mult(D%sons(j, i), 'T', Xc(j)%mat, Xc(i)%mat, -BPACK_cone)
+            enddo
+         enddo
+         call htlu_scatter(D, 'c', Xc, X, 1)
+         deallocate (Xc)
+      endif
+   end subroutine htlu_bsolve_T
+
+   !>**** M = M D^{-1} for the block-LU factored diagonal block D of the column clusters of M
+   recursive subroutine htlu_XSM(D, M, tol)
+      type(htlu_node), target :: D, M
+      real(kind=8) tol(2)
+      type(htlu_fmat), allocatable :: Q(:), S(:)
+      DT, allocatable :: W(:, :), G(:, :), Z0(:, :), Rk(:, :), T(:, :)
+      integer a, b, c, k
+      real(kind=8) t0
+      t0 = MPI_Wtime()
+      select case (M%style)
+      case (1)
+         call assert(D%style == 1, 'htlu_XSM: a dense block with a hierarchical factor')
+         allocate (T(size(M%D, 2), size(M%D, 1)))
+         T = transpose(M%D)
+         call getrsf90(D%D, D%ipiv, T, 'T')
+         M%D = transpose(T)
+         deallocate (T)
+         call htlu_tadd(5, MPI_Wtime() - t0)
+      case (2)
+         ! M D^{-1} = kron(QU) Z^T with U_M = QU RU and Z = (D^{-T} kron(V_M)) (kron(RU) C_M)^T ~ kron(Q) G
+         allocate (Q(M%Ndim), S(M%Ndim))
+         call htlu_orth(M%Ndim, M%U, S, Rk)
+         call htlu_gemm('N', 'N', Rk, M%C, Z0)
+         call htlu_kron(M%Ndim, M%V, W, 0)
+         call htlu_bsolve_T(D, W)
+         call htlu_gemm('N', 'T', W, Z0, Rk)
+         call htlu_tuckerize(M%Ndim, M%n, Rk, tol, Q, G)
+         do k = 1, M%Ndim
+            call move_alloc(S(k)%mat, M%U(k)%mat)
+            call move_alloc(Q(k)%mat, M%V(k)%mat)
+         enddo
+         deallocate (M%C)
+         allocate (M%C(size(G, 2), size(G, 1)))
+         M%C = transpose(G)
+         deallocate (Q, S, W, Z0, Rk, G)
+         call htlu_core_trim(M, tol)
+         call htlu_tadd(2, MPI_Wtime() - t0)
+      case (4)
+         call assert(D%style == 4, 'htlu_XSM: a hierarchical block with a leaf factor')
+         ! M D^{-1} = (M Ub^{-1}) Lb^{-1}, row son by row son
+         do a = 1, M%nch
+            !$omp task default(shared) firstprivate(a) private(b,c) if(product(M%m) >= htlu_task_rows)
+            do b = 1, M%nch
+               do c = 1, b - 1
+                  call htlu_subhh(M%sons(a, b), M%sons(a, c), D%sons(c, b), tol)
+               enddo
+               call htlu_XSM(D%sons(b, b), M%sons(a, b), tol)
+            enddo
+            do b = M%nch - 1, 1, -1
+               do c = b + 1, M%nch
+                  call htlu_subhh(M%sons(a, b), M%sons(a, c), D%sons(c, b), tol)
+               enddo
+            enddo
+            !$omp end task
+         enddo
+         !$omp taskwait
+      end select
+   end subroutine htlu_XSM
+
+   !>**** block LU with whole-cluster pivots of the diagonal block A in place (see htlu_bsolve): for i = 1..K, factor A_ii,
+   !>**** A_ji = A_ji A_ii^{-1} (j > i), A_jl = A_jl - A_ji A_il (j, l > i); the upper blocks A_ij keep their Schur-updated values
+   recursive subroutine htlu_BLU(A, tol)
+      type(htlu_node), target :: A
+      real(kind=8) tol(2)
+      integer i, j, l
+      real(kind=8) t0
+      if (A%style == 1) then
+         if (allocated(A%ipiv)) deallocate (A%ipiv)
+         allocate (A%ipiv(size(A%D, 1)))
+         t0 = MPI_Wtime()
+         call getrff90(A%D, A%ipiv)
+         call htlu_tadd(5, MPI_Wtime() - t0)
+         return
+      endif
+      call assert(A%style == 4, 'htlu_BLU: a Tucker diagonal block')
+      do i = 1, A%nch
+         call htlu_BLU(A%sons(i, i), tol)
+         do j = i + 1, A%nch
+            !$omp task default(shared) firstprivate(i,j) if(product(A%m) >= htlu_task_rows)
+            call htlu_XSM(A%sons(i, i), A%sons(j, i), tol)
+            !$omp end task
+         enddo
+         !$omp taskwait
+         do l = i + 1, A%nch
+            do j = i + 1, A%nch
+               !$omp task default(shared) firstprivate(i,j,l) if(product(A%m) >= htlu_task_rows)
+               call htlu_subhh(A%sons(j, l), A%sons(j, i), A%sons(i, l), tol)
+               !$omp end task
+            enddo
+         enddo
+         !$omp taskwait
+      enddo
+   end subroutine htlu_BLU
 
    !>**** A = alpha*A for a block of any style
    recursive subroutine htlu_scale(A, alpha)
@@ -1684,10 +1983,11 @@ contains
       deallocate (x, y)
    end function HTLU_forest_norm2
 
-   !>**** LU factorization of the P x P forest A in place: block LU over the trees, H-matrix LU inside
+   !>**** LU factorization of the P x P forest A in place: block LU over the trees, H-matrix LU inside (blocklu = 0) or block LU
+   !>**** with whole-cluster pivots inside (blocklu = 1, see htlu_bsolve)
    !>**** (normest: estimate of ||A||_2; Tucker truncation at option%tol_rand relative to each block and to normest)
-   subroutine HTLU_forest_factor(P, A, option, stats, ptree, normest)
-      integer P, p1, q1, r1
+   subroutine HTLU_forest_factor(P, A, option, stats, ptree, normest, blocklu)
+      integer P, p1, q1, r1, blocklu
       type(htlu_node), target :: A(:, :)
       type(Hoption) :: option
       type(Hstat) :: stats
@@ -1703,15 +2003,24 @@ contains
       !$omp parallel
       !$omp single
       do p1 = 1, P
-         call htlu_LU(A(p1, p1), tol)
-         do q1 = p1 + 1, P
-            !$omp task default(shared) firstprivate(p1,q1)
-            call htlu_LXM(A(p1, p1), A(p1, q1), tol)
-            !$omp end task
-            !$omp task default(shared) firstprivate(p1,q1)
-            call htlu_XUM(A(p1, p1), A(q1, p1), tol)
-            !$omp end task
-         enddo
+         if (blocklu == 1) then
+            call htlu_BLU(A(p1, p1), tol)
+            do q1 = p1 + 1, P
+               !$omp task default(shared) firstprivate(p1,q1)
+               call htlu_XSM(A(p1, p1), A(q1, p1), tol)
+               !$omp end task
+            enddo
+         else
+            call htlu_LU(A(p1, p1), tol)
+            do q1 = p1 + 1, P
+               !$omp task default(shared) firstprivate(p1,q1)
+               call htlu_LXM(A(p1, p1), A(p1, q1), tol)
+               !$omp end task
+               !$omp task default(shared) firstprivate(p1,q1)
+               call htlu_XUM(A(p1, p1), A(q1, p1), tol)
+               !$omp end task
+            enddo
+         endif
          !$omp taskwait
          do r1 = p1 + 1, P
             do q1 = p1 + 1, P
@@ -1729,9 +2038,10 @@ contains
       stats%Time_Factor = stats%Time_Factor + t2 - t1
    end subroutine HTLU_forest_factor
 
-   !>**** X = A^{-1} X with the LU of the P x P forest A (trees one after another, nloc entries each)
-   subroutine HTLU_forest_solve(P, A, nloc, X)
-      integer P, nloc, p1, q1, R
+   !>**** X = A^{-1} X with the LU (blocklu = 0) or the block LU (blocklu = 1) of the P x P forest A (trees one after another,
+   !>**** nloc entries each)
+   subroutine HTLU_forest_solve(P, A, nloc, X, blocklu)
+      integer P, nloc, p1, q1, R, blocklu
       type(htlu_node) :: A(:, :)
       DT :: X(:, :)
       DT, allocatable :: xq(:, :), xp(:, :)
@@ -1745,7 +2055,7 @@ contains
             xq = X((q1 - 1)*nloc + 1:q1*nloc, 1:R)
             call htlu_mult(A(p1, q1), 'N', xq, xp, -BPACK_cone)
          enddo
-         call htlu_lsolve(A(p1, p1), xp)
+         if (blocklu == 0) call htlu_lsolve(A(p1, p1), xp)
          X((p1 - 1)*nloc + 1:p1*nloc, 1:R) = xp
       enddo
       do p1 = P, 1, -1
@@ -1754,7 +2064,11 @@ contains
             xq = X((q1 - 1)*nloc + 1:q1*nloc, 1:R)
             call htlu_mult(A(p1, q1), 'N', xq, xp, -BPACK_cone)
          enddo
-         call htlu_usolve(A(p1, p1), xp)
+         if (blocklu == 1) then
+            call htlu_bsolve(A(p1, p1), xp)
+         else
+            call htlu_usolve(A(p1, p1), xp)
+         endif
          X((p1 - 1)*nloc + 1:p1*nloc, 1:R) = xp
       enddo
       !$omp end single

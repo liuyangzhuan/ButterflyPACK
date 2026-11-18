@@ -109,7 +109,7 @@ implicit none
 		integer:: faceorder = 0 ! order of the six faces of the sphere/cube (the forest's base patches): 0: +x,-x,+y,-y,+z,-z; 1: sweep +z,+x,+y,-x,-y,-z
 		integer:: printstruct = 0 ! 1: write every block's rank before (fort.100000+rank) and after (fort.200000+rank) the factorization, and the cluster geometry (clusters.txt)
 		integer:: tensor = 0 ! 1: iterative solve with a forest of H-TENSOR blocks, one per pair of base patches on their (split*N) x (split*N) parameter grids (split must be a power of two)
-		integer:: tensor_lu = 0 ! tensor forest with Tucker blocks (--lrlevel 0, one MPI process): 0: GMRES only; 1: LU factorization and direct solve; 2: GMRES preconditioned by the LU; 3: H-TENSOR inverse and direct solve; 4: GMRES preconditioned by the inverse (truncation tolerance tol_rand)
+		integer:: tensor_lu = 0 ! tensor forest with Tucker blocks (--lrlevel 0, one MPI process): 0: GMRES only; 1: LU factorization and direct solve; 2: GMRES preconditioned by the LU; 3: H-TENSOR inverse and direct solve; 4: GMRES preconditioned by the inverse; 5: block LU with whole-cluster pivots and direct solve; 6: GMRES preconditioned by the block LU (truncation tolerance tol_rand)
 		integer:: tensor_dump = 0 ! 1: write the dense matrix of the tensor forest (faces one after another, natural order on each face grid) to tensor_dense.bin and stop (diagnostics, one MPI process)
 		integer:: tlev = 0 ! log2(split): levels of the per-dimension trees of a base patch down to single patches
 		real(kind=8):: tnear_para = 2.2d0 ! admissibility parameter of the tensor forest (option%near_para)
@@ -135,8 +135,9 @@ implicit none
 		type(z_Hstat), allocatable:: stats(:, :)
 		type(quant_pair_CHEB), allocatable:: pair(:, :)
 		integer, allocatable:: gidx(:, :) ! gidx(i, p): node (natural order) of local entry i of base patch p
-		type(z_htlu_node), allocatable:: lu(:, :) ! LU factors (quant%tensor_lu = 1, 2) or inverse (3, 4) of the forest
+		type(z_htlu_node), allocatable:: lu(:, :) ! LU factors (quant%tensor_lu = 1, 2), inverse (3, 4) or block LU factors (5, 6) of the forest
 		integer:: inverse = 0 ! 1: lu holds the inverse
+		integer:: blocklu = 0 ! 1: lu holds the block LU factors (whole-cluster pivots)
 		type(z_Hoption), pointer:: option => null()
 		type(z_proctree), pointer:: ptree => null()
 		real(kind=8):: tmvp = 0d0 ! time of the products
@@ -2128,7 +2129,8 @@ contains
 
 	!**** LU factorization of the tensor forest with Tucker blocks (quant%tensor_lu > 0, one MPI process): the H-TENSOR blocks are
 	!**** copied into recursive block trees, the copy is checked against the forest product on a random vector, and the forest is
-	!**** factored (block LU over the base patches, H-matrix LU inside; quant%tensor_lu = 1, 2) or inverted (block Gauss-Jordan; 3, 4),
+	!**** factored (block LU over the base patches, H-matrix LU inside; quant%tensor_lu = 1, 2, or block LU with whole-cluster pivots
+	!**** inside; 5, 6) or inverted (block Gauss-Jordan; 3, 4),
 	!**** with Tucker arithmetic truncated at option%tol_rand relative to each block and to the estimate of ||Z|| (LU) or ||Z^{-1}|| (inverse)
 	subroutine tensor_factor_CHEB(tf, quant, option, ptree)
 		use z_BPACK_utilities
@@ -2196,18 +2198,19 @@ contains
 		call z_InitStat(stats_f)
 		! norm estimate for the absolute part of the Tucker truncation: ||Z^{-1}|| (inverse) or ||Z|| (LU)
 		t1 = MPI_Wtime()
-		if (quant%tensor_lu >= 3) then
+		if (quant%tensor_lu == 3 .or. quant%tensor_lu == 4) then
 			normest = tensor_invnorm_CHEB(tf, option, ptree)
 		else
 			normest = z_HTLU_forest_norm2(P, tf%lu, nl, 20)
 		endif
 		t2 = MPI_Wtime()
 		write (*, '(A,Es12.4,A,F10.3,A)') ' tensor LU: norm estimate for the truncation', normest, ' (', t2 - t1, ' s)'
-		if (quant%tensor_lu >= 3) then
+		if (quant%tensor_lu == 3 .or. quant%tensor_lu == 4) then
 			call z_HTLU_forest_inverse(P, tf%lu, option, stats_f, ptree, normest)
 			tf%inverse = 1
 		else
-			call z_HTLU_forest_factor(P, tf%lu, option, stats_f, ptree, normest)
+			if (quant%tensor_lu >= 5) tf%blocklu = 1
+			call z_HTLU_forest_factor(P, tf%lu, option, stats_f, ptree, normest, tf%blocklu)
 		endif
 		if (ptree%MyID == Main_ID) call z_HTLU_print_profile(P, tf%lu, lmax, 'factors')
 		memd = 0d0
@@ -2220,7 +2223,7 @@ contains
 				call z_HTLU_stats(tf%lu(p1, q1), memd, memt, rk, nd, nt)
 			enddo
 		enddo
-		if (quant%tensor_lu >= 3) then
+		if (quant%tensor_lu == 3 .or. quant%tensor_lu == 4) then
 			write (*, '(A,F12.3,A,Es10.2,A)') ' tensor LU: inverse time:', stats_f%Time_Factor, ' s (tol_rand', option%tol_rand, ')'
 		else
 			write (*, '(A,F12.3,A,Es10.2,A)') ' tensor LU factorization time:', stats_f%Time_Factor, ' s (tol_rand', option%tol_rand, ')'
@@ -2246,7 +2249,7 @@ contains
 				call z_HTLU_forest_mult(tf%nface, tf%lu, tf%nloc, Vin(1:M, 1:num_vect), Vout(1:M, 1:num_vect))
 			else
 				Vout(1:M, 1:num_vect) = Vin(1:M, 1:num_vect)
-				call z_HTLU_forest_solve(tf%nface, tf%lu, tf%nloc, Vout(1:M, 1:num_vect))
+				call z_HTLU_forest_solve(tf%nface, tf%lu, tf%nloc, Vout(1:M, 1:num_vect), tf%blocklu)
 			endif
 		class default
 			write (*, *) "unexpected type"
@@ -2255,7 +2258,8 @@ contains
 	end subroutine tensor_lu_precon_CHEB
 
 	!**** solve for a plane wave with the tensor-forest product and evaluate the far field: GMRES without preconditioner (quant%tensor_lu = 0),
-	!**** direct solve with the LU (1) or the inverse (3), or GMRES preconditioned by the LU (2) or the inverse (4)
+	!**** direct solve with the LU (1), the inverse (3) or the block LU (5), or GMRES preconditioned by the LU (2), the inverse (4) or
+	!**** the block LU (6)
 	subroutine tensor_solve_CHEB(tf, quant, option, ptree)
 		use z_BPACK_Solve_Mul
 		use z_BPACK_utilities
@@ -2294,7 +2298,7 @@ contains
 				call z_HTLU_forest_mult(tf%nface, tf%lu, tf%nloc, b, x)
 			else
 				x = b
-				call z_HTLU_forest_solve(tf%nface, tf%lu, tf%nloc, x)
+				call z_HTLU_forest_solve(tf%nface, tf%lu, tf%nloc, x, tf%blocklu)
 			endif
 			t2 = MPI_Wtime()
 			allocate (r(max(nl, 1), 1))
@@ -2302,7 +2306,7 @@ contains
 			relres = sqrt(sum(abs(r(1:nl, 1) - b(1:nl, 1))**2)/sum(abs(b(1:nl, 1))**2))
 			deallocate (r)
 			if (ptree%MyID == Main_ID) write (*, '(A,F12.3,A,Es12.4)') ' tensor LU direct solve time:', t2 - t1, ' s   relative residual (forest product):', relres
-			if (quant%tensor_lu == 1 .or. quant%tensor_lu == 3) then
+			if (mod(quant%tensor_lu, 2) == 1) then
 				call farfield_CHEB(quant, ptree, nl, gi, x(:, 1))
 				call z_delete_Hstat(stats_sol)
 				deallocate (gi, x, b)
@@ -2311,7 +2315,7 @@ contains
 			x = 0d0
 		endif
 		t1 = MPI_Wtime()
-		if (quant%tensor_lu == 2 .or. quant%tensor_lu == 4) then
+		if (quant%tensor_lu >= 2 .and. mod(quant%tensor_lu, 2) == 0) then
 			call z_BPACK_Zgmres_usermatvec_precon(option%n_iter, nl, b, x, relres, iter, tensor_blackbox_MVP_CHEB, tensor_lu_precon_CHEB, &
 				&	ptree, option, stats_sol, kert, restart_in=restart)
 		else
