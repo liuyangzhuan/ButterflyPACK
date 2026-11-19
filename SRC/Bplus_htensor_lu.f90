@@ -29,10 +29,16 @@
 !>     random products of the updated block (every product gives all fibers of its output) and the core by an exact
 !>     projection;
 !>   - a product with a Tucker factor that updates a hierarchical block is formed in Tucker form and added block by block.
-!> The inverse (HTLU_forest_inverse) is an in-place block Gauss-Jordan sweep on the same trees with the same kernels.
+!> The inverse (HTLU_dist_inverse) is an in-place block Gauss-Jordan sweep on the same trees with the same kernels.
 !> Singular values are dropped below option%tol_rand relative to each block and below option%tol_rand*normest, with
 !> normest an estimate of ||A||_2 (LU) or ||A^{-1}||_2 (inverse) given by the caller.
-!> The current implementation is for one MPI process (OpenMP tasks over independent blocks).
+!> Distributed memory (htlu_dist): the blocks between the clusters of a level Ld of all trees (K = P*2^(Ndim*Ld) clusters, at
+!> least the level at which every cluster lies on one process in the HTENSOR layout) are in a 2D block-cyclic layout over the MPI
+!> processes. Every process runs the same recursion over the coarse levels (the trees, then the children inside them); each of its
+!> steps is a set of independent operations on level-Ld blocks (factor or invert a diagonal block, a solve or a product with a
+!> diagonal block, Schur updates), done by the owner of the updated block after the remote operands are fetched. This is the
+!> factorization of the one-process code with the coarse blocks split at level Ld. OpenMP tasks run the operations of a step.
+!> Vectors of the solves and products are full on every process (trees one after another, natural order in every tree).
 #include "ButterflyPACK_config.fi"
 module Bplus_htensor_lu
    use BPACK_DEFS
@@ -72,6 +78,36 @@ module Bplus_htensor_lu
       integer :: nb = 0
       integer, allocatable :: head(:), next(:), cidx(:), ll(:), bb(:)
    end type htlu_index_level
+
+   !>**** a pointer to a block
+   type htlu_nptr
+      type(htlu_node), pointer :: p => null()
+   end type htlu_nptr
+
+   !>**** the forest distributed over the MPI processes: the blocks between the clusters of level Ld of all trees (K = P*nc
+   !>**** clusters, numbered tree by tree and in the recursive child order inside a tree) in a 2D block-cyclic layout; block (a,b)
+   !>**** is on the process at row mod(a-1,nprow) and column mod(b-1+skew*((b-1)/npcol),npcol) of the process grid (rank =
+   !>**** row*npcol + column): the skew spreads the diagonal blocks over all processes
+   type htlu_dist
+      integer :: Ndim = 0, P = 0, Ld = 0, nch = 0, nc = 0, K = 0, nt = 0 !< nc clusters per tree, nt entries per tree
+      integer :: comm = 0, nproc = 1, myid = 0, nprow = 1, npcol = 1, myrow = 0, mycol = 0, skew = 0
+      integer :: nr = 0, nl = 0 !< numbers of local block rows and columns
+      integer, allocatable :: Ns(:) !< grid size per dimension of every tree
+      integer, allocatable :: coff(:, :), csz(:, :), cgrp(:, :) !< offset, size and group per dimension of cluster m (1..nc) of a tree
+      integer, allocatable :: boxes(:, :) !< boxes(1:2*Ndim, r): offsets (from 0) and sizes per dimension of the vector box of rank r in the HTENSOR layout
+      type(htlu_node), allocatable :: blk(:, :) !< blk(i, j): block (a, b) with (a-1)/nprow = i-1 and (b-1)/npcol = j-1
+      integer, allocatable :: rmap(:, :) !< scratch: index of a fetched block by its position
+      integer :: inverse = 0 !< 1: blk holds the inverse
+      real(kind=8) :: tcomm = 0, tcomp = 0, vrecv = 0 !< seconds in the exchanges and in the block operations, MB received
+      integer :: nstep = 0 !< number of exchanges
+      integer :: rr = 0 !< offset of the round-robin assignment of spread steps
+      !>**** profile of the steps by kind (1 factor, 2 invert a diagonal block, 3 solve, 4 right and 5 left product with a
+      !>**** diagonal block, 6 Schur updates, 7 products into new blocks) and by the number c of summed clusters (class
+      !>**** ceiling(log_{2^Ndim} c)): wall seconds, block-operation seconds of this process, steps, local targets
+      real(kind=8) :: pt0 = 0, pc0 = 0
+      real(kind=8) :: pwall(7, 0:9) = 0, pwork(7, 0:9) = 0
+      integer :: pcnt(7, 0:9) = 0, pntg(7, 0:9) = 0
+   end type htlu_dist
 
    !>**** blocks above this size (rows) create OpenMP tasks for their children
    integer, parameter :: htlu_task_rows = 1024
@@ -836,14 +872,21 @@ contains
    !>**** Pc = the restriction of the Tucker block P to row child i and column child j of the hierarchical block A
    subroutine htlu_restrict(P, A, i, j, Pc)
       type(htlu_node) :: P, A, Pc
-      integer i, j, d, Ndim
+      integer i, j
       integer ro(A%Ndim), rs(A%Ndim), co(A%Ndim), cs(A%Ndim)
-      Ndim = A%Ndim
       call htlu_child_box(A, 'r', i, ro, rs)
       call htlu_child_box(A, 'c', j, co, cs)
+      call htlu_restrict_box(P, ro, rs, co, cs, A%level + 1, Pc)
+   end subroutine htlu_restrict
+
+   !>**** Pc (tree level lev) = the restriction of the Tucker block P to the rows ro+1..ro+rs and the columns co+1..co+cs per dimension
+   subroutine htlu_restrict_box(P, ro, rs, co, cs, lev, Pc)
+      type(htlu_node) :: P, Pc
+      integer ro(:), rs(:), co(:), cs(:), lev, d, Ndim
+      Ndim = P%Ndim
       Pc%style = 2
       Pc%Ndim = Ndim
-      Pc%level = A%level + 1
+      Pc%level = lev
       allocate (Pc%m(Ndim), Pc%n(Ndim), Pc%U(Ndim), Pc%V(Ndim))
       Pc%m = rs
       Pc%n = cs
@@ -855,7 +898,7 @@ contains
       enddo
       allocate (Pc%C(size(P%C, 1), size(P%C, 2)))
       Pc%C = P%C
-   end subroutine htlu_restrict
+   end subroutine htlu_restrict_box
 
    !>**** thin QR A = Q R (Q: m x k orthonormal columns, R: k x n, k = min(m, n))
    subroutine htlu_qr(A, Q, R)
@@ -1419,37 +1462,6 @@ contains
       call htlu_scale(A, -BPACK_cone)
    end subroutine htlu_inv
 
-   !>**** the P x P forest A becomes its inverse (H-TENSOR inverse with Tucker blocks; apply it with HTLU_forest_mult)
-   !>**** (normest: estimate of ||A^{-1}||_2; Tucker truncation at option%tol_rand relative to each block and to normest)
-   subroutine HTLU_forest_inverse(P, A, option, stats, ptree, normest)
-      integer P, p1, q1
-      type(htlu_node), target :: A(:, :)
-      type(Hoption) :: option
-      type(Hstat) :: stats
-      type(proctree) :: ptree
-      real(kind=8) normest
-      integer nth
-      real(kind=8) t1, t2, tol(2)
-      call assert(ptree%nproc == 1, 'HTLU_forest_inverse: one MPI process only')
-      tol = (/option%tol_rand, option%tol_rand*normest/)
-      nth = 1
-!$    nth = omp_get_max_threads()
-      t1 = MPI_Wtime()
-      !$omp parallel
-      !$omp single
-      call htlu_sweep(P, A, tol)
-      !$omp end single
-      !$omp end parallel
-      do q1 = 1, P
-         do p1 = 1, P
-            call htlu_scale(A(p1, q1), -BPACK_cone)
-         enddo
-      enddo
-      t2 = MPI_Wtime()
-      if (option%verbosity >= 0) call HTLU_print_timers(t2 - t1, nth)
-      stats%Time_Factor = stats%Time_Factor + t2 - t1
-   end subroutine HTLU_forest_inverse
-
    !>**** free a block and its sons
    recursive subroutine HTLU_delete(A)
       type(htlu_node) :: A
@@ -1540,37 +1552,6 @@ contains
       end select
    end subroutine HTLU_rank_profile
 
-   !>**** print the Tucker profile of the P x P forest A (rank 0 only)
-   subroutine HTLU_print_profile(P, A, lmax, title)
-      integer P, lmax, p1, q1, part, l
-      type(htlu_node) :: A(:, :)
-      character(*) title
-      integer cnt(0:lmax, 3), rmax(0:lmax, 3, 2)
-      real(kind=8) rsum(0:lmax, 3, 2), mem(0:lmax, 3)
-      character(len=5), parameter :: pname(3) = (/'lower', 'upper', 'diag '/)
-      cnt = 0
-      rmax = 0
-      rsum = 0
-      mem = 0
-      do q1 = 1, P
-         do p1 = 1, P
-            part = 0
-            if (p1 > q1) part = 1
-            if (p1 < q1) part = 2
-            call HTLU_rank_profile(A(p1, q1), part, cnt, rsum, rmax, mem)
-         enddo
-      enddo
-      write (*, '(A,A)') ' Tucker profile, ', title
-      write (*, '(A)') '   level  part      blocks   row rank (mean, max)   col rank (mean, max)   memory (MB)'
-      do l = 0, lmax
-         do part = 1, 3
-            if (cnt(l, part) == 0) cycle
-            write (*, '(I8,2X,A5,I12,F14.1,I8,F15.1,I8,F14.1)') l, pname(part), cnt(l, part), rsum(l, part, 1)/cnt(l, part), &
-               rmax(l, part, 1), rsum(l, part, 2)/cnt(l, part), rmax(l, part, 2), mem(l, part)
-         enddo
-      enddo
-   end subroutine HTLU_print_profile
-
    !>**** linear index (0-based) of the cluster of groups g(1:Ndim) at level l
    integer function htlu_cluster_index(Ndim, l, g)
       integer Ndim, l, g(Ndim), d, s
@@ -1582,15 +1563,13 @@ contains
       enddo
    end function htlu_cluster_index
 
-   !>**** copy the blocks of an HTENSOR (one process) into the recursive tree A
-   subroutine HTLU_from_HTENSOR(A, h_mat_md, msh, Ndim)
-      type(htlu_node) :: A
+   !>**** index of the local blocks (dense or Tucker) of an HTENSOR by level and by row and column clusters
+   subroutine htlu_index_build(h_mat_md, Ndim, idx, Lmax)
       type(Hmat_md), target :: h_mat_md
-      integer Ndim
-      type(mesh) :: msh(Ndim)
+      integer Ndim, Lmax
       type(htlu_index_level), allocatable :: idx(:)
       type(matrixblock_MD), pointer :: blk
-      integer ll, bb, l, Lmax, ri, k, g1(Ndim)
+      integer ll, bb, l, ri, k
       Lmax = 0
       do ll = 1, h_mat_md%BP%Lplus
          do bb = 1, h_mat_md%BP%LL(ll)%Nbound_loc
@@ -1626,13 +1605,27 @@ contains
             idx(l)%head(ri) = k
          enddo
       enddo
-      g1 = 1
-      call htlu_build(A, Ndim, 0, g1, g1, msh, h_mat_md, idx, Lmax)
-      do l = 0, Lmax
+   end subroutine htlu_index_build
+
+   !>**** free the index of htlu_index_build
+   subroutine htlu_index_free(idx)
+      type(htlu_index_level), allocatable :: idx(:)
+      integer l
+      do l = lbound(idx, 1), ubound(idx, 1)
          deallocate (idx(l)%head, idx(l)%next, idx(l)%cidx, idx(l)%ll, idx(l)%bb)
       enddo
       deallocate (idx)
-   end subroutine HTLU_from_HTENSOR
+   end subroutine htlu_index_free
+
+   !>**** groups g(1:Ndim) of the cluster of linear index t (from 0, dimension 1 fastest) at level l
+   subroutine htlu_cluster_groups(Ndim, l, t, g)
+      integer Ndim, l, t, g(Ndim), d, s
+      s = t
+      do d = 1, Ndim
+         g(d) = 2**l + mod(s, 2**l)
+         s = s/2**l
+      enddo
+   end subroutine htlu_cluster_groups
 
    recursive subroutine htlu_build(A, Ndim, l, rg, cg, msh, h_mat_md, idx, Lmax)
       type(htlu_node) :: A
@@ -1669,9 +1662,9 @@ contains
             allocate (A%D(size(blk%fullmat, 1), size(blk%fullmat, 2)))
             A%D = blk%fullmat
          else
-            call assert(blk%style == 2 .and. blk%level_butterfly == 0, 'HTLU_from_HTENSOR: only Tucker (lrlevel 0) admissible blocks')
-            call assert(.not. allocated(blk%MiddleZFP) .and. .not. allocated(blk%MiddleQTT), 'HTLU_from_HTENSOR: ZFP/QTT cores')
-            call assert(size(blk%ButterflyU(1)%blocks, 1) == 1 .and. size(blk%ButterflyV(1)%blocks, 1) == 1, 'HTLU_from_HTENSOR: Tucker factors')
+            call assert(blk%style == 2 .and. blk%level_butterfly == 0, 'htlu_build: only Tucker (lrlevel 0) admissible blocks')
+            call assert(.not. allocated(blk%MiddleZFP) .and. .not. allocated(blk%MiddleQTT), 'htlu_build: ZFP/QTT cores')
+            call assert(size(blk%ButterflyU(1)%blocks, 1) == 1 .and. size(blk%ButterflyV(1)%blocks, 1) == 1, 'htlu_build: Tucker factors')
             A%style = 2
             allocate (A%U(Ndim), A%V(Ndim))
             do d = 1, Ndim
@@ -1684,7 +1677,7 @@ contains
             A%C = blk%ButterflyMiddle(1)%matrix
          endif
       else
-         call assert(2*rg(1) <= msh(1)%Maxgroup, 'HTLU_from_HTENSOR: a leaf-level block is missing')
+         call assert(2*rg(1) <= msh(1)%Maxgroup, 'htlu_build: a leaf-level block is missing')
          A%style = 4
          A%nch = 2**Ndim
          allocate (A%sons(A%nch, A%nch))
@@ -1700,149 +1693,1368 @@ contains
       endif
    end subroutine htlu_build
 
-   !>**** Y = A*X for the P x P forest A; X and Y hold the trees one after another (nloc entries each)
-   subroutine HTLU_forest_mult(P, A, nloc, X, Y)
-      integer P, nloc, p1, q1, R
-      type(htlu_node) :: A(:, :)
+   !>**** the block A between the clusters of groups rg and cg at level Ld from the local HTENSOR blocks indexed by idx: the
+   !>**** restriction of a coarser Tucker block that contains it, or the copy of the blocks inside it (htlu_build)
+   subroutine htlu_build_ld(A, Ndim, Ld, rg, cg, msh, h_mat_md, idx, Lmax)
+      type(htlu_node) :: A
+      integer Ndim, Ld, rg(Ndim), cg(Ndim), Lmax
+      type(mesh) :: msh(Ndim)
+      type(Hmat_md), target :: h_mat_md
+      type(htlu_index_level) :: idx(0:)
+      type(htlu_node) :: T
+      integer l, d, k, ri, ci, rga(Ndim), cga(Ndim), ro(Ndim), rs(Ndim), co(Ndim), cs(Ndim)
+      do l = 0, min(Ld - 1, Lmax)
+         rga = rg/2**(Ld - l)
+         cga = cg/2**(Ld - l)
+         ri = htlu_cluster_index(Ndim, l, rga)
+         ci = htlu_cluster_index(Ndim, l, cga)
+         k = idx(l)%head(ri)
+         do while (k /= 0)
+            if (idx(l)%cidx(k) == ci) exit
+            k = idx(l)%next(k)
+         enddo
+         if (k == 0) cycle
+         call htlu_build(T, Ndim, l, rga, cga, msh, h_mat_md, idx, Lmax)
+         call assert(T%style == 2, 'htlu_build_ld: a dense block above the distribution level')
+         do d = 1, Ndim
+            ro(d) = msh(d)%basis_group(rg(d))%head - msh(d)%basis_group(rga(d))%head
+            co(d) = msh(d)%basis_group(cg(d))%head - msh(d)%basis_group(cga(d))%head
+            rs(d) = msh(d)%basis_group(rg(d))%tail - msh(d)%basis_group(rg(d))%head + 1
+            cs(d) = msh(d)%basis_group(cg(d))%tail - msh(d)%basis_group(cg(d))%head + 1
+         enddo
+         call htlu_restrict_box(T, ro, rs, co, cs, Ld, A)
+         allocate (A%rg(Ndim), A%cg(Ndim))
+         A%rg = rg
+         A%cg = cg
+         call HTLU_delete(T)
+         return
+      enddo
+      call htlu_build(A, Ndim, Ld, rg, cg, msh, h_mat_md, idx, Lmax)
+   end subroutine htlu_build_ld
+
+   !>**** T = S, moving the storage (S becomes empty)
+   subroutine htlu_move(S, T)
+      type(htlu_node) :: S, T
+      call assert(.not. associated(T%sons), 'htlu_move: the target has sons')
+      T%style = S%style
+      T%level = S%level
+      T%Ndim = S%Ndim
+      T%nch = S%nch
+      if (allocated(S%m)) call move_alloc(S%m, T%m)
+      if (allocated(S%n)) call move_alloc(S%n, T%n)
+      if (allocated(S%rg)) call move_alloc(S%rg, T%rg)
+      if (allocated(S%cg)) call move_alloc(S%cg, T%cg)
+      if (allocated(S%D)) call move_alloc(S%D, T%D)
+      if (allocated(S%ipiv)) call move_alloc(S%ipiv, T%ipiv)
+      if (allocated(S%U)) call move_alloc(S%U, T%U)
+      if (allocated(S%V)) call move_alloc(S%V, T%V)
+      if (allocated(S%C)) call move_alloc(S%C, T%C)
+      T%sons => S%sons
+      nullify (S%sons)
+      S%style = 0
+   end subroutine htlu_move
+
+   !>**** sizes of the integer and the data parts of the serialized block A (added to ni and nd)
+   recursive subroutine htlu_pack_count(A, ni, nd)
+      type(htlu_node) :: A
+      integer(kind=8) ni, nd
+      integer i, j, d
+      call assert(A%style /= 0, 'htlu_pack_count: an empty block')
+      ni = ni + 5 + 4*A%Ndim
+      select case (A%style)
+      case (1)
+         ni = ni + 3
+         if (allocated(A%ipiv)) ni = ni + size(A%ipiv)
+         nd = nd + size(A%D)
+      case (2)
+         ni = ni + 4*A%Ndim + 2
+         do d = 1, A%Ndim
+            nd = nd + size(A%U(d)%mat) + size(A%V(d)%mat)
+         enddo
+         nd = nd + size(A%C)
+      case (4)
+         do j = 1, A%nch
+            do i = 1, A%nch
+               call htlu_pack_count(A%sons(i, j), ni, nd)
+            enddo
+         enddo
+      end select
+   end subroutine htlu_pack_count
+
+   subroutine htlu_pack_mat(M, db, dp)
+      DT :: M(:, :), db(:)
+      integer dp, j, n1
+      n1 = size(M, 1)
+      do j = 1, size(M, 2)
+         db(dp + 1:dp + n1) = M(:, j)
+         dp = dp + n1
+      enddo
+   end subroutine htlu_pack_mat
+
+   subroutine htlu_unpack_mat(M, n1, n2, db, dp)
+      DT, allocatable :: M(:, :)
+      DT :: db(:)
+      integer n1, n2, dp, j
+      allocate (M(n1, n2))
+      do j = 1, n2
+         M(:, j) = db(dp + 1:dp + n1)
+         dp = dp + n1
+      enddo
+   end subroutine htlu_unpack_mat
+
+   !>**** serialize the block A into ib(ip+1:) and db(dp+1:) (ip and dp advanced)
+   recursive subroutine htlu_pack(A, ib, ip, db, dp)
+      type(htlu_node) :: A
+      integer ib(:), ip, dp
+      DT :: db(:)
+      integer i, j, d, Nd
+      Nd = A%Ndim
+      ib(ip + 1) = A%style
+      ib(ip + 2) = A%level
+      ib(ip + 3) = Nd
+      ib(ip + 4) = A%nch
+      ib(ip + 5) = 0
+      if (allocated(A%rg)) ib(ip + 5) = 1
+      ip = ip + 5
+      ib(ip + 1:ip + Nd) = A%m
+      ib(ip + Nd + 1:ip + 2*Nd) = A%n
+      ib(ip + 2*Nd + 1:ip + 4*Nd) = 0
+      if (allocated(A%rg)) then
+         ib(ip + 2*Nd + 1:ip + 3*Nd) = A%rg
+         ib(ip + 3*Nd + 1:ip + 4*Nd) = A%cg
+      endif
+      ip = ip + 4*Nd
+      select case (A%style)
+      case (1)
+         ib(ip + 1) = size(A%D, 1)
+         ib(ip + 2) = size(A%D, 2)
+         ib(ip + 3) = 0
+         if (allocated(A%ipiv)) ib(ip + 3) = size(A%ipiv)
+         ip = ip + 3
+         if (allocated(A%ipiv)) then
+            ib(ip + 1:ip + size(A%ipiv)) = A%ipiv
+            ip = ip + size(A%ipiv)
+         endif
+         call htlu_pack_mat(A%D, db, dp)
+      case (2)
+         do d = 1, Nd
+            ib(ip + 1) = size(A%U(d)%mat, 1)
+            ib(ip + 2) = size(A%U(d)%mat, 2)
+            ib(ip + 3) = size(A%V(d)%mat, 1)
+            ib(ip + 4) = size(A%V(d)%mat, 2)
+            ip = ip + 4
+         enddo
+         ib(ip + 1) = size(A%C, 1)
+         ib(ip + 2) = size(A%C, 2)
+         ip = ip + 2
+         do d = 1, Nd
+            call htlu_pack_mat(A%U(d)%mat, db, dp)
+            call htlu_pack_mat(A%V(d)%mat, db, dp)
+         enddo
+         call htlu_pack_mat(A%C, db, dp)
+      case (4)
+         do j = 1, A%nch
+            do i = 1, A%nch
+               call htlu_pack(A%sons(i, j), ib, ip, db, dp)
+            enddo
+         enddo
+      end select
+   end subroutine htlu_pack
+
+   !>**** the block A from its serialization at ib(ip+1:) and db(dp+1:) (ip and dp advanced)
+   recursive subroutine htlu_unpack(A, ib, ip, db, dp)
+      type(htlu_node) :: A
+      integer ib(:), ip, dp
+      DT :: db(:)
+      integer i, j, d, Nd, hasrg, n1, n2, np
+      integer, allocatable :: su(:, :)
+      A%style = ib(ip + 1)
+      A%level = ib(ip + 2)
+      Nd = ib(ip + 3)
+      A%Ndim = Nd
+      A%nch = ib(ip + 4)
+      hasrg = ib(ip + 5)
+      ip = ip + 5
+      allocate (A%m(Nd), A%n(Nd))
+      A%m = ib(ip + 1:ip + Nd)
+      A%n = ib(ip + Nd + 1:ip + 2*Nd)
+      if (hasrg == 1) then
+         allocate (A%rg(Nd), A%cg(Nd))
+         A%rg = ib(ip + 2*Nd + 1:ip + 3*Nd)
+         A%cg = ib(ip + 3*Nd + 1:ip + 4*Nd)
+      endif
+      ip = ip + 4*Nd
+      select case (A%style)
+      case (1)
+         n1 = ib(ip + 1)
+         n2 = ib(ip + 2)
+         np = ib(ip + 3)
+         ip = ip + 3
+         if (np > 0) then
+            allocate (A%ipiv(np))
+            A%ipiv = ib(ip + 1:ip + np)
+            ip = ip + np
+         endif
+         call htlu_unpack_mat(A%D, n1, n2, db, dp)
+      case (2)
+         allocate (su(4, Nd), A%U(Nd), A%V(Nd))
+         do d = 1, Nd
+            su(:, d) = ib(ip + 1:ip + 4)
+            ip = ip + 4
+         enddo
+         n1 = ib(ip + 1)
+         n2 = ib(ip + 2)
+         ip = ip + 2
+         do d = 1, Nd
+            call htlu_unpack_mat(A%U(d)%mat, su(1, d), su(2, d), db, dp)
+            call htlu_unpack_mat(A%V(d)%mat, su(3, d), su(4, d), db, dp)
+         enddo
+         call htlu_unpack_mat(A%C, n1, n2, db, dp)
+         deallocate (su)
+      case (4)
+         allocate (A%sons(A%nch, A%nch))
+         do j = 1, A%nch
+            do i = 1, A%nch
+               call htlu_unpack(A%sons(i, j), ib, ip, db, dp)
+            enddo
+         enddo
+      end select
+   end subroutine htlu_unpack
+
+   !>**** rank of the owner of block (a, b)
+   integer function htlu_dist_owner(D, a, b)
+      type(htlu_dist) :: D
+      integer a, b
+      htlu_dist_owner = mod(a - 1, D%nprow)*D%npcol + htlu_dist_pc(D, b)
+   end function htlu_dist_owner
+
+   !>**** process column of the blocks of column b
+   integer function htlu_dist_pc(D, b)
+      type(htlu_dist) :: D
+      integer b
+      htlu_dist_pc = mod(b - 1 + D%skew*((b - 1)/D%npcol), D%npcol)
+   end function htlu_dist_pc
+
+   !>**** global row (side 'r') or column (side 'c') of local block row or column i
+   integer function htlu_dist_glob(D, side, i)
+      type(htlu_dist) :: D
+      character side
+      integer i
+      if (side == 'r') then
+         htlu_dist_glob = D%myrow + 1 + (i - 1)*D%nprow
+      else
+         htlu_dist_glob = (i - 1)*D%npcol + mod(D%mycol - D%skew*(i - 1) + D%npcol*(i + 1), D%npcol) + 1
+      endif
+   end function htlu_dist_glob
+
+   !>**** block (a, b): local, or fetched into recv (htlu_dist_fetch)
+   function htlu_dist_ptr(D, recv, a, b) result(p)
+      type(htlu_dist), target :: D
+      type(htlu_node), target :: recv(:)
+      integer a, b
+      type(htlu_node), pointer :: p
+      if (htlu_dist_owner(D, a, b) == D%myid) then
+         p => D%blk((a - 1)/D%nprow + 1, (b - 1)/D%npcol + 1)
+      else
+         call assert(D%rmap(a, b) > 0, 'htlu_dist_ptr: a remote block was not fetched')
+         p => recv(D%rmap(a, b))
+      endif
+   end function htlu_dist_ptr
+
+   !>**** set up the distributed forest of P trees on the processes of ptree (the blocks are filled by HTLU_dist_add_pair):
+   !>**** msh: the per-dimension cluster trees (the same for all trees); Ns_loc and idxs: the box of this process in the vector
+   !>**** layout of the HTENSOR products; Ldreq: requested distribution level, raised to the coarsest level at which every cluster
+   !>**** lies on one process in the HTENSOR layout (collective)
+   subroutine HTLU_dist_init(D, Ndim, P, msh, ptree, Ns_loc, idxs, Ldreq)
+      type(htlu_dist) :: D
+      integer Ndim, P, Ns_loc(Ndim), idxs(Ndim), Ldreq
+      type(mesh) :: msh(Ndim)
+      type(proctree) :: ptree
+      integer i, dd, l, m, t, dig, Lr, Maxlevel, g(Ndim), c(Ndim), ierr
+      integer, allocatable :: mybox(:)
+      logical ok
+      D%Ndim = Ndim
+      D%P = P
+      D%comm = ptree%Comm
+      D%nproc = ptree%nproc
+      D%myid = ptree%MyID
+      do i = int(sqrt(dble(D%nproc)) + 1d-8), 1, -1
+         if (mod(D%nproc, i) == 0) exit
+      enddo
+      D%nprow = i
+      D%npcol = D%nproc/i
+      D%myrow = D%myid/D%npcol
+      D%mycol = mod(D%myid, D%npcol)
+      Maxlevel = GetTreelevel(msh(1)%Maxgroup) - 1
+      Lr = 0
+      do
+         ok = .true.
+         do t = 0, 2**(Lr*Ndim) - 1
+            call htlu_cluster_groups(Ndim, Lr, t, g)
+            if (ptree%pgrp(GetMshGroup_Pgno(ptree, Ndim, g))%nproc /= 1) ok = .false.
+         enddo
+         if (ok) exit
+         Lr = Lr + 1
+         call assert(Lr <= Maxlevel, 'HTLU_dist_init: more processes than leaf clusters')
+      enddo
+      D%Ld = max(Lr, Ldreq)
+      call assert(D%Ld <= Maxlevel, 'HTLU_dist_init: the distribution level is below the leaf level')
+      D%nch = 2**Ndim
+      D%nc = D%nch**D%Ld
+      D%K = P*D%nc
+      allocate (D%Ns(Ndim), D%coff(Ndim, D%nc), D%csz(Ndim, D%nc), D%cgrp(Ndim, D%nc))
+      do dd = 1, Ndim
+         call assert(msh(dd)%basis_group(1)%head == 1, 'HTLU_dist_init: the cluster tree does not start at 1')
+         D%Ns(dd) = msh(dd)%basis_group(1)%tail
+      enddo
+      D%nt = product(D%Ns)
+      do m = 1, D%nc
+         g = 1
+         do l = 1, D%Ld
+            dig = mod((m - 1)/D%nch**(D%Ld - l), D%nch) + 1
+            call htlu_child(Ndim, dig, c)
+            g = 2*g + c - 1
+         enddo
+         D%cgrp(:, m) = g
+         do dd = 1, Ndim
+            D%coff(dd, m) = msh(dd)%basis_group(g(dd))%head - 1
+            D%csz(dd, m) = msh(dd)%basis_group(g(dd))%tail - msh(dd)%basis_group(g(dd))%head + 1
+         enddo
+      enddo
+      allocate (D%boxes(2*Ndim, 0:D%nproc - 1), mybox(2*Ndim))
+      mybox(1:Ndim) = idxs - 1
+      mybox(Ndim + 1:2*Ndim) = Ns_loc
+      call MPI_Allgather(mybox, 2*Ndim, MPI_INTEGER, D%boxes, 2*Ndim, MPI_INTEGER, D%comm, ierr)
+      deallocate (mybox)
+      D%nr = 0
+      do i = 1, D%K
+         if (mod(i - 1, D%nprow) == D%myrow) D%nr = D%nr + 1
+      enddo
+      D%skew = 0
+      if (mod(D%K, D%npcol) == 0) D%skew = 1
+      D%nl = 0
+      do i = 1, D%K
+         if (htlu_dist_pc(D, i) == D%mycol) D%nl = D%nl + 1
+      enddo
+      allocate (D%blk(D%nr, D%nl), D%rmap(D%K, D%K))
+      D%rmap = 0
+   end subroutine HTLU_dist_init
+
+   !>**** fill the blocks between tree p (rows) and tree q (columns) from the HTENSOR h_mat_md of the pair (collective): every
+   !>**** process builds the level-Ld blocks of its rows in the HTENSOR layout and sends them to their owners
+   subroutine HTLU_dist_add_pair(D, p, q, h_mat_md, msh, ptree)
+      type(htlu_dist), target :: D
+      integer p, q
+      type(Hmat_md), target :: h_mat_md
+      type(mesh) :: msh(:)
+      type(proctree) :: ptree
+      type(htlu_index_level), allocatable :: idx(:)
+      type(htlu_node), allocatable, target :: tmp(:)
+      type(htlu_node), allocatable :: rnd(:)
+      type(htlu_nptr), allocatable :: sptr(:)
+      integer, allocatable :: sdest(:), sid(:, :), rid(:, :)
+      integer Lmax, m, n, a, b, ns, nrcv, k, fo, ow
+      call htlu_index_build(h_mat_md, D%Ndim, idx, Lmax)
+      allocate (tmp(D%nc*D%nc), sptr(D%nc*D%nc), sdest(D%nc*D%nc), sid(2, D%nc*D%nc))
+      ns = 0
+      do m = 1, D%nc
+         fo = ptree%pgrp(GetMshGroup_Pgno(ptree, D%Ndim, D%cgrp(:, m)))%head
+         if (fo /= D%myid) cycle
+         a = (p - 1)*D%nc + m
+         do n = 1, D%nc
+            b = (q - 1)*D%nc + n
+            ow = htlu_dist_owner(D, a, b)
+            if (ow == D%myid) then
+               call htlu_build_ld(D%blk((a - 1)/D%nprow + 1, (b - 1)/D%npcol + 1), D%Ndim, D%Ld, D%cgrp(:, m), D%cgrp(:, n), &
+                  msh, h_mat_md, idx, Lmax)
+            else
+               ns = ns + 1
+               call htlu_build_ld(tmp(ns), D%Ndim, D%Ld, D%cgrp(:, m), D%cgrp(:, n), msh, h_mat_md, idx, Lmax)
+               sptr(ns)%p => tmp(ns)
+               sdest(ns) = ow
+               sid(:, ns) = (/a, b/)
+            endif
+         enddo
+      enddo
+      call htlu_dist_xchg(D, ns, sdest, sid, sptr, nrcv, rid, rnd)
+      do k = 1, ns
+         call HTLU_delete(tmp(k))
+      enddo
+      do k = 1, nrcv
+         call htlu_move(rnd(k), D%blk((rid(1, k) - 1)/D%nprow + 1, (rid(2, k) - 1)/D%npcol + 1))
+      enddo
+      deallocate (tmp, sptr, sdest, sid, rid, rnd)
+      call htlu_index_free(idx)
+   end subroutine HTLU_dist_add_pair
+
+   !>**** send the blocks sptr(i) (positions sid(:, i)) to the ranks sdest(i), i = 1..ns, and receive nrcv blocks rnd with
+   !>**** positions rid (collective)
+   subroutine htlu_dist_xchg(D, ns, sdest, sid, sptr, nrcv, rid, rnd)
+      type(htlu_dist) :: D
+      integer ns, sdest(:), sid(:, :), nrcv
+      type(htlu_nptr) :: sptr(:)
+      integer, allocatable :: rid(:, :)
+      type(htlu_node), allocatable :: rnd(:)
+      integer, allocatable :: scnt(:, :), rcnt(:, :), sdi(:), sdd(:), rdi(:), rdd(:), ip(:), dp(:), ci(:), cd(:), rci(:), rcd(:)
+      integer, allocatable :: ibuf(:), ribuf(:)
+      DT, allocatable :: dbuf(:), rdbuf(:)
+      integer(kind=8) ni, nd, tsi, tsd, tri, trd
+      integer i, r, k, ierr, np, ipos, dpos
+      np = D%nproc
+      allocate (scnt(3, 0:np - 1), rcnt(3, 0:np - 1), sdi(0:np - 1), sdd(0:np - 1), rdi(0:np - 1), rdd(0:np - 1), ip(0:np - 1), &
+         dp(0:np - 1), ci(0:np - 1), cd(0:np - 1), rci(0:np - 1), rcd(0:np - 1))
+      scnt = 0
+      do i = 1, ns
+         ni = 2
+         nd = 0
+         call htlu_pack_count(sptr(i)%p, ni, nd)
+         r = sdest(i)
+         call assert(dble(scnt(1, r)) + dble(ni) < dble(huge(1)) .and. dble(scnt(2, r)) + dble(nd) < dble(huge(1)), &
+            'htlu_dist_xchg: message too large')
+         scnt(1, r) = scnt(1, r) + int(ni)
+         scnt(2, r) = scnt(2, r) + int(nd)
+         scnt(3, r) = scnt(3, r) + 1
+      enddo
+      call MPI_Alltoall(scnt, 3, MPI_INTEGER, rcnt, 3, MPI_INTEGER, D%comm, ierr)
+      tsi = 0
+      tsd = 0
+      tri = 0
+      trd = 0
+      do r = 0, np - 1
+         sdi(r) = int(tsi)
+         sdd(r) = int(tsd)
+         rdi(r) = int(tri)
+         rdd(r) = int(trd)
+         tsi = tsi + scnt(1, r)
+         tsd = tsd + scnt(2, r)
+         tri = tri + rcnt(1, r)
+         trd = trd + rcnt(2, r)
+      enddo
+      call assert(max(tsi, tsd, tri, trd) < huge(1), 'htlu_dist_xchg: messages too large')
+      allocate (ibuf(max(1_8, tsi)), dbuf(max(1_8, tsd)), ribuf(max(1_8, tri)), rdbuf(max(1_8, trd)))
+      ip = sdi
+      dp = sdd
+      do i = 1, ns
+         r = sdest(i)
+         ibuf(ip(r) + 1) = sid(1, i)
+         ibuf(ip(r) + 2) = sid(2, i)
+         ip(r) = ip(r) + 2
+         call htlu_pack(sptr(i)%p, ibuf, ip(r), dbuf, dp(r))
+      enddo
+      ci = scnt(1, :)
+      cd = scnt(2, :)
+      rci = rcnt(1, :)
+      rcd = rcnt(2, :)
+      call MPI_Alltoallv(ibuf, ci, sdi, MPI_INTEGER, ribuf, rci, rdi, MPI_INTEGER, D%comm, ierr)
+      call MPI_Alltoallv(dbuf, cd, sdd, MPI_DT, rdbuf, rcd, rdd, MPI_DT, D%comm, ierr)
+      deallocate (ibuf, dbuf)
+      nrcv = sum(rcnt(3, :))
+      allocate (rid(2, max(1, nrcv)), rnd(nrcv))
+      ipos = 0
+      dpos = 0
+      do k = 1, nrcv
+         rid(:, k) = ribuf(ipos + 1:ipos + 2)
+         ipos = ipos + 2
+         call htlu_unpack(rnd(k), ribuf, ipos, rdbuf, dpos)
+      enddo
+      D%vrecv = D%vrecv + dble(trd)*dble(storage_size(BPACK_cone))/8d0/1024d0/1024d0
+      deallocate (ribuf, rdbuf, scnt, rcnt, sdi, sdd, rdi, rdd, ip, dp, ci, cd, rci, rcd)
+   end subroutine htlu_dist_xchg
+
+   !>**** mark block (a, b) as needed (once)
+   subroutine htlu_dist_addneed(D, a, b, nneed, need)
+      type(htlu_dist) :: D
+      integer a, b, nneed, need(:, :)
+      if (D%rmap(a, b) /= 0) return
+      D%rmap(a, b) = -1
+      nneed = nneed + 1
+      need(1, nneed) = a
+      need(2, nneed) = b
+   end subroutine htlu_dist_addneed
+
+   !>**** fetch the remote blocks at the positions need(:, 1:nneed) into recv, with D%rmap(a, b) its index in recv (collective)
+   subroutine htlu_dist_fetch(D, nneed, need, recv)
+      type(htlu_dist), target :: D
+      integer nneed, need(:, :)
+      type(htlu_node), allocatable :: recv(:)
+      integer, allocatable :: scnt(:), rcnt(:), sdsp(:), rdsp(:), pos(:), sreq(:), rreq(:), sdest(:), sid(:, :), rid(:, :)
+      type(htlu_nptr), allocatable :: sptr(:)
+      integer i, k, r, a, b, ns, nrcv, ierr
+      real(kind=8) t0
+      t0 = MPI_Wtime()
+      allocate (scnt(0:D%nproc - 1), rcnt(0:D%nproc - 1), sdsp(0:D%nproc - 1), rdsp(0:D%nproc - 1), pos(0:D%nproc - 1))
+      scnt = 0
+      do i = 1, nneed
+         r = htlu_dist_owner(D, need(1, i), need(2, i))
+         scnt(r) = scnt(r) + 2
+      enddo
+      call MPI_Alltoall(scnt, 1, MPI_INTEGER, rcnt, 1, MPI_INTEGER, D%comm, ierr)
+      sdsp(0) = 0
+      rdsp(0) = 0
+      do r = 1, D%nproc - 1
+         sdsp(r) = sdsp(r - 1) + scnt(r - 1)
+         rdsp(r) = rdsp(r - 1) + rcnt(r - 1)
+      enddo
+      allocate (sreq(max(1, sum(scnt))), rreq(max(1, sum(rcnt))))
+      pos = sdsp
+      do i = 1, nneed
+         r = htlu_dist_owner(D, need(1, i), need(2, i))
+         sreq(pos(r) + 1:pos(r) + 2) = need(1:2, i)
+         pos(r) = pos(r) + 2
+      enddo
+      call MPI_Alltoallv(sreq, scnt, sdsp, MPI_INTEGER, rreq, rcnt, rdsp, MPI_INTEGER, D%comm, ierr)
+      ns = sum(rcnt)/2
+      allocate (sdest(max(1, ns)), sid(2, max(1, ns)), sptr(max(1, ns)))
+      i = 0
+      do r = 0, D%nproc - 1
+         do k = 1, rcnt(r)/2
+            i = i + 1
+            a = rreq(rdsp(r) + 2*k - 1)
+            b = rreq(rdsp(r) + 2*k)
+            call assert(htlu_dist_owner(D, a, b) == D%myid, 'htlu_dist_fetch: a request for a block of another process')
+            sdest(i) = r
+            sid(:, i) = (/a, b/)
+            sptr(i)%p => D%blk((a - 1)/D%nprow + 1, (b - 1)/D%npcol + 1)
+         enddo
+      enddo
+      call htlu_dist_xchg(D, ns, sdest, sid, sptr, nrcv, rid, recv)
+      call assert(nrcv == nneed, 'htlu_dist_fetch: wrong number of blocks received')
+      do i = 1, nrcv
+         D%rmap(rid(1, i), rid(2, i)) = i
+      enddo
+      deallocate (scnt, rcnt, sdsp, rdsp, pos, sreq, rreq, sdest, sid, sptr, rid)
+      D%tcomm = D%tcomm + MPI_Wtime() - t0
+      D%nstep = D%nstep + 1
+   end subroutine htlu_dist_fetch
+
+   !>**** free the fetched blocks
+   subroutine htlu_dist_release(D, nneed, need, recv)
+      type(htlu_dist) :: D
+      integer nneed, need(:, :), i
+      type(htlu_node), allocatable :: recv(:)
+      do i = 1, nneed
+         D%rmap(need(1, i), need(2, i)) = 0
+      enddo
+      do i = 1, size(recv)
+         call HTLU_delete(recv(i))
+      enddo
+      deallocate (recv)
+   end subroutine htlu_dist_release
+
+   !>**** lo..hi
+   function htlu_irange(lo, hi) result(v)
+      integer lo, hi, i
+      integer, allocatable :: v(:)
+      allocate (v(max(0, hi - lo + 1)))
+      do i = lo, hi
+         v(i - lo + 1) = i
+      enddo
+   end function htlu_irange
+
+   !>**** lo..hi without xlo..xhi
+   function htlu_irange_ex(lo, hi, xlo, xhi) result(v)
+      integer lo, hi, xlo, xhi, i, k
+      integer, allocatable :: v(:)
+      allocate (v(max(0, hi - lo + 1 - max(0, min(hi, xhi) - max(lo, xlo) + 1))))
+      k = 0
+      do i = lo, hi
+         if (i >= xlo .and. i <= xhi) cycle
+         k = k + 1
+         v(k) = i
+      enddo
+   end function htlu_irange_ex
+
+   !>**** the sons of the cluster range lo..hi: the trees for the whole forest, the 2^Ndim children inside a tree
+   subroutine htlu_dist_sons(D, lo, hi, ns, slo, shi)
+      type(htlu_dist) :: D
+      integer lo, hi, ns, i, sz
+      integer, allocatable :: slo(:), shi(:)
+      if (hi - lo + 1 > D%nc) then
+         ns = D%P
+         sz = D%nc
+      else
+         ns = D%nch
+         sz = (hi - lo + 1)/D%nch
+      endif
+      allocate (slo(ns), shi(ns))
+      do i = 1, ns
+         slo(i) = lo + (i - 1)*sz
+         shi(i) = slo(i) + sz - 1
+      enddo
+   end subroutine htlu_dist_sons
+
+   !>**** start a step of the profile (collective)
+   subroutine htlu_dist_pbeg(D)
+      type(htlu_dist) :: D
+      integer ierr
+      call MPI_Barrier(D%comm, ierr)
+      D%pt0 = MPI_Wtime()
+      D%pc0 = D%tcomp
+   end subroutine htlu_dist_pbeg
+
+   !>**** end a step of kind typ summing c clusters with ntg local targets (collective)
+   subroutine htlu_dist_pend(D, typ, c, ntg)
+      type(htlu_dist) :: D
+      integer typ, c, ntg, cls, t, ierr
+      call MPI_Barrier(D%comm, ierr)
+      cls = 0
+      t = 1
+      do while (t < c .and. cls < 9)
+         t = t*D%nch
+         cls = cls + 1
+      enddo
+      D%pwall(typ, cls) = D%pwall(typ, cls) + MPI_Wtime() - D%pt0
+      D%pwork(typ, cls) = D%pwork(typ, cls) + D%tcomp - D%pc0
+      D%pcnt(typ, cls) = D%pcnt(typ, cls) + 1
+      D%pntg(typ, cls) = D%pntg(typ, cls) + ntg
+   end subroutine htlu_dist_pend
+
+   !>**** the targets (a, b), a in rows and b in cols (rows fastest), done by this process: every target by its owner, or round
+   !>**** robin over all processes when the owners of the targets are fewer than the processes and than the targets (a step on
+   !>**** a few block rows or columns is then spread over all processes, with the targets moved to them and back)
+   subroutine htlu_dist_myops(D, rows, cols, nmy, ta, tb)
+      type(htlu_dist) :: D
+      integer rows(:), cols(:), nmy, n, nown, i, j, t, ex
+      integer, allocatable :: ta(:), tb(:)
+      logical, allocatable :: used(:)
+      logical spread
+      n = size(rows)*size(cols)
+      allocate (used(0:D%nproc - 1))
+      used = .false.
+      do j = 1, size(cols)
+         do i = 1, size(rows)
+            used(htlu_dist_owner(D, rows(i), cols(j))) = .true.
+         enddo
+      enddo
+      nown = count(used)
+      spread = nown < D%nproc .and. n > nown
+      allocate (ta(max(1, n)), tb(max(1, n)))
+      nmy = 0
+      t = 0
+      do j = 1, size(cols)
+         do i = 1, size(rows)
+            t = t + 1
+            if (spread) then
+               ex = mod(t - 1 + D%rr, D%nproc)
+            else
+               ex = htlu_dist_owner(D, rows(i), cols(j))
+            endif
+            if (ex == D%myid) then
+               nmy = nmy + 1
+               ta(nmy) = rows(i)
+               tb(nmy) = cols(j)
+            endif
+         enddo
+      enddo
+      if (spread) D%rr = mod(D%rr + n, D%nproc)
+      deallocate (used)
+   end subroutine htlu_dist_myops
+
+   !>**** send the targets updated here for other owners (fetched into recv, or the new blocks Y) back to them, and replace the
+   !>**** local targets updated elsewhere or by new blocks (collective)
+   subroutine htlu_dist_return(D, nmy, ta, tb, recv, Y, newblk)
+      type(htlu_dist), target :: D
+      integer nmy, ta(:), tb(:)
+      type(htlu_node), target :: recv(:), Y(:)
+      logical newblk
+      type(htlu_node), allocatable :: rnd(:)
+      type(htlu_nptr), allocatable :: sptr(:)
+      type(htlu_node), pointer :: Tp
+      integer, allocatable :: sdest(:), sid(:, :), rid(:, :)
+      integer t, ns, nrcv, k, ow
+      real(kind=8) t0
+      t0 = MPI_Wtime()
+      allocate (sdest(max(1, nmy)), sid(2, max(1, nmy)), sptr(max(1, nmy)))
+      ns = 0
+      do t = 1, nmy
+         ow = htlu_dist_owner(D, ta(t), tb(t))
+         Tp => D%blk((ta(t) - 1)/D%nprow + 1, (tb(t) - 1)/D%npcol + 1)
+         if (ow == D%myid) then
+            if (newblk) then
+               call HTLU_delete(Tp)
+               call htlu_move(Y(t), Tp)
+            endif
+         else
+            ns = ns + 1
+            sdest(ns) = ow
+            sid(:, ns) = (/ta(t), tb(t)/)
+            if (newblk) then
+               sptr(ns)%p => Y(t)
+            else
+               sptr(ns)%p => recv(D%rmap(ta(t), tb(t)))
+            endif
+         endif
+      enddo
+      call htlu_dist_xchg(D, ns, sdest, sid, sptr, nrcv, rid, rnd)
+      do k = 1, nrcv
+         Tp => D%blk((rid(1, k) - 1)/D%nprow + 1, (rid(2, k) - 1)/D%npcol + 1)
+         call HTLU_delete(Tp)
+         call htlu_move(rnd(k), Tp)
+      enddo
+      deallocate (sdest, sid, sptr, rid, rnd)
+      D%tcomm = D%tcomm + MPI_Wtime() - t0
+   end subroutine htlu_dist_return
+
+   !>**** G(a, b) = G(a, b) - sum_{k = k1..k2} G(a, k) G(k, b) for a in rows and b in cols, G the distributed blocks (newblk: G(a, b) =
+   !>**** sum_k G(a, k) G(k, b), accumulated in new blocks that replace the targets at the end, so the sources may include the
+   !>**** targets). The targets are updated by their owners or spread (htlu_dist_myops), after the remote operands are fetched
+   !>**** (collective)
+   subroutine htlu_dist_gemm(D, rows, cols, k1, k2, newblk, tol)
+      type(htlu_dist), target :: D
+      integer rows(:), cols(:), k1, k2
+      logical newblk
+      real(kind=8) tol(2)
+      integer, allocatable :: ta(:), tb(:), need(:, :)
+      type(htlu_node), allocatable, target :: recv(:), Y(:)
+      type(htlu_node), pointer :: Ap, Bp, Tp
+      integer nneed, k, t, a, b, nmy
+      real(kind=8) t0
+      call htlu_dist_pbeg(D)
+      call htlu_dist_myops(D, rows, cols, nmy, ta, tb)
+      nneed = 0
+      allocate (need(2, max(1, nmy*(1 + 2*(k2 - k1 + 1)))))
+      do t = 1, nmy
+         a = ta(t)
+         b = tb(t)
+         if (htlu_dist_owner(D, a, b) /= D%myid) call htlu_dist_addneed(D, a, b, nneed, need)
+         do k = k1, k2
+            if (htlu_dist_owner(D, a, k) /= D%myid) call htlu_dist_addneed(D, a, k, nneed, need)
+            if (htlu_dist_owner(D, k, b) /= D%myid) call htlu_dist_addneed(D, k, b, nneed, need)
+         enddo
+      enddo
+      call htlu_dist_fetch(D, nneed, need, recv)
+      t0 = MPI_Wtime()
+      allocate (Y(nmy))
+      if (nmy > 0) then
+         !$omp parallel
+         !$omp single
+         do t = 1, nmy
+            !$omp task default(shared) firstprivate(t) private(a, b, k, Ap, Bp, Tp)
+            a = ta(t)
+            b = tb(t)
+            Tp => htlu_dist_ptr(D, recv, a, b)
+            if (newblk) then
+               call htlu_zero_clone(Tp, Y(t))
+               Tp => Y(t)
+            endif
+            do k = k1, k2
+               Ap => htlu_dist_ptr(D, recv, a, k)
+               Bp => htlu_dist_ptr(D, recv, k, b)
+               call htlu_subhh(Tp, Ap, Bp, tol)
+            enddo
+            if (newblk) call htlu_scale(Tp, -BPACK_cone)
+            !$omp end task
+         enddo
+         !$omp end single
+         !$omp end parallel
+      endif
+      D%tcomp = D%tcomp + MPI_Wtime() - t0
+      call htlu_dist_return(D, nmy, ta, tb, recv, Y, newblk)
+      call htlu_dist_release(D, nneed, need, recv)
+      deallocate (need, ta, tb, Y)
+      if (newblk) then
+         call htlu_dist_pend(D, 7, k2 - k1 + 1, nmy)
+      else
+         call htlu_dist_pend(D, 6, k2 - k1 + 1, nmy)
+      endif
+   end subroutine htlu_dist_gemm
+
+   !>**** the operation with the diagonal block S = G(d, d) on G(a, b) for a in rows and b in cols: op 1: G = G S^{-1} with the
+   !>**** block-LU factored S (htlu_XSM), 2: G = G S, 3: G = S G (htlu_inv_mult); targets as in htlu_dist_gemm (collective)
+   subroutine htlu_dist_diag(D, rows, cols, dd, op, tol)
+      type(htlu_dist), target :: D
+      integer rows(:), cols(:), dd, op
+      real(kind=8) tol(2)
+      integer, allocatable :: ta(:), tb(:), need(:, :)
+      type(htlu_node), allocatable, target :: recv(:), Y(:)
+      type(htlu_node), pointer :: Sp, Tp
+      integer nneed, t, a, b, nmy
+      real(kind=8) t0
+      call htlu_dist_pbeg(D)
+      call htlu_dist_myops(D, rows, cols, nmy, ta, tb)
+      nneed = 0
+      allocate (need(2, max(1, nmy + 1)))
+      if (nmy > 0 .and. htlu_dist_owner(D, dd, dd) /= D%myid) call htlu_dist_addneed(D, dd, dd, nneed, need)
+      do t = 1, nmy
+         if (htlu_dist_owner(D, ta(t), tb(t)) /= D%myid) call htlu_dist_addneed(D, ta(t), tb(t), nneed, need)
+      enddo
+      call htlu_dist_fetch(D, nneed, need, recv)
+      t0 = MPI_Wtime()
+      if (nmy > 0) then
+         !$omp parallel
+         !$omp single
+         do t = 1, nmy
+            !$omp task default(shared) firstprivate(t) private(a, b, Sp, Tp)
+            a = ta(t)
+            b = tb(t)
+            Tp => htlu_dist_ptr(D, recv, a, b)
+            Sp => htlu_dist_ptr(D, recv, dd, dd)
+            select case (op)
+            case (1)
+               call htlu_XSM(Sp, Tp, tol)
+            case (2)
+               call htlu_inv_mult(Tp, Sp, 'R', tol)
+            case (3)
+               call htlu_inv_mult(Tp, Sp, 'L', tol)
+            end select
+            !$omp end task
+         enddo
+         !$omp end single
+         !$omp end parallel
+      endif
+      D%tcomp = D%tcomp + MPI_Wtime() - t0
+      allocate (Y(0))
+      call htlu_dist_return(D, nmy, ta, tb, recv, Y, .false.)
+      call htlu_dist_release(D, nneed, need, recv)
+      deallocate (need, ta, tb, Y)
+      call htlu_dist_pend(D, 2 + op, 1, nmy)
+   end subroutine htlu_dist_diag
+
+   !>**** factor (op 1, htlu_BLU) or invert (op 2, htlu_inv) the diagonal block G(d, d) on its owner
+   subroutine htlu_dist_local(D, dd, op, tol)
+      type(htlu_dist), target :: D
+      integer dd, op
+      real(kind=8) tol(2), t0
+      integer ntg
+      call htlu_dist_pbeg(D)
+      ntg = 0
+      if (htlu_dist_owner(D, dd, dd) == D%myid) then
+         ntg = 1
+         t0 = MPI_Wtime()
+         !$omp parallel
+         !$omp single
+         if (op == 1) then
+            call htlu_BLU(D%blk((dd - 1)/D%nprow + 1, (dd - 1)/D%npcol + 1), tol)
+         else
+            call htlu_inv(D%blk((dd - 1)/D%nprow + 1, (dd - 1)/D%npcol + 1), tol)
+         endif
+         !$omp end single
+         !$omp end parallel
+         D%tcomp = D%tcomp + MPI_Wtime() - t0
+      endif
+      call htlu_dist_pend(D, op, 1, ntg)
+   end subroutine htlu_dist_local
+
+   !>**** G(a, b) = -G(a, b) for a and b in lo..hi
+   subroutine htlu_dist_scale(D, lo, hi)
+      type(htlu_dist) :: D
+      integer lo, hi, i, j, a, b
+      do j = 1, D%nl
+         b = htlu_dist_glob(D, 'c', j)
+         if (b < lo .or. b > hi) cycle
+         do i = 1, D%nr
+            a = htlu_dist_glob(D, 'r', i)
+            if (a < lo .or. a > hi) cycle
+            call htlu_scale(D%blk(i, j), -BPACK_cone)
+         enddo
+      enddo
+   end subroutine htlu_dist_scale
+
+   !>**** block LU with whole-cluster pivots (htlu_BLU) of the diagonal block on the clusters lo..hi
+   recursive subroutine htlu_dist_blu(D, lo, hi, tol)
+      type(htlu_dist), target :: D
+      integer lo, hi, i, ns
+      integer, allocatable :: slo(:), shi(:)
+      real(kind=8) tol(2)
+      if (lo == hi) then
+         call htlu_dist_local(D, lo, 1, tol)
+         return
+      endif
+      call htlu_dist_sons(D, lo, hi, ns, slo, shi)
+      do i = 1, ns
+         call htlu_dist_blu(D, slo(i), shi(i), tol)
+         if (i < ns) then
+            call htlu_dist_xsm(D, slo(i), shi(i), shi(i) + 1, hi, tol)
+            call htlu_dist_gemm(D, htlu_irange(shi(i) + 1, hi), htlu_irange(shi(i) + 1, hi), slo(i), shi(i), .false., tol)
+         endif
+      enddo
+      deallocate (slo, shi)
+   end subroutine htlu_dist_blu
+
+   !>**** M = M S^{-1} (htlu_XSM) for the blocks M = G(mlo..mhi, dlo..dhi) and the factored diagonal block S on dlo..dhi
+   recursive subroutine htlu_dist_xsm(D, dlo, dhi, mlo, mhi, tol)
+      type(htlu_dist), target :: D
+      integer dlo, dhi, mlo, mhi, b, ns
+      integer, allocatable :: slo(:), shi(:)
+      real(kind=8) tol(2)
+      if (dlo == dhi) then
+         call htlu_dist_diag(D, htlu_irange(mlo, mhi), (/dlo/), dlo, 1, tol)
+         return
+      endif
+      call htlu_dist_sons(D, dlo, dhi, ns, slo, shi)
+      ! M Ub^{-1}, then the product with Lb^{-1}
+      do b = 1, ns
+         if (b > 1) call htlu_dist_gemm(D, htlu_irange(mlo, mhi), htlu_irange(slo(b), shi(b)), dlo, slo(b) - 1, .false., tol)
+         call htlu_dist_xsm(D, slo(b), shi(b), mlo, mhi, tol)
+      enddo
+      do b = ns - 1, 1, -1
+         call htlu_dist_gemm(D, htlu_irange(mlo, mhi), htlu_irange(slo(b), shi(b)), shi(b) + 1, dhi, .false., tol)
+      enddo
+      deallocate (slo, shi)
+   end subroutine htlu_dist_xsm
+
+   !>**** block Gauss-Jordan sweep (htlu_sweep) of the diagonal block on the clusters lo..hi: it becomes minus its inverse
+   recursive subroutine htlu_dist_sweep(D, lo, hi, tol)
+      type(htlu_dist), target :: D
+      integer lo, hi, i, ns
+      integer, allocatable :: slo(:), shi(:), ex(:), si(:)
+      real(kind=8) tol(2)
+      call htlu_dist_sons(D, lo, hi, ns, slo, shi)
+      do i = 1, ns
+         call htlu_dist_inv(D, slo(i), shi(i), tol)
+         ex = htlu_irange_ex(lo, hi, slo(i), shi(i))
+         si = htlu_irange(slo(i), shi(i))
+         if (slo(i) == shi(i)) then
+            call htlu_dist_diag(D, ex, si, slo(i), 2, tol)
+         else
+            call htlu_dist_gemm(D, ex, si, slo(i), shi(i), .true., tol)
+         endif
+         call htlu_dist_gemm(D, ex, ex, slo(i), shi(i), .false., tol)
+         if (slo(i) == shi(i)) then
+            call htlu_dist_diag(D, si, ex, slo(i), 3, tol)
+         else
+            call htlu_dist_gemm(D, si, ex, slo(i), shi(i), .true., tol)
+         endif
+         call htlu_dist_scale(D, slo(i), shi(i))
+      enddo
+      deallocate (slo, shi)
+   end subroutine htlu_dist_sweep
+
+   !>**** the diagonal block on the clusters lo..hi becomes its inverse (htlu_inv)
+   recursive subroutine htlu_dist_inv(D, lo, hi, tol)
+      type(htlu_dist), target :: D
+      integer lo, hi
+      real(kind=8) tol(2)
+      if (lo == hi) then
+         call htlu_dist_local(D, lo, 2, tol)
+         return
+      endif
+      call htlu_dist_sweep(D, lo, hi, tol)
+      call htlu_dist_scale(D, lo, hi)
+   end subroutine htlu_dist_inv
+
+   !>**** sum the leaf-operation timers and the exchange statistics over the processes and print them (rank 0)
+   subroutine htlu_dist_timers(D, wall, nth)
+      type(htlu_dist) :: D
+      real(kind=8) wall, ts(7), tr(0:15, 2), v(3), vmax(3), vsum(3), pw(7, 0:9), pwx(7, 0:9)
+      integer(kind=8) tc(7), nr(0:15, 2)
+      integer nth, ierr, pn(7, 0:9), k, c
+      character(len=6), parameter :: kname(7) = (/'factor', 'invert', 'solve ', 'mul R ', 'mul L ', 'Schur ', 'mul   '/)
+      call MPI_Allreduce(htlu_tsec, ts, 7, MPI_DOUBLE_PRECISION, MPI_SUM, D%comm, ierr)
+      call MPI_Allreduce(htlu_tcnt, tc, 7, MPI_INTEGER8, MPI_SUM, D%comm, ierr)
+      call MPI_Allreduce(htlu_rlev_t, tr, 32, MPI_DOUBLE_PRECISION, MPI_SUM, D%comm, ierr)
+      call MPI_Allreduce(htlu_rlev_n, nr, 32, MPI_INTEGER8, MPI_SUM, D%comm, ierr)
+      v = (/D%tcomm, D%tcomp, D%vrecv/)
+      call MPI_Allreduce(v, vmax, 3, MPI_DOUBLE_PRECISION, MPI_MAX, D%comm, ierr)
+      call MPI_Allreduce(v, vsum, 3, MPI_DOUBLE_PRECISION, MPI_SUM, D%comm, ierr)
+      call MPI_Allreduce(D%pwork, pw, 70, MPI_DOUBLE_PRECISION, MPI_SUM, D%comm, ierr)
+      call MPI_Allreduce(D%pwork, pwx, 70, MPI_DOUBLE_PRECISION, MPI_MAX, D%comm, ierr)
+      call MPI_Allreduce(D%pntg, pn, 70, MPI_INTEGER, MPI_SUM, D%comm, ierr)
+      if (D%myid == 0) then
+         htlu_tsec = ts
+         htlu_tcnt = tc
+         htlu_rlev_t = tr
+         htlu_rlev_n = nr
+         call HTLU_print_timers(wall, nth*D%nproc)
+         write (*, '(A,I6,A,I3,A,I4,A,I4,A,I8,A)') ' tensor LU distribution:', D%K, ' clusters (level', D%Ld, ') on', D%nprow, ' x', &
+            D%npcol, ' processes,', D%nstep, ' exchange steps'
+         write (*, '(A,2F12.3,A,2F12.3,A,F12.1,F14.1)') '    exchanges (s, max mean)', vmax(1), vsum(1)/D%nproc, &
+            '   block operations (s, max mean)', vmax(2), vsum(2)/D%nproc, '   received MB (max total)', vmax(3), vsum(3)
+         write (*, '(A)') '    steps: kind, summed clusters <=, steps, targets, wall (s), block operations (s, sum and max over processes), efficiency'
+         do k = 1, 7
+            do c = 0, 9
+               if (D%pcnt(k, c) == 0) cycle
+               write (*, '(6X,A6,I8,I8,I10,F10.2,2F12.2,F8.1,A)') kname(k), D%nch**c, D%pcnt(k, c), pn(k, c), D%pwall(k, c), pw(k, c), &
+                  pwx(k, c), 100d0*pw(k, c)/max(1d-30, D%pwall(k, c)*D%nproc), ' %'
+            enddo
+         enddo
+      else
+         htlu_tsec = 0
+         htlu_tcnt = 0
+         htlu_rlev_t = 0
+         htlu_rlev_n = 0
+      endif
+      D%tcomm = 0
+      D%tcomp = 0
+      D%vrecv = 0
+      D%nstep = 0
+      D%pwall = 0
+      D%pwork = 0
+      D%pcnt = 0
+      D%pntg = 0
+   end subroutine htlu_dist_timers
+
+   !>**** block LU factorization with whole-cluster pivots of the distributed forest in place (see htlu_BLU and htlu_bsolve; the
+   !>**** same block LU over the trees as inside each tree) (normest: estimate of ||A||_2; Tucker truncation at option%tol_rand
+   !>**** relative to each block and to normest) (collective)
+   subroutine HTLU_dist_factor(D, option, stats, normest)
+      type(htlu_dist), target :: D
+      type(Hoption) :: option
+      type(Hstat) :: stats
+      real(kind=8) normest, t1, t2, tol(2)
+      integer nth, ierr
+      tol = (/option%tol_rand, option%tol_rand*normest/)
+      nth = 1
+!$    nth = omp_get_max_threads()
+      call MPI_Barrier(D%comm, ierr)
+      t1 = MPI_Wtime()
+      call htlu_dist_blu(D, 1, D%K, tol)
+      call MPI_Barrier(D%comm, ierr)
+      t2 = MPI_Wtime()
+      if (option%verbosity >= 0) call htlu_dist_timers(D, t2 - t1, nth)
+      stats%Time_Factor = stats%Time_Factor + t2 - t1
+   end subroutine HTLU_dist_factor
+
+   !>**** the distributed forest becomes its inverse (H-TENSOR inverse with Tucker blocks, block Gauss-Jordan; apply it with
+   !>**** HTLU_dist_mult) (normest: estimate of ||A^{-1}||_2) (collective)
+   subroutine HTLU_dist_inverse(D, option, stats, normest)
+      type(htlu_dist), target :: D
+      type(Hoption) :: option
+      type(Hstat) :: stats
+      real(kind=8) normest, t1, t2, tol(2)
+      integer nth, ierr
+      tol = (/option%tol_rand, option%tol_rand*normest/)
+      nth = 1
+!$    nth = omp_get_max_threads()
+      call MPI_Barrier(D%comm, ierr)
+      t1 = MPI_Wtime()
+      call htlu_dist_inv(D, 1, D%K, tol)
+      call MPI_Barrier(D%comm, ierr)
+      t2 = MPI_Wtime()
+      D%inverse = 1
+      if (option%verbosity >= 0) call htlu_dist_timers(D, t2 - t1, nth)
+      stats%Time_Factor = stats%Time_Factor + t2 - t1
+   end subroutine HTLU_dist_inverse
+
+   !>**** xs = the entries of cluster a of the full vector set X (natural order in the cluster box)
+   subroutine htlu_dist_seg(D, a, X, xs)
+      type(htlu_dist) :: D
+      integer a, f, m
+      DT :: X(:, :)
+      DT, allocatable :: xs(:, :)
+      f = (a - 1)/D%nc + 1
+      m = mod(a - 1, D%nc) + 1
+      if (allocated(xs)) deallocate (xs)
+      allocate (xs(product(D%csz(:, m)), size(X, 2)))
+      call htlu_box(D%Ndim, D%Ns, D%coff(:, m), D%csz(:, m), X((f - 1)*D%nt + 1:f*D%nt, :), xs, 0)
+   end subroutine htlu_dist_seg
+
+   !>**** the entries of cluster a of the full vector set X become xs (mode 1) or are incremented by xs (mode 2)
+   subroutine htlu_dist_put(D, a, xs, X, mode)
+      type(htlu_dist) :: D
+      integer a, mode, f, m
+      DT :: X(:, :), xs(:, :)
+      f = (a - 1)/D%nc + 1
+      m = mod(a - 1, D%nc) + 1
+      call htlu_box(D%Ndim, D%Ns, D%coff(:, m), D%csz(:, m), X((f - 1)*D%nt + 1:f*D%nt, :), xs, mode)
+   end subroutine htlu_dist_put
+
+   !>**** Y = op(A) X (op 'N' or 'T') for the distributed forest; X and Y are full vector sets (trees one after another, natural
+   !>**** order in every tree), the same on all processes (collective)
+   subroutine HTLU_dist_mult(D, op, X, Y)
+      type(htlu_dist), target :: D
+      character op
       DT :: X(:, :), Y(:, :)
-      DT, allocatable :: xq(:, :), yp(:, :)
+      DT, allocatable :: xs(:, :), ys(:, :)
+      integer R, i, j, a, b, ierr
       R = size(X, 2)
-      allocate (xq(nloc, R), yp(nloc, R))
-      Y(1:P*nloc, 1:R) = 0
+      call assert(size(X, 1) == D%P*D%nt .and. size(Y, 1) == D%P*D%nt, 'HTLU_dist_mult: not a full vector set')
+      Y(1:D%P*D%nt, 1:R) = 0
       !$omp parallel
       !$omp single
-      do p1 = 1, P
-         yp = 0
-         do q1 = 1, P
-            xq = X((q1 - 1)*nloc + 1:q1*nloc, 1:R)
-            call htlu_mult(A(p1, q1), 'N', xq, yp, BPACK_cone)
+      if (op == 'N') then
+         do i = 1, D%nr
+            !$omp task default(shared) firstprivate(i) private(j, a, b, xs, ys)
+            a = htlu_dist_glob(D, 'r', i)
+            allocate (ys(product(D%csz(:, mod(a - 1, D%nc) + 1)), R))
+            ys = 0
+            do j = 1, D%nl
+               b = htlu_dist_glob(D, 'c', j)
+               call htlu_dist_seg(D, b, X, xs)
+               call htlu_mult(D%blk(i, j), 'N', xs, ys, BPACK_cone)
+            enddo
+            call htlu_dist_put(D, a, ys, Y, 2)
+            deallocate (ys)
+            if (allocated(xs)) deallocate (xs)
+            !$omp end task
          enddo
-         Y((p1 - 1)*nloc + 1:p1*nloc, 1:R) = yp
-      enddo
+      else
+         do j = 1, D%nl
+            !$omp task default(shared) firstprivate(j) private(i, a, b, xs, ys)
+            b = htlu_dist_glob(D, 'c', j)
+            allocate (ys(product(D%csz(:, mod(b - 1, D%nc) + 1)), R))
+            ys = 0
+            do i = 1, D%nr
+               a = htlu_dist_glob(D, 'r', i)
+               call htlu_dist_seg(D, a, X, xs)
+               call htlu_mult(D%blk(i, j), 'T', xs, ys, BPACK_cone)
+            enddo
+            call htlu_dist_put(D, b, ys, Y, 2)
+            deallocate (ys)
+            if (allocated(xs)) deallocate (xs)
+            !$omp end task
+         enddo
+      endif
       !$omp end single
       !$omp end parallel
-      deallocate (xq, yp)
-   end subroutine HTLU_forest_mult
+      call MPI_Allreduce(MPI_IN_PLACE, Y, D%P*D%nt*R, MPI_DT, MPI_SUM, D%comm, ierr)
+   end subroutine HTLU_dist_mult
 
-   !>**** Y = A^T X for the P x P forest A
-   subroutine HTLU_forest_multT(P, A, nloc, X, Y)
-      integer P, nloc, p1, q1, R
-      type(htlu_node) :: A(:, :)
-      DT :: X(:, :), Y(:, :)
-      DT, allocatable :: xp(:, :), yq(:, :)
-      R = size(X, 2)
-      allocate (xp(nloc, R), yq(nloc, R))
-      !$omp parallel
-      !$omp single
-      do q1 = 1, P
-         yq = 0
-         do p1 = 1, P
-            xp = X((p1 - 1)*nloc + 1:p1*nloc, 1:R)
-            call htlu_mult(A(p1, q1), 'T', xp, yq, BPACK_cone)
-         enddo
-         Y((q1 - 1)*nloc + 1:q1*nloc, 1:R) = yq
-      enddo
-      !$omp end single
-      !$omp end parallel
-      deallocate (xp, yq)
-   end subroutine HTLU_forest_multT
-
-   !>**** estimate of ||A||_2 for the P x P forest A: nit power iterations with A^H A
-   real(kind=8) function HTLU_forest_norm2(P, A, nloc, nit)
-      integer P, nloc, nit, it
-      type(htlu_node) :: A(:, :)
+   !>**** estimate of ||A||_2 for the distributed forest: nit power iterations with A^H A (collective)
+   real(kind=8) function HTLU_dist_norm2(D, nit)
+      type(htlu_dist), target :: D
+      integer nit, it, ierr
       DT, allocatable :: x(:, :), y(:, :)
       real(kind=8) s
-      allocate (x(P*nloc, 1), y(P*nloc, 1))
-      call htlu_random(x)
+      allocate (x(D%P*D%nt, 1), y(D%P*D%nt, 1))
+      if (D%myid == 0) call htlu_random(x)
+      call MPI_Bcast(x, D%P*D%nt, MPI_DT, 0, D%comm, ierr)
       x = x/sqrt(sum(abs(x)**2))
       s = 0
       do it = 1, nit
-         call HTLU_forest_mult(P, A, nloc, x, y)
+         call HTLU_dist_mult(D, 'N', x, y)
          y = htlu_conj(y)
-         call HTLU_forest_multT(P, A, nloc, y, x)
+         call HTLU_dist_mult(D, 'T', y, x)
          x = htlu_conj(x)
          s = sqrt(sum(abs(x)**2))
          x = x/s
       enddo
-      HTLU_forest_norm2 = sqrt(s)
+      HTLU_dist_norm2 = sqrt(s)
       deallocate (x, y)
-   end function HTLU_forest_norm2
+   end function HTLU_dist_norm2
 
-   !>**** block LU factorization with whole-cluster pivots of the P x P forest A in place (see htlu_BLU and htlu_bsolve): the
-   !>**** same block LU over the trees as inside each tree
-   !>**** (normest: estimate of ||A||_2; Tucker truncation at option%tol_rand relative to each block and to normest)
-   subroutine HTLU_forest_factor(P, A, option, stats, ptree, normest)
-      integer P, p1, q1, r1
-      type(htlu_node), target :: A(:, :)
-      type(Hoption) :: option
-      type(Hstat) :: stats
-      type(proctree) :: ptree
-      real(kind=8) normest
-      integer nth
-      real(kind=8) t1, t2, tol(2)
-      call assert(ptree%nproc == 1, 'HTLU_forest_factor: one MPI process only')
-      tol = (/option%tol_rand, option%tol_rand*normest/)
-      nth = 1
-!$    nth = omp_get_max_threads()
-      t1 = MPI_Wtime()
+   !>**** X(clusters r1..r2) = X(r1..r2) - sum_{b = c1..c2} G(a, b) X(b) for the full vector set X (collective)
+   subroutine htlu_dist_matvec(D, r1, r2, c1, c2, X)
+      type(htlu_dist), target :: D
+      integer r1, r2, c1, c2
+      DT :: X(:, :)
+      DT, allocatable :: W(:, :), xs(:, :), ys(:, :)
+      integer, allocatable :: woff(:)
+      integer R, i, j, a, b, ierr
+      R = size(X, 2)
+      allocate (woff(r1:r2 + 1))
+      woff(r1) = 0
+      do a = r1, r2
+         woff(a + 1) = woff(a) + product(D%csz(:, mod(a - 1, D%nc) + 1))
+      enddo
+      allocate (W(woff(r2 + 1), R))
+      W = 0
       !$omp parallel
       !$omp single
-      do p1 = 1, P
-         call htlu_BLU(A(p1, p1), tol)
-         do q1 = p1 + 1, P
-            !$omp task default(shared) firstprivate(p1,q1)
-            call htlu_XSM(A(p1, p1), A(q1, p1), tol)
-            !$omp end task
+      do i = 1, D%nr
+         a = htlu_dist_glob(D, 'r', i)
+         if (a < r1 .or. a > r2) cycle
+         !$omp task default(shared) firstprivate(i, a) private(j, b, xs, ys)
+         allocate (ys(woff(a + 1) - woff(a), R))
+         ys = 0
+         do j = 1, D%nl
+            b = htlu_dist_glob(D, 'c', j)
+            if (b < c1 .or. b > c2) cycle
+            call htlu_dist_seg(D, b, X, xs)
+            call htlu_mult(D%blk(i, j), 'N', xs, ys, BPACK_cone)
          enddo
-         !$omp taskwait
-         do r1 = p1 + 1, P
-            do q1 = p1 + 1, P
-               !$omp task default(shared) firstprivate(p1,q1,r1)
-               call htlu_subhh(A(q1, r1), A(q1, p1), A(p1, r1), tol)
-               !$omp end task
+         W(woff(a) + 1:woff(a + 1), :) = ys
+         deallocate (ys)
+         if (allocated(xs)) deallocate (xs)
+         !$omp end task
+      enddo
+      !$omp end single
+      !$omp end parallel
+      call MPI_Allreduce(MPI_IN_PLACE, W, woff(r2 + 1)*R, MPI_DT, MPI_SUM, D%comm, ierr)
+      do a = r1, r2
+         allocate (ys(woff(a + 1) - woff(a), R))
+         ys = -W(woff(a) + 1:woff(a + 1), :)
+         call htlu_dist_put(D, a, ys, X, 2)
+         deallocate (ys)
+      enddo
+      deallocate (W, woff)
+   end subroutine htlu_dist_matvec
+
+   !>**** X = S^{-1} X (htlu_bsolve) with the block-LU factored diagonal block S on the clusters lo..hi (collective)
+   recursive subroutine htlu_dist_bsolve(D, lo, hi, X)
+      type(htlu_dist), target :: D
+      integer lo, hi
+      DT :: X(:, :)
+      DT, allocatable :: xs(:, :)
+      integer, allocatable :: slo(:), shi(:)
+      integer i, j, ns, ow, ierr
+      if (lo == hi) then
+         ow = htlu_dist_owner(D, lo, lo)
+         call htlu_dist_seg(D, lo, X, xs)
+         if (ow == D%myid) then
+            !$omp parallel
+            !$omp single
+            call htlu_bsolve(D%blk((lo - 1)/D%nprow + 1, (lo - 1)/D%npcol + 1), xs)
+            !$omp end single
+            !$omp end parallel
+         endif
+         call MPI_Bcast(xs, size(xs), MPI_DT, ow, D%comm, ierr)
+         call htlu_dist_put(D, lo, xs, X, 1)
+         deallocate (xs)
+         return
+      endif
+      call htlu_dist_sons(D, lo, hi, ns, slo, shi)
+      do j = 2, ns
+         call htlu_dist_matvec(D, slo(j), shi(j), lo, shi(j - 1), X)
+      enddo
+      do i = ns, 1, -1
+         if (i < ns) call htlu_dist_matvec(D, slo(i), shi(i), slo(i + 1), hi, X)
+         call htlu_dist_bsolve(D, slo(i), shi(i), X)
+      enddo
+      deallocate (slo, shi)
+   end subroutine htlu_dist_bsolve
+
+   !>**** X = A^{-1} X with the distributed block LU factors (HTLU_dist_factor); X is a full vector set, the same on all processes
+   !>**** (collective)
+   subroutine HTLU_dist_solve(D, X)
+      type(htlu_dist), target :: D
+      DT :: X(:, :)
+      call htlu_dist_bsolve(D, 1, D%K, X)
+   end subroutine HTLU_dist_solve
+
+   !>**** the full vector set Xf from the local vectors Xl of the HTENSOR layout (the box D%boxes(:, rank) of every tree, trees one
+   !>**** after another) (collective)
+   subroutine HTLU_dist_l2g(D, Xl, Xf)
+      type(htlu_dist) :: D
+      DT :: Xl(:, :), Xf(:, :)
+      integer R, ir, f, c, nl, ierr, Nd
+      integer, allocatable :: cnt(:), dsp(:)
+      DT, allocatable :: buf(:), sb(:), piece(:, :)
+      Nd = D%Ndim
+      R = size(Xl, 2)
+      allocate (cnt(0:D%nproc - 1), dsp(0:D%nproc - 1))
+      do ir = 0, D%nproc - 1
+         cnt(ir) = D%P*product(D%boxes(Nd + 1:2*Nd, ir))*R
+      enddo
+      dsp(0) = 0
+      do ir = 1, D%nproc - 1
+         dsp(ir) = dsp(ir - 1) + cnt(ir - 1)
+      enddo
+      nl = product(D%boxes(Nd + 1:2*Nd, D%myid))
+      allocate (sb(max(1, D%P*nl*R)), buf(max(1, sum(cnt))))
+      do c = 1, R
+         sb((c - 1)*D%P*nl + 1:c*D%P*nl) = Xl(1:D%P*nl, c)
+      enddo
+      call MPI_Allgatherv(sb, cnt(D%myid), MPI_DT, buf, cnt, dsp, MPI_DT, D%comm, ierr)
+      do ir = 0, D%nproc - 1
+         nl = product(D%boxes(Nd + 1:2*Nd, ir))
+         allocate (piece(nl, 1))
+         do c = 1, R
+            do f = 1, D%P
+               piece(:, 1) = buf(dsp(ir) + (c - 1)*D%P*nl + (f - 1)*nl + 1:dsp(ir) + (c - 1)*D%P*nl + f*nl)
+               call htlu_box(Nd, D%Ns, D%boxes(1:Nd, ir), D%boxes(Nd + 1:2*Nd, ir), Xf((f - 1)*D%nt + 1:f*D%nt, c:c), piece, 1)
             enddo
          enddo
-         !$omp taskwait
+         deallocate (piece)
       enddo
-      !$omp end single
-      !$omp end parallel
-      t2 = MPI_Wtime()
-      if (option%verbosity >= 0) call HTLU_print_timers(t2 - t1, nth)
-      stats%Time_Factor = stats%Time_Factor + t2 - t1
-   end subroutine HTLU_forest_factor
+      deallocate (cnt, dsp, sb, buf)
+   end subroutine HTLU_dist_l2g
 
-   !>**** X = A^{-1} X with the block LU factors of the P x P forest A (HTLU_forest_factor; trees one after another, nloc entries
-   !>**** each): y_p = x_p - sum_{q<p} X_pq y_q, then x_p = S_pp^{-1} (y_p - sum_{q>p} At_pq x_q) for p = P..1
-   subroutine HTLU_forest_solve(P, A, nloc, X)
-      integer P, nloc, p1, q1, R
-      type(htlu_node) :: A(:, :)
-      DT :: X(:, :)
-      DT, allocatable :: xq(:, :), xp(:, :)
-      R = size(X, 2)
-      allocate (xq(nloc, R), xp(nloc, R))
-      !$omp parallel
-      !$omp single
-      do p1 = 2, P
-         xp = X((p1 - 1)*nloc + 1:p1*nloc, 1:R)
-         do q1 = 1, p1 - 1
-            xq = X((q1 - 1)*nloc + 1:q1*nloc, 1:R)
-            call htlu_mult(A(p1, q1), 'N', xq, xp, -BPACK_cone)
-         enddo
-         X((p1 - 1)*nloc + 1:p1*nloc, 1:R) = xp
+   !>**** the local vectors Xl of the HTENSOR layout from the full vector set Xf
+   subroutine HTLU_dist_g2l(D, Xf, Xl)
+      type(htlu_dist) :: D
+      DT :: Xf(:, :), Xl(:, :)
+      integer f, nl, Nd
+      Nd = D%Ndim
+      nl = product(D%boxes(Nd + 1:2*Nd, D%myid))
+      do f = 1, D%P
+         call htlu_box(Nd, D%Ns, D%boxes(1:Nd, D%myid), D%boxes(Nd + 1:2*Nd, D%myid), Xf((f - 1)*D%nt + 1:f*D%nt, :), &
+            Xl((f - 1)*nl + 1:f*nl, :), 0)
       enddo
-      do p1 = P, 1, -1
-         xp = X((p1 - 1)*nloc + 1:p1*nloc, 1:R)
-         do q1 = p1 + 1, P
-            xq = X((q1 - 1)*nloc + 1:q1*nloc, 1:R)
-            call htlu_mult(A(p1, q1), 'N', xq, xp, -BPACK_cone)
+   end subroutine HTLU_dist_g2l
+
+   !>**** memory (MB) of the dense and the Tucker blocks summed over the processes, the largest memory of one process, the maximum
+   !>**** Tucker rank per level and the numbers of dense and Tucker blocks (collective)
+   subroutine HTLU_dist_stats(D, memd, memt, memmax, rk, nd, nt)
+      type(htlu_dist) :: D
+      real(kind=8) memd, memt, memmax, v(2), vs(2)
+      integer rk(0:), nd, nt, i, j, ierr, n2(2), n2s(2)
+      integer, allocatable :: rks(:)
+      memd = 0
+      memt = 0
+      rk = 0
+      nd = 0
+      nt = 0
+      do j = 1, D%nl
+         do i = 1, D%nr
+            call HTLU_stats(D%blk(i, j), memd, memt, rk, nd, nt)
          enddo
-         call htlu_bsolve(A(p1, p1), xp)
-         X((p1 - 1)*nloc + 1:p1*nloc, 1:R) = xp
       enddo
-      !$omp end single
-      !$omp end parallel
-      deallocate (xq, xp)
-   end subroutine HTLU_forest_solve
+      v(1) = memd + memt
+      call MPI_Allreduce(v(1), memmax, 1, MPI_DOUBLE_PRECISION, MPI_MAX, D%comm, ierr)
+      v = (/memd, memt/)
+      call MPI_Allreduce(v, vs, 2, MPI_DOUBLE_PRECISION, MPI_SUM, D%comm, ierr)
+      memd = vs(1)
+      memt = vs(2)
+      n2 = (/nd, nt/)
+      call MPI_Allreduce(n2, n2s, 2, MPI_INTEGER, MPI_SUM, D%comm, ierr)
+      nd = n2s(1)
+      nt = n2s(2)
+      allocate (rks(size(rk)))
+      call MPI_Allreduce(rk, rks, size(rk), MPI_INTEGER, MPI_MAX, D%comm, ierr)
+      rk = rks
+      deallocate (rks)
+   end subroutine HTLU_dist_stats
+
+   !>**** print the Tucker profile of the distributed forest (by level and part: strictly lower, strictly upper, diagonal path)
+   !>**** on rank 0 (collective)
+   subroutine HTLU_dist_print_profile(D, lmax, title)
+      type(htlu_dist) :: D
+      integer lmax, part, l, i, j, a, b, ierr
+      character(*) title
+      integer cnt(0:lmax, 3), rmax(0:lmax, 3, 2), cnts(0:lmax, 3), rmaxs(0:lmax, 3, 2)
+      real(kind=8) rsum(0:lmax, 3, 2), mem(0:lmax, 3), rsums(0:lmax, 3, 2), mems(0:lmax, 3)
+      character(len=5), parameter :: pname(3) = (/'lower', 'upper', 'diag '/)
+      cnt = 0
+      rmax = 0
+      rsum = 0
+      mem = 0
+      do j = 1, D%nl
+         b = htlu_dist_glob(D, 'c', j)
+         do i = 1, D%nr
+            a = htlu_dist_glob(D, 'r', i)
+            part = 0
+            if (a > b) part = 1
+            if (a < b) part = 2
+            call HTLU_rank_profile(D%blk(i, j), part, cnt, rsum, rmax, mem)
+         enddo
+      enddo
+      call MPI_Reduce(cnt, cnts, size(cnt), MPI_INTEGER, MPI_SUM, 0, D%comm, ierr)
+      call MPI_Reduce(rmax, rmaxs, size(rmax), MPI_INTEGER, MPI_MAX, 0, D%comm, ierr)
+      call MPI_Reduce(rsum, rsums, size(rsum), MPI_DOUBLE_PRECISION, MPI_SUM, 0, D%comm, ierr)
+      call MPI_Reduce(mem, mems, size(mem), MPI_DOUBLE_PRECISION, MPI_SUM, 0, D%comm, ierr)
+      if (D%myid /= 0) return
+      write (*, '(A,A)') ' Tucker profile, ', title
+      write (*, '(A)') '   level  part      blocks   row rank (mean, max)   col rank (mean, max)   memory (MB)'
+      do l = 0, lmax
+         do part = 1, 3
+            if (cnts(l, part) == 0) cycle
+            write (*, '(I8,2X,A5,I12,F14.1,I8,F15.1,I8,F14.1)') l, pname(part), cnts(l, part), rsums(l, part, 1)/cnts(l, part), &
+               rmaxs(l, part, 1), rsums(l, part, 2)/cnts(l, part), rmaxs(l, part, 2), mems(l, part)
+         enddo
+      enddo
+   end subroutine HTLU_dist_print_profile
+
+   !>**** free the distributed forest
+   subroutine HTLU_dist_delete(D)
+      type(htlu_dist) :: D
+      integer i, j
+      if (allocated(D%blk)) then
+         do j = 1, size(D%blk, 2)
+            do i = 1, size(D%blk, 1)
+               call HTLU_delete(D%blk(i, j))
+            enddo
+         enddo
+         deallocate (D%blk)
+      endif
+      if (allocated(D%rmap)) deallocate (D%rmap)
+      if (allocated(D%Ns)) deallocate (D%Ns)
+      if (allocated(D%coff)) deallocate (D%coff)
+      if (allocated(D%csz)) deallocate (D%csz)
+      if (allocated(D%cgrp)) deallocate (D%cgrp)
+      if (allocated(D%boxes)) deallocate (D%boxes)
+      D%K = 0
+      D%inverse = 0
+   end subroutine HTLU_dist_delete
 
 end module Bplus_htensor_lu

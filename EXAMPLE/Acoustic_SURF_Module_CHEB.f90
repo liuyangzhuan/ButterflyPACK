@@ -109,8 +109,9 @@ implicit none
 		integer:: faceorder = 0 ! order of the six faces of the sphere/cube (the forest's base patches): 0: +x,-x,+y,-y,+z,-z; 1: sweep +z,+x,+y,-x,-y,-z
 		integer:: printstruct = 0 ! 1: write every block's rank before (fort.100000+rank) and after (fort.200000+rank) the factorization, and the cluster geometry (clusters.txt)
 		integer:: tensor = 0 ! 1: iterative solve with a forest of H-TENSOR blocks, one per pair of base patches on their (split*N) x (split*N) parameter grids (split must be a power of two)
-		integer:: tensor_inv = 0 ! factorization of the tensor forest with Tucker blocks (--lrlevel 0, one MPI process) when option%precon is DIRECT or BPACKPRECON: 0: block LU with whole-cluster pivots; 1: H-TENSOR inverse (block Gauss-Jordan); truncation tolerance tol_rand
-		integer:: tensor_dump = 0 ! 1: write the dense matrix of the tensor forest (faces one after another, natural order on each face grid) to tensor_dense.bin and stop (diagnostics, one MPI process)
+		integer:: tensor_inv = 0 ! factorization of the tensor forest with Tucker blocks (--lrlevel 0) when option%precon is DIRECT or BPACKPRECON: 0: block LU with whole-cluster pivots; 1: H-TENSOR inverse (block Gauss-Jordan); truncation tolerance tol_rand
+		integer:: tensor_ld = -1 ! distribution level of the tensor-forest factorization (2D block-cyclic layout of the blocks between the clusters of this level of all faces); raised to the coarsest level at which every cluster lies on one process
+		integer:: tensor_dump = 0 ! 1: write the dense matrix of the tensor forest (faces one after another, natural order on each face grid) to tensor_dense.bin and stop (diagnostics)
 		integer:: tlev = 0 ! log2(split): levels of the per-dimension trees of a base patch down to single patches
 		real(kind=8):: tnear_para = 2.2d0 ! admissibility parameter of the tensor forest (option%near_para)
 		integer, allocatable:: sp_face(:), sp_is(:), sp_js(:) ! base patch and split position (is,js) of each patch
@@ -135,8 +136,7 @@ implicit none
 		type(z_Hstat), allocatable:: stats(:, :)
 		type(quant_pair_CHEB), allocatable:: pair(:, :)
 		integer, allocatable:: gidx(:, :) ! gidx(i, p): node (natural order) of local entry i of base patch p
-		type(z_htlu_node), allocatable:: lu(:, :) ! block LU factors (quant%tensor_inv = 0) or inverse (1) of the forest
-		integer:: inverse = 0 ! 1: lu holds the inverse
+		type(z_htlu_dist):: ld ! distributed block LU factors (quant%tensor_inv = 0) or inverse (1) of the forest
 		type(z_Hoption), pointer:: option => null()
 		type(z_proctree), pointer:: ptree => null()
 		real(kind=8):: tmvp = 0d0 ! time of the products
@@ -2126,10 +2126,10 @@ contains
 		deallocate (xr, x, y)
 	end function tensor_invnorm_CHEB
 
-	!**** factorization of the tensor forest with Tucker blocks (option%precon = DIRECT or BPACKPRECON, one MPI process): the
-	!**** H-TENSOR blocks are copied into recursive block trees, the copy is checked against the forest product on a random vector,
-	!**** and the forest is factored by a block LU with whole-cluster pivots (quant%tensor_inv = 0) or inverted (block
-	!**** Gauss-Jordan; quant%tensor_inv = 1),
+	!**** factorization of the tensor forest with Tucker blocks (option%precon = DIRECT or BPACKPRECON): the H-TENSOR blocks are
+	!**** redistributed into a 2D block-cyclic layout of the blocks between the clusters of level tf%ld%Ld of all faces (recursive
+	!**** block trees below), the copy is checked against the forest product on a random vector, and the forest is factored by a
+	!**** block LU with whole-cluster pivots (quant%tensor_inv = 0) or inverted (block Gauss-Jordan; quant%tensor_inv = 1),
 	!**** with Tucker arithmetic truncated at option%tol_rand relative to each block and to the estimate of ||Z|| (LU) or ||Z^{-1}|| (inverse)
 	subroutine tensor_factor_CHEB(tf, quant, option, ptree)
 		use z_BPACK_utilities
@@ -2139,100 +2139,116 @@ contains
 		type(z_Hoption):: option
 		type(z_proctree):: ptree
 		type(z_Hstat):: stats_f
-		integer P, p1, q1, nl, nd, nt, lmax
+		integer P, p1, q1, nl, nf, nd, nt, lmax, ierr, idxs(2)
 		integer rk0(0:63), rk(0:63)
-		real(kind=8) t1, t2, memd0, memt0, memd, memt, err, normest
+		real(kind=8) t1, t2, memd0, memt0, memx0, memd, memt, memx, err, normest, nrm(2), nrmg(2)
 		real(kind=8), allocatable:: xr(:, :)
-		complex(kind=8), allocatable:: x(:, :), y(:, :), y2(:, :)
+		complex(kind=8), allocatable:: x(:, :), y(:, :), y2(:, :), xf(:, :), yf(:, :)
 
-		call z_assert(ptree%nproc == 1, 'tensor_factor_CHEB: one MPI process only')
 		P = tf%nface
 		nl = tf%nloc
 		lmax = min(63, quant%tlev)
-		allocate (tf%lu(P, P))
+		do p1 = 1, 2
+			idxs(p1) = tf%msh(p1, 1, 1)%idxs
+		enddo
 		t1 = MPI_Wtime()
+		call z_HTLU_dist_init(tf%ld, 2, P, tf%msh(:, 1, 1), ptree, tf%Ns_loc, idxs, quant%tensor_ld)
 		do q1 = 1, P
 			do p1 = 1, P
-				call z_HTLU_from_HTENSOR(tf%lu(p1, q1), tf%bmat(p1, q1)%h_mat_md, tf%msh(:, p1, q1), 2)
+				call z_HTLU_dist_add_pair(tf%ld, p1, q1, tf%bmat(p1, q1)%h_mat_md, tf%msh(:, p1, q1), ptree)
 			enddo
 		enddo
 		t2 = MPI_Wtime()
-		allocate (xr(nl*P, 2), x(nl*P, 1), y(nl*P, 1), y2(nl*P, 1))
+		nf = tf%ld%nt*P
+		allocate (xr(nl*P, 2), x(nl*P, 1), y(nl*P, 1), y2(nl*P, 1), xf(nf, 1), yf(nf, 1))
 		call random_number(xr)
 		x(:, 1) = cmplx(xr(:, 1) - 0.5d0, xr(:, 2) - 0.5d0, kind=8)
 		call tensor_mult_CHEB(tf, 1, x, y)
-		call z_HTLU_forest_mult(P, tf%lu, nl, x, y2)
-		err = sqrt(sum(abs(y2 - y)**2)/sum(abs(y)**2))
-		memd0 = 0d0
-		memt0 = 0d0
-		rk0 = 0
-		nd = 0
-		nt = 0
-		do q1 = 1, P
-			do p1 = 1, P
-				call z_HTLU_stats(tf%lu(p1, q1), memd0, memt0, rk0, nd, nt)
-			enddo
-		enddo
-		write (*, '(A,F10.3,A,Es10.3,A,I9,A,I9,A)') ' tensor LU: forest copied into block trees in', t2 - t1, ' s (product difference', err, ';', &
-			nd, ' dense and', nt, ' Tucker blocks)'
+		call z_HTLU_dist_l2g(tf%ld, x, xf)
+		call z_HTLU_dist_mult(tf%ld, 'N', xf, yf)
+		call z_HTLU_dist_g2l(tf%ld, yf, y2)
+		nrm = (/sum(abs(y2 - y)**2), sum(abs(y)**2)/)
+		call MPI_ALLREDUCE(nrm, nrmg, 2, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+		err = sqrt(nrmg(1)/nrmg(2))
+		call z_HTLU_dist_stats(tf%ld, memd0, memt0, memx0, rk0, nd, nt)
+		if (ptree%MyID == Main_ID) then
+			write (*, '(A,F10.3,A,Es10.3,A,I9,A,I9,A)') ' tensor LU: forest copied into block trees in', t2 - t1, ' s (product difference', &
+				err, ';', nd, ' dense and', nt, ' Tucker blocks)'
+			write (*, '(A,I6,A,I3,A,I4,A,I4,A)') ' tensor LU: 2D block-cyclic layout of the blocks between', tf%ld%K, ' clusters (level', &
+				tf%ld%Ld, ') on', tf%ld%nprow, ' x', tf%ld%npcol, ' processes'
+		endif
 		if (quant%tensor_dump == 1) then
-			! dense matrix, 1024 columns at a time, column-major complex(8) stream
-			open (unit=91, file='tensor_dense.bin', access='stream', form='unformatted', status='replace')
-			deallocate (x, y)
-			allocate (x(nl*P, 1024), y(nl*P, 1024))
-			do q1 = 1, nl*P, 1024
-				p1 = min(1024, nl*P - q1 + 1)
-				x = 0d0
+			! dense matrix, 1024 columns at a time, column-major complex(8) stream (written by rank 0)
+			deallocate (xf, yf)
+			allocate (xf(nf, 1024), yf(nf, 1024))
+			if (ptree%MyID == Main_ID) open (unit=91, file='tensor_dense.bin', access='stream', form='unformatted', status='replace')
+			do q1 = 1, nf, 1024
+				p1 = min(1024, nf - q1 + 1)
+				xf = 0d0
 				do nd = 1, p1
-					x(q1 + nd - 1, nd) = 1d0
+					xf(q1 + nd - 1, nd) = 1d0
 				enddo
-				call z_HTLU_forest_mult(P, tf%lu, nl, x(:, 1:p1), y(:, 1:p1))
-				write (91) y(:, 1:p1)
+				call z_HTLU_dist_mult(tf%ld, 'N', xf(:, 1:p1), yf(:, 1:p1))
+				if (ptree%MyID == Main_ID) write (91) yf(:, 1:p1)
 			enddo
-			close (91)
-			write (*, '(A,I8,A)') ' tensor LU: dense matrix of order', nl*P, ' written to tensor_dense.bin'
+			if (ptree%MyID == Main_ID) then
+				close (91)
+				write (*, '(A,I8,A)') ' tensor LU: dense matrix of order', nf, ' written to tensor_dense.bin'
+			endif
+			call MPI_Barrier(ptree%Comm, ierr)
 			stop
 		endif
-		if (ptree%MyID == Main_ID) call z_HTLU_print_profile(P, tf%lu, lmax, 'forward')
+		call z_HTLU_dist_print_profile(tf%ld, lmax, 'forward')
 		call z_InitStat(stats_f)
 		! norm estimate for the absolute part of the Tucker truncation: ||Z^{-1}|| (inverse) or ||Z|| (LU)
 		t1 = MPI_Wtime()
 		if (quant%tensor_inv == 1) then
 			normest = tensor_invnorm_CHEB(tf, option, ptree)
 		else
-			normest = z_HTLU_forest_norm2(P, tf%lu, nl, 20)
+			normest = z_HTLU_dist_norm2(tf%ld, 20)
 		endif
 		t2 = MPI_Wtime()
-		write (*, '(A,Es12.4,A,F10.3,A)') ' tensor LU: norm estimate for the truncation', normest, ' (', t2 - t1, ' s)'
+		if (ptree%MyID == Main_ID) write (*, '(A,Es12.4,A,F10.3,A)') ' tensor LU: norm estimate for the truncation', normest, ' (', t2 - t1, ' s)'
 		if (quant%tensor_inv == 1) then
-			call z_HTLU_forest_inverse(P, tf%lu, option, stats_f, ptree, normest)
-			tf%inverse = 1
+			call z_HTLU_dist_inverse(tf%ld, option, stats_f, normest)
 		else
-			call z_HTLU_forest_factor(P, tf%lu, option, stats_f, ptree, normest)
+			call z_HTLU_dist_factor(tf%ld, option, stats_f, normest)
 		endif
-		if (ptree%MyID == Main_ID) call z_HTLU_print_profile(P, tf%lu, lmax, 'factors')
-		memd = 0d0
-		memt = 0d0
-		rk = 0
-		nd = 0
-		nt = 0
-		do q1 = 1, P
-			do p1 = 1, P
-				call z_HTLU_stats(tf%lu(p1, q1), memd, memt, rk, nd, nt)
-			enddo
-		enddo
-		if (quant%tensor_inv == 1) then
-			write (*, '(A,F12.3,A,Es10.2,A)') ' tensor LU: inverse time:', stats_f%Time_Factor, ' s (tol_rand', option%tol_rand, ')'
-		else
-			write (*, '(A,F12.3,A,Es10.2,A)') ' tensor LU factorization time:', stats_f%Time_Factor, ' s (tol_rand', option%tol_rand, ')'
+		call z_HTLU_dist_print_profile(tf%ld, lmax, 'factors')
+		call z_HTLU_dist_stats(tf%ld, memd, memt, memx, rk, nd, nt)
+		if (ptree%MyID == Main_ID) then
+			if (quant%tensor_inv == 1) then
+				write (*, '(A,F12.3,A,Es10.2,A)') ' tensor LU: inverse time:', stats_f%Time_Factor, ' s (tol_rand', option%tol_rand, ')'
+			else
+				write (*, '(A,F12.3,A,Es10.2,A)') ' tensor LU factorization time:', stats_f%Time_Factor, ' s (tol_rand', option%tol_rand, ')'
+			endif
+			write (*, '(A,F12.3,A,F12.3,A,F12.3,A,F12.3,A,F12.3,A,F12.3,A)') ' tensor LU memory:', memt, ' MB Tucker +', memd, ' MB dense =', &
+				memt + memd, ' MB (forward copy', memt0 + memd0, ' MB); per process at most', memx, ' MB (forward copy', memx0, ' MB)'
+			write (*, '(A,64I5)') ' tensor LU max Tucker rank per level, forward:', rk0(0:lmax)
+			write (*, '(A,64I5)') ' tensor LU max Tucker rank per level, factors:', rk(0:lmax)
 		endif
-		write (*, '(A,F12.3,A,F12.3,A,F12.3,A,F12.3,A)') ' tensor LU memory:', memt, ' MB Tucker +', memd, ' MB dense =', memt + memd, &
-			' MB (forward copy', memt0 + memd0, ' MB)'
-		write (*, '(A,64I5)') ' tensor LU max Tucker rank per level, forward:', rk0(0:lmax)
-		write (*, '(A,64I5)') ' tensor LU max Tucker rank per level, factors:', rk(0:lmax)
-		deallocate (xr, x, y, y2)
+		deallocate (xr, x, y, y2, xf, yf)
 		call z_delete_Hstat(stats_f)
 	end subroutine tensor_factor_CHEB
+
+	!**** Vout = the block LU solve or the inverse of the tensor forest applied to Vin (local vectors of the forest layout; collective)
+	subroutine tensor_lu_apply_CHEB(tf, nvec, Vin, Vout)
+		implicit none
+		type(tforest_CHEB):: tf
+		integer nvec
+		complex(kind=8) Vin(:, :), Vout(:, :)
+		complex(kind=8), allocatable:: xf(:, :), yf(:, :)
+		allocate (xf(tf%ld%nt*tf%nface, nvec), yf(tf%ld%nt*tf%nface, nvec))
+		call z_HTLU_dist_l2g(tf%ld, Vin(:, 1:nvec), xf)
+		if (tf%ld%inverse == 1) then
+			call z_HTLU_dist_mult(tf%ld, 'N', xf, yf)
+		else
+			yf = xf
+			call z_HTLU_dist_solve(tf%ld, yf)
+		endif
+		call z_HTLU_dist_g2l(tf%ld, yf, Vout(:, 1:nvec))
+		deallocate (xf, yf)
+	end subroutine tensor_lu_apply_CHEB
 
 	!**** ButterflyPACK's HMatVec interface: the block LU solve or the inverse of the tensor forest as the preconditioner
 	subroutine tensor_lu_precon_CHEB(trans, M, N, num_vect, Vin, Vout, ker)
@@ -2243,12 +2259,7 @@ contains
 		type(z_kernelquant):: ker
 		select TYPE (tf => ker%QuantApp)
 		type is (tforest_CHEB)
-			if (tf%inverse == 1) then
-				call z_HTLU_forest_mult(tf%nface, tf%lu, tf%nloc, Vin(1:M, 1:num_vect), Vout(1:M, 1:num_vect))
-			else
-				Vout(1:M, 1:num_vect) = Vin(1:M, 1:num_vect)
-				call z_HTLU_forest_solve(tf%nface, tf%lu, tf%nloc, Vout(1:M, 1:num_vect))
-			endif
+			call tensor_lu_apply_CHEB(tf, num_vect, Vin(1:M, 1:num_vect), Vout(1:M, 1:num_vect))
 		class default
 			write (*, *) "unexpected type"
 			stop
@@ -2268,9 +2279,9 @@ contains
 		type(z_proctree):: ptree
 		type(z_kernelquant):: kert
 		type(z_Hstat):: stats_sol
-		integer nl, ii, iter, restart, nmvp0
+		integer nl, ii, iter, restart, nmvp0, ierr
 		integer, allocatable:: gi(:)
-		real(kind=8) t1, t2, relres, tmvp0, tp0(19), tp1(19)
+		real(kind=8) t1, t2, relres, tmvp0, tp0(19), tp1(19), nrm(2), nrmg(2)
 		complex(kind=8), allocatable:: x(:, :), b(:, :), r(:, :)
 
 		nl = tf%nloc*tf%nface
@@ -2292,16 +2303,13 @@ contains
 		if (option%precon /= NOPRECON) then
 			! direct solve with the block LU or the inverse, and its residual with the forest product
 			t1 = MPI_Wtime()
-			if (tf%inverse == 1) then
-				call z_HTLU_forest_mult(tf%nface, tf%lu, tf%nloc, b, x)
-			else
-				x = b
-				call z_HTLU_forest_solve(tf%nface, tf%lu, tf%nloc, x)
-			endif
+			call tensor_lu_apply_CHEB(tf, 1, b(1:nl, :), x(1:nl, :))
 			t2 = MPI_Wtime()
 			allocate (r(max(nl, 1), 1))
 			call tensor_mult_CHEB(tf, 1, x, r)
-			relres = sqrt(sum(abs(r(1:nl, 1) - b(1:nl, 1))**2)/sum(abs(b(1:nl, 1))**2))
+			nrm = (/sum(abs(r(1:nl, 1) - b(1:nl, 1))**2), sum(abs(b(1:nl, 1))**2)/)
+			call MPI_ALLREDUCE(nrm, nrmg, 2, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+			relres = sqrt(nrmg(1)/nrmg(2))
 			deallocate (r)
 			if (ptree%MyID == Main_ID) write (*, '(A,F12.3,A,Es12.4)') ' tensor LU direct solve time:', t2 - t1, ' s   relative residual (forest product):', relres
 			if (option%precon == DIRECT) then
@@ -2348,14 +2356,7 @@ contains
 				call z_delete_Hstat(tf%stats(p1, q1))
 			enddo
 		enddo
-		if (allocated(tf%lu)) then
-			do q1 = 1, tf%nface
-				do p1 = 1, tf%nface
-					call z_HTLU_delete(tf%lu(p1, q1))
-				enddo
-			enddo
-			deallocate (tf%lu)
-		endif
+		call z_HTLU_dist_delete(tf%ld)
 		deallocate (tf%bmat, tf%msh, tf%ker, tf%stats, tf%pair)
 		if (allocated(tf%gidx)) deallocate (tf%gidx)
 	end subroutine tensor_delete_CHEB
@@ -2383,10 +2384,10 @@ contains
 		call nearfield_report_CHEB(quant, ptree)
 		call tensor_forward_map_test_CHEB(tf, quant, ptree)
 		call tensor_mvp_check_CHEB(tf, quant, ptree)
-		if (option%precon /= NOPRECON .and. (option%lrlevel /= 0 .or. ptree%nproc /= 1)) then
-			! the factorization needs Tucker admissible blocks and one MPI process
-			if (ptree%MyID == Main_ID) write (*, '(A,I0,A,I0,A)') ' tensor forest: no factorization with --lrlevel ', option%lrlevel, ' on ', &
-				ptree%nproc, ' MPI process(es) (it needs --lrlevel 0 and one process); GMRES without preconditioner (precon = 2)'
+		if (option%precon /= NOPRECON .and. option%lrlevel /= 0) then
+			! the factorization needs Tucker admissible blocks
+			if (ptree%MyID == Main_ID) write (*, '(A,I0,A)') ' tensor forest: no factorization with --lrlevel ', option%lrlevel, &
+				' (it needs --lrlevel 0); GMRES without preconditioner (precon = 2)'
 			option%precon = NOPRECON
 		endif
 		if (option%precon /= NOPRECON .or. quant%tensor_dump == 1) call tensor_factor_CHEB(tf, quant, option, ptree)
