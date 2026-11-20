@@ -110,7 +110,7 @@ module Bplus_htensor_lu
    end type htlu_dist
 
    !>**** blocks above this size (rows) create OpenMP tasks for their children
-   integer, parameter :: htlu_task_rows = 1024
+   integer, parameter :: htlu_task_rows = 256
    !>**** products with at most this many multiply-adds use matmul instead of BLAS (whose per-call overhead dominates for the
    !>**** small Tucker factors and cores, and whose buffer allocation contends between threads)
    real(kind=8), parameter :: htlu_small_gemm = 32768d0
