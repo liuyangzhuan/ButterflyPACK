@@ -304,7 +304,8 @@ public:
             {
                 std::ostringstream oss;
                 oss << "H2 GPU heap exhausted: request " << size << " bytes (" << resident_kind_name(kind)
-                    << (resident ? ", resident" : ", transient") << "), in use " << used_ << " of "
+                    << (resident ? ", resident" : ", transient") << " from " << file << ":" << line
+                    << "), in use " << used_ << " of "
                     << capacity_ << " bytes (largest free block " << largest_free()
                     << "); use more ranks or a smaller problem per GPU";
                 // what holds it, the largest kinds first (a failure is the time to know)
@@ -1079,6 +1080,69 @@ inline void release_operator(const void* tree) {
     if (c.active == tree) c.active = nullptr;
 }
 
+// The kept F22 records of the live operator that holds the most of them go
+// to the host and their device blocks go back to the pool, WITHOUT evicting
+// the operator: everything else of its device data stays, so nothing has to
+// be rebuilt and no later call is disturbed.  `skip` is left alone (the
+// caller has already dealt with the operator being built, which owns the
+// allocation that is short).  Returns the bytes freed, 0 if there was
+// nothing to spill.
+//
+// Unlike an eviction this is safe whatever the operator's rank count, which
+// is why it does not carry evict_for_allocation's `nranks == 1` filter.  The
+// only reader of those records is partial_device_ready, and it (a) places a
+// host-resident record in its own upload, in blocks of up to 256 MB, exactly
+// as it does for records the factorization never kept, and (b) settles
+// whether the device path is taken at all with an MPI_Allreduce of `bad`
+// over the operator's comm.  So the ranks stay on one path however the spill
+// falls out between them -- the hazard recorded for a DIVERGENT EVICTION
+// (ranks releasing different operators, the first solve hanging) does not
+// reach a spill through this hook.
+//
+// Why it is needed at all: the reclaimer in level_eliminator.hpp reaches
+// `partial_device_store()`, the NO-ARG accessor, which is per-operator and
+// returns the ACTIVE operator's store.  On a tree of fronts that store is
+// the one being built and it has kept nothing yet, while the records sit in
+// operators built earlier that are still live.  At NSTX order 3 on 128 ranks
+// that was 4.32 GB spillable on a 5-rank operator against a front holding
+// 1.15 GB with nothing spillable, and a 0.50 GB request threw with the pool
+// 2.26 GB short.
+inline size_t spill_other_operators(const void* skip) {
+    OperatorContext& c = operator_context();
+    static bool busy = false;   // (partial_records_to_host resizes host vectors; never re-enter)
+    if (busy || c.evicting) return 0;
+    std::vector<std::pair<size_t, const void*>> candidates;
+    for (const auto& [t, use] : c.last_use) {
+        // Never the operator being built: its kept blocks can have background
+        // copies in flight into them (f22_inflight_), and freeing one under a
+        // copy would corrupt the host record it is writing.  The operators
+        // built before it are finished, so theirs are quiet.
+        if (t == skip || t == c.build_tree) continue;
+        const size_t sp = operator_spillable(t);
+        if (sp != 0) candidates.push_back({sp, t});
+    }
+    std::sort(candidates.rbegin(), candidates.rend());   // the biggest holder first
+    busy = true;
+    size_t gave = 0;
+    for (const auto& [sp, t] : candidates) {
+        for (const auto& spill : c.spillers) spill(t);
+        // Progress is MEASURED, never assumed: a store may report spillable
+        // bytes and then free none of them (the solve store's kept factors
+        // do), and picking the same operator again on that report is an
+        // endless loop -- at NSTX order 3 it ran the reclaimer 16.7 million
+        // times over 0.03 GB that never moved (job 61630218).  An operator
+        // that gives nothing back is passed over for the next one, and a
+        // caller that sees 0 knows no spill is left to try.
+        const size_t after = operator_spillable(t);
+        if (after < sp) {
+            gave = sp - after;
+            break;   // real room: let the caller retry the allocation before spilling more
+        }
+    }
+    busy = false;
+    return gave;
+}
+
 // An allocation that does not fit, after the reclaimer, evicts the least
 // recently used operator that this rank holds alone and that no H2 call in
 // progress uses (not the current build's operator, not one in a call within
@@ -1094,6 +1158,25 @@ inline bool evict_for_allocation() {
     OperatorContext& c = operator_context();
     static bool busy = false;   // (a spill or a release that allocates does not evict again)
     if (busy || c.evicting) return false;
+    // First the cheap, always-safe reclaim: another live operator's kept F22
+    // records go to the host and that operator is otherwise untouched -- no
+    // eviction, nothing to rebuild, and safe at any rank count (see
+    // spill_other_operators).  It belongs HERE and not only in the level
+    // eliminator's reclaimer because that reclaimer is armed just inside one
+    // LevelEliminator run (set_reclaimer at its set-up, null at its finish)
+    // while this evictor is armed from the first build on and never cleared.
+    // The allocation that ran out at NSTX order 3 on 128 ranks -- 0.50 GB,
+    // "other", transient -- falls outside that window, so the reclaimer was
+    // never consulted and the 4.32 GB a 5-rank operator held stayed put
+    // (job 61629396: the spill reported 0 and the request threw unchanged).
+    if (const size_t gave = spill_other_operators(nullptr)) {
+        if (gave >= (size_t{64} << 20)) {   // (a reclaim runs in a loop: never print a line per call)
+            std::printf("GPU: another live operator's kept F22 records went to the host (%.2f GB freed) to make room\n",
+                        static_cast<double>(gave) / 1e9);
+            std::fflush(stdout);
+        }
+        return true;
+    }
     const void* oldest = nullptr;
     uint64_t oldest_use = 0;
     for (const auto& [t, use] : c.last_use) {

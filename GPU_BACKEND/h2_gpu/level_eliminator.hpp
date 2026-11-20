@@ -7886,6 +7886,22 @@ bool LevelEliminator<CoordType, DataType, KernelType>::reclaim_heap() {
             freed = true;
         }
     }
+    if (!freed && !spilling_records_) {
+        // Then the SAME records of the other live operators.  The step above
+        // reaches partial_device_store(), which is per-operator and gives the
+        // ACTIVE one: on a tree of fronts that is the front being built, and
+        // it has kept nothing yet, while the records sit in the fronts built
+        // before it that are still live.  Those are what hold the card.
+        spilling_records_ = true;
+        const size_t gave = spill_other_operators(operator_context().active);
+        spilling_records_ = false;
+        if (gave > 0) {
+            if (gave >= (size_t{64} << 20))   // (this runs in a reclaim loop: not a line per call)
+                std::fprintf(stderr, "H2 GPU heap short: another live operator's kept F22 records went to the host "
+                                     "(%.2f GB freed)\n", static_cast<double>(gave) / 1e9);
+            freed = true;
+        }
+    }
     eliminator_stats().reclaim_wait += std::chrono::duration<double>(std::chrono::steady_clock::now() - tw).count();
     return freed;
 }

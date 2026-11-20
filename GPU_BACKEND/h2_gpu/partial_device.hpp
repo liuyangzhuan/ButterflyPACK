@@ -185,7 +185,18 @@ inline PartialDeviceStore& partial_device_store() {
         });
         c.spillers.push_back([s](const void* tree) {
             auto it = s->find(tree);
-            if (it != s->end() && !it->second.kept_blocks.empty() && it->second.spill) it->second.spill();
+            if (it == s->end() || it->second.kept_blocks.empty() || !it->second.spill) return;
+            // The records go to the host AND their device blocks go back to
+            // the pool.  Spilling without freeing gives the heap nothing,
+            // which is what a reclaim through this hook is for; an eviction
+            // reaches the same state, its releasers then finding the vector
+            // already empty.
+            it->second.spill();  // partial_records_to_host(tree, true): local, no collective
+            DeviceHeap& heap = DeviceHeap::instance();
+            for (char* b : it->second.kept_blocks) heap.free(b);
+            it->second.kept_blocks.clear();
+            it->second.kept_bytes = 0;
+            it->second.keep_stopped = true;  // do not keep again: a tight heap must not thrash
         });
         c.spillable.push_back([s](const void* tree) -> size_t {
             auto it = s->find(tree);
