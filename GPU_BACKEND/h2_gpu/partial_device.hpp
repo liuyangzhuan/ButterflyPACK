@@ -187,6 +187,10 @@ inline PartialDeviceStore& partial_device_store() {
             auto it = s->find(tree);
             if (it != s->end() && !it->second.kept_blocks.empty() && it->second.spill) it->second.spill();
         });
+        c.spillable.push_back([s](const void* tree) -> size_t {
+            auto it = s->find(tree);
+            return it == s->end() || !it->second.spill ? 0 : it->second.kept_bytes;
+        });
         device_store_invalidators().push_back([s] {
             auto it = s->find(operator_context().active);
             if (it != s->end()) it->second.release();
@@ -879,11 +883,7 @@ public:
     // 2 GB, and no more than its largest free block, since a block is one
     // piece (at 800^3 on 64 ranks the heap had 25.5 GB free in 981 ranges,
     // the largest 1.97 GB, and a 1.98 GB copy of out failed)
-    size_t budget() const {
-        const size_t free = heap_.capacity() > heap_.used() ? heap_.capacity() - heap_.used() : 0;
-        return std::max<size_t>(size_t{64} << 20,
-                                std::min({size_t{2} << 30, free / 4, heap_.largest_free()}));
-    }
+    size_t budget() const { return heap_.chunk_budget(); }
 
 private:
     static constexpr size_t kStage = size_t{64} << 20;

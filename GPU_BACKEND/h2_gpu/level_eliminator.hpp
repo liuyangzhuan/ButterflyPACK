@@ -4800,8 +4800,11 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
     std::vector<std::vector<int>> g_rank(num_groups, std::vector<int>(plans.size(), 0));
     std::vector<std::vector<size_t>> g_poff(num_groups, std::vector<size_t>(plans.size(), 0));
     std::vector<std::vector<size_t>> g_woff(num_groups, std::vector<size_t>(plans.size(), 0));
+    std::vector<std::vector<size_t>> g_pchunk(num_groups, std::vector<size_t>(plans.size(), 0));
+    std::vector<std::vector<size_t>> g_wchunk(num_groups, std::vector<size_t>(plans.size(), 0));
     std::vector<std::vector<int>> g_at(num_groups, std::vector<int>(plans.size(), 0));
     size_t pw_elems = 0;  // the widest group's P and W, which every group reuses
+    size_t pw_slice = 0;  // its largest single slice: no chunk may be smaller
     for (size_t g = 0; g < num_groups; ++g) {
         size_t at = 0;
         for (size_t bi = 0; bi < plans.size(); ++bi) {
@@ -4812,13 +4815,15 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
             }
             g_rank[g][bi] = rank;
             if (rank == 0) continue;
-            g_poff[g][bi] = at;
-            at += static_cast<size_t>(rank) * static_cast<size_t>(p.n);
+            const size_t want = static_cast<size_t>(rank) * static_cast<size_t>(p.n);
+            pw_slice = std::max(pw_slice, want);
+            at += want;
         }
         for (size_t bi = 0; bi < plans.size(); ++bi) {
             if (g_rank[g][bi] == 0) continue;
-            g_woff[g][bi] = at;
-            at += static_cast<size_t>(plans[bi].d) * static_cast<size_t>(g_rank[g][bi]);
+            const size_t want = static_cast<size_t>(plans[bi].d) * static_cast<size_t>(g_rank[g][bi]);
+            pw_slice = std::max(pw_slice, want);
+            at += want;
         }
         pw_elems = std::max(pw_elems, at);
     }
@@ -4870,12 +4875,75 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
         }
         eliminator_stats().xr_rebuilt += static_cast<int64_t>(xrr_jobs.size());
     }
-    S* pw = nullptr;
-    if (pw_elems > 0) {
-        char* block = heap_.alloc(pw_elems * D, ResidentKind::SketchPW);
-        fill_blocks.push_back(block);
-        pw = reinterpret_cast<S*>(block);
+    // P and W go in chunks that fit the heap, for the reason the level CB
+    // arenas do (a618d89).  This is ONE allocation whose width is global --
+    // the sum over the level's boxes of (rank * n + d * rank), where rank sums
+    // the box's sources -- so it does not shrink when ranks are added, and on
+    // a 40 GB card at NSTX order 3 it is where the heap runs out: rank 1 of
+    // job 61474329 asked for 3.59 GB with 5.85 GB free, in 111 ranges whose
+    // largest was 3.34 GB.  A near miss on CONTIGUITY, not on room.
+    //
+    // Nothing downstream wants P and W contiguous: every consumer addresses
+    // its own (group, box) slice, P as rank_g x n with ld rank_g and W as
+    // d x rank_g with ld d.  So a slice has to stay whole within one chunk,
+    // but the slices need not follow each other.  Every group packs against
+    // the same chunk sizes, because the groups run one after another and reuse
+    // the same memory, and a chunk is then allocated at the most any one group
+    // puts in it, so splitting wastes no tail.
+    //
+    // One block while one block fits.  When it does not, the chunks are no
+    // bigger than they have to be -- a chunk holds the largest single slice
+    // whole and not much more -- because that is as placeable as a uniform
+    // size can be: against the free list above, three 1.46 GB chunks (what the
+    // budget alone would cut) strand the remainder where sixty-odd small ones
+    // fit.  The /64 floor keeps the count near sixty rather than thousands,
+    // since take() scans a size class and a heap carrying thousands of free
+    // ranges is slow to allocate in -- the comment on take() measures that.
+    size_t pw_cap = pw_elems;
+    if (pw_elems * D > heap_.chunk_budget()) {
+        pw_cap = std::min(std::max<size_t>(heap_.chunk_budget() / D, 1), (pw_elems + 63) / 64);
+        pw_cap = std::max(pw_cap, pw_slice);  // a slice is never split
     }
+    std::vector<size_t> pw_used;  // chunk -> the most any one group puts in it
+    for (size_t g = 0; g < num_groups && pw_elems > 0; ++g) {
+        size_t chunk = 0, at = 0;
+        // opens a new chunk when this slice will not fit in the current one
+        auto place = [&](size_t& off, size_t& ci, size_t want) {
+            if (want != 0 && at + want > pw_cap) {
+                ++chunk;
+                at = 0;
+            }
+            ci = chunk;
+            off = at;
+            at += want;
+            if (pw_used.size() <= chunk) pw_used.resize(chunk + 1, 0);
+            pw_used[chunk] = std::max(pw_used[chunk], at);
+        };
+        for (size_t bi = 0; bi < plans.size(); ++bi) {
+            if (g_rank[g][bi] == 0) continue;
+            place(g_poff[g][bi], g_pchunk[g][bi],
+                  static_cast<size_t>(g_rank[g][bi]) * static_cast<size_t>(plans[bi].n));
+        }
+        for (size_t bi = 0; bi < plans.size(); ++bi) {
+            if (g_rank[g][bi] == 0) continue;
+            place(g_woff[g][bi], g_wchunk[g][bi],
+                  static_cast<size_t>(plans[bi].d) * static_cast<size_t>(g_rank[g][bi]));
+        }
+    }
+    std::vector<S*> pw_chunk(pw_used.size(), nullptr);
+    for (size_t k = 0; k < pw_used.size(); ++k) {
+        char* block = heap_.alloc(std::max<size_t>(pw_used[k] * D, 256), ResidentKind::SketchPW);
+        fill_blocks.push_back(block);
+        pw_chunk[k] = reinterpret_cast<S*>(block);
+    }
+    if (pw_used.size() > 1)
+        std::printf("  [gpu] sketch P;W: %.2f GB in %zu chunks (chunk cap %.2f GB, largest free block %.2f GB)\n",
+                    static_cast<double>(pw_elems * D) / 1.0e9, pw_used.size(),
+                    static_cast<double>(pw_cap * D) / 1.0e9,
+                    static_cast<double>(heap_.largest_free()) / 1.0e9);
+    // a (group, box) slice of P and of W, wherever its chunk landed
+    auto pw_P = [&](size_t g, size_t bi) { return pw_chunk[g_pchunk[g][bi]] + g_poff[g][bi]; };
+    auto pw_W = [&](size_t g, size_t bi) { return pw_chunk[g_wchunk[g][bi]] + g_woff[g][bi]; };
     {
         for (Plan& p : plans) {
             p.Y = reinterpret_cast<S*>(d_y + p.off_y);
@@ -4917,8 +4985,8 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
                     xrr = xrr_win + it->second;
                 }
                 const int rank_g = g_rank[gi][bi];
-                S* Pg = pw + g_poff[gi][bi];
-                S* Wg = pw + g_woff[gi][bi];
+                S* Pg = pw_P(gi, bi);
+                S* Wg = pw_W(gi, bi);
                 const int off_g = g_at[gi][bi];  // this source's rows of the group's P
                 g_at[gi][bi] += r;
                 (src.p_trans ? p_t_by_group : p_by_group)[gi].entries.push_back(
@@ -4954,8 +5022,8 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
                     }
                     std::vector<VBatch<S>>& passes = fill_by_group[tm.g];
                     if (passes.size() <= pass) passes.resize(pass + 1);
-                    passes[pass].entries.push_back({pw + g_woff[tm.g][bi] + static_cast<size_t>(tm.off) * p.d,
-                                                    pw + g_poff[tm.g][bi] + tm.off, p.Y, p.d, p.n, tm.r, p.d,
+                    passes[pass].entries.push_back({pw_W(tm.g, bi) + static_cast<size_t>(tm.off) * p.d,
+                                                    pw_P(tm.g, bi) + tm.off, p.Y, p.d, p.n, tm.r, p.d,
                                                     g_rank[tm.g][bi], p.ldy});
                     ++pass;
                 }
@@ -4966,7 +5034,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
                     const int rank_g = g_rank[g][bi];
                     if (rank_g == 0) continue;
                     if (fill_by_group[g].empty()) fill_by_group[g].resize(1);
-                    fill_by_group[g][0].entries.push_back({pw + g_woff[g][bi], pw + g_poff[g][bi], p.Y,
+                    fill_by_group[g][0].entries.push_back({pw_W(g, bi), pw_P(g, bi), p.Y,
                                                            p.d, p.n, rank_g, p.d, rank_g, p.ldy});
                 }
             }

@@ -828,6 +828,13 @@ inline DeviceSolveStore& device_solve_store() {
             auto it = s->find(tree);
             if (it != s->end() && it->second.spill && !it->second.kept.empty()) it->second.spill(it->second);
         });
+        c.spillable.push_back([s](const void* tree) -> size_t {
+            auto it = s->find(tree);
+            if (it == s->end() || !it->second.spill) return 0;
+            double bytes = 0;
+            for (const auto& [level, kl] : it->second.kept) bytes += kl.bytes;
+            return static_cast<size_t>(bytes);
+        });
         return s;
     }();
     return (*stores)[operator_context().active];

@@ -131,6 +131,14 @@ inline const char* resident_kind_name(ResidentKind k) {
     }
 }
 
+// What each live H2 operator holds on the device, the largest first (defined
+// below, with the operator context).  An exhausted heap names the kinds and
+// the call sites but not WHICH operator's data they are, nor whether that
+// operator can give it up here: evict_for_allocation only takes one this rank
+// holds ALONE, because evicting one of several ranks has to be collective.
+// Those two cases need different fixes, so the message has to tell them apart.
+std::string operator_hold_report();
+
 class DeviceHeap {
 public:
     static DeviceHeap& instance() {
@@ -338,6 +346,7 @@ public:
                         }
                     }
                 }
+                oss << operator_hold_report();
                 throw std::runtime_error(oss.str());
             }
         }
@@ -465,6 +474,16 @@ public:
 
     size_t used() const { return used_; }
     size_t largest_free() const { return by_size_.empty() ? 0 : by_size_.rbegin()->first; }
+    // How big a chunk to cut when one request has to be split: never more than
+    // the largest free range (a bigger chunk would not fit), never more than a
+    // quarter of what is free (so the split leaves room for everything else
+    // the phase allocates), never more than 2 GB, never less than 64 MB.  The
+    // rule was validated for the partial factorization's CB arenas and lives
+    // here so the callers cannot drift apart from each other.
+    size_t chunk_budget() const {
+        const size_t free = capacity_ > used_ ? capacity_ - used_ : 0;
+        return std::max<size_t>(size_t{64} << 20, std::min({size_t{2} << 30, free / 4, largest_free()}));
+    }
     size_t peak() const { return peak_; }
     // The high-water since the current operator build began (begin_operator_build;
     // the levels' reset_peak leaves it alone).
@@ -948,6 +967,9 @@ struct OperatorContext {
     std::vector<std::function<void(const void*)>> releasers;
     std::vector<std::function<size_t(const void*)>> holders;
     std::vector<std::function<void(const void*)>> spillers;
+    // of an operator's held bytes, the part a spill would give back (its
+    // device-only data, which gets a host copy): what spilling could win
+    std::vector<std::function<size_t(const void*)>> spillable;
     // what a build takes beyond the data held when it began (the largest so
     // far), and what was held when the current one began
     size_t build_need = 0, build_base = 0;
@@ -999,6 +1021,40 @@ inline size_t operator_bytes(const void* tree) {
     size_t bytes = 0;
     for (const auto& held : operator_context().holders) bytes += held(tree);
     return bytes;
+}
+
+// Bytes of operator `tree` that a spill would give back.
+inline size_t operator_spillable(const void* tree) {
+    size_t bytes = 0;
+    for (const auto& s : operator_context().spillable) bytes += s(tree);
+    return bytes;
+}
+
+inline std::string operator_hold_report() {
+    OperatorContext& c = operator_context();
+    std::vector<std::pair<size_t, const void*>> live;
+    for (const auto& [t, use] : c.last_use) {
+        const size_t b = operator_bytes(t);
+        if (b > (size_t{64} << 20)) live.push_back({b, t});
+    }
+    if (live.empty()) return std::string();
+    std::sort(live.rbegin(), live.rend());
+    std::ostringstream oss;
+    oss << "; operators: ";
+    for (size_t i = 0; i < live.size() && i < 6; ++i) {
+        const void* t = live[i].second;
+        const auto r = c.nranks.find(t);
+        const int nr = r == c.nranks.end() ? -1 : r->second;
+        const size_t sp = operator_spillable(t);
+        oss << (i != 0 ? ", " : "") << t << " " << std::fixed << std::setprecision(2)
+            << static_cast<double>(live[i].first) / 1e9 << " GB";
+        if (sp != 0) oss << " (" << static_cast<double>(sp) / 1e9 << " GB spillable)";
+        oss << " on " << nr << (nr == 1 ? " rank" : " ranks");
+        if (t == c.build_tree) oss << " BUILDING";
+        if (std::find(c.calls.begin(), c.calls.end(), t) != c.calls.end()) oss << " IN-CALL";
+        if (t == c.active) oss << " ACTIVE";
+    }
+    return oss.str();
 }
 
 // Operator `tree` gives up its device data to make room (an eviction, on
