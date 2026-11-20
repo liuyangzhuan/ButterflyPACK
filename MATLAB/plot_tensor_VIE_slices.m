@@ -1,4 +1,4 @@
-function plot_tensor_VIE_slices(sca_files, inc_files, labels, outprefix)
+function plot_tensor_VIE_slices(sca_files, inc_files, labels, outprefix, slowness_file, s_back)
 % Plots of the tensor VIE solution from the three centre slices the driver writes (*_tensor_slices.bin, for
 % grids too large for the full tensor file), for one or several runs of the same problem:
 %  - per run, the three centre planes of log|Re(-F_tot)| in 3D (as figures 17/18 of plot_tensor_VIE_field.m,
@@ -7,6 +7,8 @@ function plot_tensor_VIE_slices(sca_files, inc_files, labels, outprefix)
 %    |F_sca - F_sca(last run)| on that plane with its relative difference (the last run is the reference).
 % sca_files, inc_files: cell arrays of scattered/incident slice files (one incident file is used for all runs
 % when only one is given); labels: cell array of titles; outprefix: prefix of the PNG files written.
+% slowness_file (optional, ivelo 11): the slowness model; the scatterer's outline (slowness different from s_back,
+% default 2) is drawn on the z planes.  plot_tensor_VIE_slowness.m plots the model itself.
 % Example (640^3, the tensor compressed to 1e-2 and to 1e-3):
 %   plot_tensor_VIE_slices({'sca_tc2.bin','sca_tc3.bin'}, {'inc_tc2.bin','inc_tc3.bin'}, ...
 %                          {'tol\_comp 1e-2','tol\_comp 1e-3'}, 'n640')
@@ -42,14 +44,23 @@ for r = 1:nr
   close(gcf);
 end
 
+x = (0:S{1}.n(1)-1)*h;  y = (0:S{1}.n(2)-1)*h;  zc = (S{1}.idx(3)-1)*h;
+% the scatterer's outline on the z plane, from the slowness model (memory-mapped: only that plane is read)
+mask = [];
+if nargin >= 5 && ~isempty(slowness_file)
+  if nargin < 6, s_back = 2.0; end
+  m = memmapfile(slowness_file, 'Format', {'double', double(S{1}.n(:))', 's'});
+  mask = double(abs(m.Data.s(:,:,S{1}.idx(3)) - s_back) > 1e-12);
+end
+outline = @() ~isempty(mask) && plot_outline(x, y, mask);
 rows = 1 + (nr > 1);
 figure('visible','off','position',[0 0 560*nr 520*rows]);
-x = (0:S{1}.n(1)-1)*h;  y = (0:S{1}.n(2)-1)*h;  zc = (S{1}.idx(3)-1)*h;
 ref = S{nr}.z;
 clim = max(abs(real(ref(:))));
 for r = 1:nr
   subplot(rows,nr,r);
   imagesc(x,y,real(S{r}.z).'); axis xy equal tight; colormap(gca,seismic); caxis([-clim clim]); colorbar;
+  outline();
   title({labels{r}, sprintf('Re(F_{sca}), z = %.3g', zc)},'FontSize',12); xlabel('x'); ylabel('y');
   if nr > 1 && r == nr
     subplot(rows,nr,nr+r); axis off;
@@ -57,12 +68,19 @@ for r = 1:nr
   elseif nr > 1
     subplot(rows,nr,nr+r);
     imagesc(x,y,abs(S{r}.z - ref).'); axis xy equal tight; colormap(gca,parula); caxis([0 clim]); colorbar;
+    outline();
     title({'|F_{sca} - F_{sca}(last)|', sprintf('relative %.3f on the plane', norm(S{r}.z(:)-ref(:))/norm(ref(:)))},'FontSize',12);
     xlabel('x'); ylabel('y');
   end
 end
 saveas(gcf, sprintf('%s_zslice_compare.png', outprefix));
 close(gcf);
+end
+
+function done = plot_outline(x, y, mask)
+% the scatterer's outline (mask 0/1 on the plane) in black over the current image
+hold on; contour(x, y, mask.', [0.5 0.5], 'k', 'LineWidth', 0.8); hold off;
+done = true;
 end
 
 function plot_planes(S, fn)

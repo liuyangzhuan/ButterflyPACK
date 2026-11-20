@@ -60,8 +60,11 @@ def main():
     parser.add_argument('--slowness_min', type=float, default=1.0, help="Minimum slowness value. Default is 1.0.")
     parser.add_argument('--slowness_max', type=float, default=3.0, help="Maximum slowness value. Default is 3.0.")
     parser.add_argument('--slowness_back', type=float, default=2.0, help="Background slowness value. Default is 2.0.")
+    parser.add_argument('--seed', type=int, default=None, help="Seed of the random shapes and values, for a reproducible model (the file name does not record it). Default: unseeded.")
 
     args = parser.parse_args()
+    if args.seed is not None:
+        np.random.seed(args.seed)
 
     slowness_map_tot = generate_shapes(tuple(args.shape_background),tuple(args.shape), tuple(args.offset), args.num_shapes, args.slowness_min, args.slowness_max, args.slowness_back)
 

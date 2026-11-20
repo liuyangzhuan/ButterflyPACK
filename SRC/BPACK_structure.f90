@@ -1004,7 +1004,7 @@ end function distance_geo
       type(Hoption)::option
       type(Hstat)::stats
       type(Bmatrix)::bmat
-      integer Maxlevel, Maxgrp
+      integer Maxlevel, Maxgrp, Maxlevel_init
       real(kind=8) tmp
       type(mesh)::msh(Ndim)
       type(kernelquant)::ker
@@ -1040,6 +1040,7 @@ end function distance_geo
             enddo
          endif
       else
+         Maxlevel_init = Maxlevel
          tmp = floor_safe(Maxlevel/2d0)*Ndim
          if (tmp+1 < ptree%nlevel) then  !!!! floor_safe(Maxlevel/2d0)*Ndim is the number of parallelism at the middle level of a tensor butterfly of bmat
             if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'warning: too many processes for paralleling leaf boxes, keep refining the tree ...'
@@ -1047,6 +1048,14 @@ end function distance_geo
             do i=1,nlevel_more,Ndim
                Maxlevel = Maxlevel + 2 - mod(Maxlevel,2)
             enddo
+         endif
+         ! HTENSOR: the levels from LRlevel down hold only zero-level butterflies (Tucker-ID) and dense blocks, which are
+         ! never split across processes, so refining past LRlevel+1 cannot make a butterfly distributable; it only
+         ! shrinks the leaves (1280^3 on 4096 processes got leaf boxes of 5 points). A butterfly that still cannot be
+         ! distributed stops in GetLocalBlockRange_MD.
+         if (option%format == HTENSOR .and. Maxlevel > max(Maxlevel_init, option%LRlevel + 1)) then
+            Maxlevel = max(Maxlevel_init, option%LRlevel + 1)
+            if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'HTENSOR: tree refinement capped at LRlevel+1, Maxlevel', Maxlevel
          endif
       endif
 
