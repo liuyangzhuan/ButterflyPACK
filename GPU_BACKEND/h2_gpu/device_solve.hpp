@@ -98,6 +98,39 @@ inline bool& device_solve_suspended() {
     return suspended;
 }
 
+// Suspends the device solve for a scope, and restores the previous value
+// HOWEVER the scope is left.  The bare assignment pairs this replaces were a
+// hang waiting to happen: the flag belongs to the PROCESS, not to an operator,
+// and partial_device_ready reads it above a collective MPI_Allreduce.  A throw
+// out of the suspended region on ONE rank leaves the flag stuck true there, so
+// every later call returns early on that rank while its peers enter the
+// Allreduce and wait for a rank that will never arrive -- a silent hang, not a
+// wrong answer, and reached through neither a wrong predicate nor a divergent
+// loop bound.  Confined to BPACK_CHECK=solve, since all three suspending sites
+// sit under device_solve_check(), and whether those throws are caught and
+// execution continues is NOT established -- a guard is cheaper than the answer.
+//
+// It restores `previous_` rather than forcing false, and that is NOT fixing a
+// live nesting bug -- nesting is unreachable by construction.  The inner
+// suspending site lives inside partial_schur_multiply itself, behind
+// `if (device && device_solve_check())`, and that `device` came from
+// partial_device_ready earlier in the SAME call, which returns false at its
+// first predicate exactly when this flag is already set.  So an inner region
+// cannot arm itself while an outer one holds it.  Restoring is insurance for
+// the case where that predicate is ever weakened: it is load-bearing for this
+// guard's correctness the way the MPI_MIN on `cols` is load-bearing for
+// partial_schur_multiply's trip count, and neither says so where it is read.
+class SuspendDeviceSolve {
+public:
+    SuspendDeviceSolve() : previous_(device_solve_suspended()) { device_solve_suspended() = true; }
+    ~SuspendDeviceSolve() { device_solve_suspended() = previous_; }
+    SuspendDeviceSolve(const SuspendDeviceSolve&) = delete;
+    SuspendDeviceSolve& operator=(const SuspendDeviceSolve&) = delete;
+
+private:
+    const bool previous_;
+};
+
 // One level of the device solve (on this rank): factors, and the launch
 // and message tables of its sweeps (built once, at the first solve).
 struct DeviceSolveLevel {
@@ -4150,9 +4183,10 @@ bool run_device_solve(ParallelTree<CoordType, DataType>* tree,
         const int leaf = tree->num_levels - 1;
         std::vector<std::vector<SolveDataRequest<CoordType, DataType>>> host_data(
             static_cast<size_t>(tree->num_levels));
-        device_solve_suspended() = true;
-        host(host_data);
-        device_solve_suspended() = false;
+        {
+            SuspendDeviceSolve suspend;   // restored even if host() throws
+            host(host_data);
+        }
         double sums[2] = {0.0, 0.0};
         if (tree->levels[static_cast<size_t>(leaf)].is_process_active) {
             for (size_t b = 0; b < solve_data[static_cast<size_t>(leaf)].size(); ++b) {

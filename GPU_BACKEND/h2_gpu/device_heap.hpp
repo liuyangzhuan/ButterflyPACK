@@ -138,6 +138,7 @@ inline const char* resident_kind_name(ResidentKind k) {
 // holds ALONE, because evicting one of several ranks has to be collective.
 // Those two cases need different fixes, so the message has to tell them apart.
 std::string operator_hold_report();
+size_t operator_prepared(const void* tree);
 
 class DeviceHeap {
 public:
@@ -971,6 +972,13 @@ struct OperatorContext {
     // of an operator's held bytes, the part a spill would give back (its
     // device-only data, which gets a host copy): what spilling could win
     std::vector<std::function<size_t(const void*)>> spillable;
+    // the prepared plan of an operator (partial_device's uploaded record
+    // blocks and root block): its bytes, and how to give them back.  Unlike
+    // the kept records this is a pure cache of host data -- releasing it
+    // costs no copy now and one re-upload later -- but it is also what the
+    // ranks must agree about, see partial_device_ready's redo vote.
+    std::vector<std::function<size_t(const void*)>> prepared;
+    std::vector<std::function<void(const void*)>> unpreparers;
     // what a build takes beyond the data held when it began (the largest so
     // far), and what was held when the current one began
     size_t build_need = 0, build_base = 0;
@@ -1050,6 +1058,9 @@ inline std::string operator_hold_report() {
         oss << (i != 0 ? ", " : "") << t << " " << std::fixed << std::setprecision(2)
             << static_cast<double>(live[i].first) / 1e9 << " GB";
         if (sp != 0) oss << " (" << static_cast<double>(sp) / 1e9 << " GB spillable)";
+        // the prepared CB plan: a cache of host data, so releasable on sight
+        const size_t pb = operator_prepared(t);
+        if (pb != 0) oss << " (" << static_cast<double>(pb) / 1e9 << " GB cached plan)";
         oss << " on " << nr << (nr == 1 ? " rank" : " ranks");
         if (t == c.build_tree) oss << " BUILDING";
         if (std::find(c.calls.begin(), c.calls.end(), t) != c.calls.end()) oss << " IN-CALL";
@@ -1143,6 +1154,57 @@ inline size_t spill_other_operators(const void* skip) {
     return gave;
 }
 
+// The bytes of operator `tree`'s prepared plan that a release would return.
+inline size_t operator_prepared(const void* tree) {
+    size_t bytes = 0;
+    for (const auto& p : operator_context().prepared) bytes += p(tree);
+    return bytes;
+}
+
+// The prepared plan of a live operator that NOBODY IS USING goes back to the
+// pool: it is a cache of records that are still on the host, so the release
+// costs no copy and the next partial_device_ready rebuilds it by uploading
+// them again.  Cheaper than a spill, which pays a download now and an upload
+// later, so the ladder tries this first.  Returns the bytes freed.
+//
+// Three operators are never touched, because their store is or may be in use
+// and release_prepared would free blocks under a running product: the active
+// one, the one being built, and anything inside an H2 call (OperatorCall
+// keeps `calls` for exactly this).  Everything else is a finished front whose
+// parent has not asked for it yet.
+//
+// This is safe ONLY because partial_device_ready agrees collectively on
+// whether the plan is rebuilt.  Releasing clears `decided`, which is per
+// rank, and memory pressure is per rank, so without that vote the rank that
+// released would wait alone at the Allreduce of `bad` while its peers took
+// the early return -- a silent hang.  Do not call this from anywhere that
+// bypasses that vote.
+inline size_t release_prepared_operators(const void* skip) {
+    OperatorContext& c = operator_context();
+    static bool busy = false;
+    if (busy || c.evicting) return 0;
+    std::vector<std::pair<size_t, const void*>> candidates;
+    for (const auto& [t, use] : c.last_use) {
+        if (t == skip || t == c.build_tree || t == c.active) continue;
+        if (std::find(c.calls.begin(), c.calls.end(), t) != c.calls.end()) continue;
+        const size_t b = operator_prepared(t);
+        if (b != 0) candidates.push_back({b, t});
+    }
+    std::sort(candidates.rbegin(), candidates.rend());   // the biggest cache first
+    busy = true;
+    size_t gave = 0;
+    for (const auto& [b, t] : candidates) {
+        for (const auto& un : c.unpreparers) un(t);
+        const size_t after = operator_prepared(t);   // measured, never assumed
+        if (after < b) {
+            gave = b - after;
+            break;   // let the caller retry the allocation before releasing more
+        }
+    }
+    busy = false;
+    return gave;
+}
+
 // An allocation that does not fit, after the reclaimer, evicts the least
 // recently used operator that this rank holds alone and that no H2 call in
 // progress uses (not the current build's operator, not one in a call within
@@ -1169,6 +1231,16 @@ inline bool evict_for_allocation() {
     // "other", transient -- falls outside that window, so the reclaimer was
     // never consulted and the 4.32 GB a 5-rank operator held stayed put
     // (job 61629396: the spill reported 0 and the request threw unchanged).
+    // Cheapest first: another operator's prepared plan is a cache of host
+    // data, so giving it back costs no copy at all.
+    if (const size_t gave = release_prepared_operators(nullptr)) {
+        if (gave >= (size_t{64} << 20)) {
+            std::printf("GPU: another live operator's prepared CB plan went back to the pool (%.2f GB freed); it "
+                        "uploads again when that operator is next used\n", static_cast<double>(gave) / 1e9);
+            std::fflush(stdout);
+        }
+        return true;
+    }
     if (const size_t gave = spill_other_operators(nullptr)) {
         if (gave >= (size_t{64} << 20)) {   // (a reclaim runs in a loop: never print a line per call)
             std::printf("GPU: another live operator's kept F22 records went to the host (%.2f GB freed) to make room\n",

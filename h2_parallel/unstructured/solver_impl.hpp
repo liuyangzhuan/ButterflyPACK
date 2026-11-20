@@ -991,10 +991,11 @@ void hierarchical_solve_unstructured(
                 check_data.clear();
                 check_data.resize(static_cast<size_t>(tree->num_levels));
             }
-            gpu::device_solve_suspended() = true;
-            hierarchical_solve_unstructured(tree, rhs, check_data, nrhs, -1, false, partial_mode, partial_x2,
-                                            partial_mode == 1 ? &host_out2 : nullptr);
-            gpu::device_solve_suspended() = false;
+            {
+                gpu::SuspendDeviceSolve suspend;   // restored even if the host solve throws
+                hierarchical_solve_unstructured(tree, rhs, check_data, nrhs, -1, false, partial_mode, partial_x2,
+                                                partial_mode == 1 ? &host_out2 : nullptr);
+            }
             double sums[2] = {0.0, 0.0};
             if (partial_mode == 1) {
                 for (size_t i = 0; i < host_out2.size(); ++i) {

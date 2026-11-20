@@ -202,6 +202,17 @@ inline PartialDeviceStore& partial_device_store() {
             auto it = s->find(tree);
             return it == s->end() || !it->second.spill ? 0 : it->second.kept_bytes;
         });
+        // The prepared plan -- the record blocks uploaded for the CB product
+        // and the root block -- is a CACHE of host data, so it can be given
+        // back and rebuilt by re-uploading.  Only a decided store has one.
+        c.prepared.push_back([s](const void* tree) -> size_t {
+            auto it = s->find(tree);
+            return it == s->end() || !it->second.decided ? 0 : it->second.bytes;
+        });
+        c.unpreparers.push_back([s](const void* tree) {
+            auto it = s->find(tree);
+            if (it != s->end()) it->second.release_prepared();
+        });
         device_store_invalidators().push_back([s] {
             auto it = s->find(operator_context().active);
             if (it != s->end()) it->second.release();
@@ -270,7 +281,49 @@ bool partial_device_ready(ParallelTree<CoordType, DataType>* tree, int verbosity
     activate_operator(tree);
     if (device_solve_suspended() || !color_gpu_enabled()) return false;
     PartialDeviceStore& st = partial_device_store();
-    if (st.decided && st.tree == tree) return st.usable;
+    // Whether the plan is rebuilt is agreed over the operator's ranks BEFORE
+    // any rank acts on its own answer.  A reclaim that gives a prepared store
+    // back to the pool (release_prepared_operators) is a LOCAL decision --
+    // one rank runs out of device memory where its peers have room, and it is
+    // discovered deep inside an allocation, nowhere near a synchronization
+    // point -- and it clears `decided` on that rank alone.  Returning on each
+    // rank's own flag would then send the rank that lost its store down to
+    // the MPI_Allreduce of `bad` below while its peers returned from here,
+    // and that Allreduce would never complete: not a wrong answer but a
+    // silent hang, the factorization finishing and no Krylov line ever
+    // appearing.  So the flag is reduced first -- if ANY rank must rebuild,
+    // every rank does, re-uploading on the ranks that had room to spare.  The
+    // same agreement 658bcee put at the top of prepare_device_solve, and the
+    // reason a spill needs none: a spill changes a quantity this function
+    // reduces anyway, while a release changes whether a rank arrives at all.
+    // What this Allreduce depends on, none of it guaranteed here.  Cited by
+    // SYMBOL, not by line: these files have drifted between working copies.
+    //
+    //  1. Every caller is collective over tree->comm.  H2_partial_extract
+    //     reduces its `device` with MPI_MAX before calling.  And
+    //     partial_schur_multiply RECURSES, ncol/max_columns times, so the
+    //     NUMBER of calls must match across ranks too -- which it does only
+    //     because of the MPI_MIN on `cols` below.  That reduction is
+    //     LOAD-BEARING, not belt-and-braces: `cols` comes from
+    //     heap.capacity() - heap.used(), and heap occupancy differs per rank,
+    //     so without the MIN the ranks would make different numbers of
+    //     collective calls with no predicate anywhere being wrong.
+    //  2. The predicates above are rank-uniform.  color_gpu_enabled() is
+    //     configuration.  device_solve_suspended() is a flag of the PROCESS,
+    //     not of an operator, and is uniform only because every site that
+    //     sets it does so through SuspendDeviceSolve, whose scope every rank
+    //     enters and leaves together under the same BPACK_CHECK=solve; the
+    //     bare assignment pairs it replaced could be skipped by a throw on
+    //     one rank and left the flag stuck there.
+    //
+    // So: an early return added above this point on anything a single rank
+    // can decide for itself, or any change to how many times a caller calls
+    // this function, leaves a rank out of this Allreduce and hangs the rest.
+    int redo = st.decided && st.tree == tree ? 0 : 1;
+    int nranks = 1;
+    MPI_Comm_size(tree->comm, &nranks);
+    if (nranks > 1) MPI_Allreduce(MPI_IN_PLACE, &redo, 1, MPI_INT, MPI_MAX, tree->comm);
+    if (redo == 0) return st.usable;
     st.release_prepared();
     st.tree = tree;
     st.decided = true;

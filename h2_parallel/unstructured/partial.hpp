@@ -6242,9 +6242,10 @@ void partial_schur_multiply(fmm::ParallelTree<CoordType, DataType>& tree, const 
     if constexpr (fmm::gpu::gpu_data_type<DataType>) {
         if (device && fmm::gpu::device_solve_check()) {
             std::vector<DataType> yh(static_cast<size_t>(n22 * ncol));
-            fmm::gpu::device_solve_suspended() = true;
-            partial_schur_multiply(tree, x2, yh.data(), ncol);
-            fmm::gpu::device_solve_suspended() = false;
+            {
+                fmm::gpu::SuspendDeviceSolve suspend;   // restored even if the multiply throws
+                partial_schur_multiply(tree, x2, yh.data(), ncol);
+            }
             double sums[2] = {0.0, 0.0};
             for (size_t i = 0; i < yh.size(); ++i) {
                 sums[0] += std::norm(y2[i] - yh[i]);
