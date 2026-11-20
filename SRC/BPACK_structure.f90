@@ -2196,8 +2196,7 @@ end function distance_geo
                         pgno = GetMshGroup_Pgno(ptree, Ndim, row_group_child(bb,:))
                         row_pgno(bb) = pgno
                         level = GetTreelevel(row_group_child(bb,1)) - 1
-                        row_further(bb) = 0
-                        if (level >= option%LRlevel .and. ptree%pgrp(pgno)%nproc>1) row_further(bb) = 1
+                        row_further(bb) = HMAT_MD_row_further(Ndim, row_group_child(bb,:), level, option, ptree)
                         group_m = row_group_child(bb,:) - groupm_start_global + 1
                         call MultiIndexToSingleIndex(Ndim,dims2, row_gg2(bb), group_m)
                      enddo
@@ -2367,8 +2366,7 @@ end function distance_geo
                         pgno = GetMshGroup_Pgno(ptree, Ndim, row_group_child(bb,:))
                         row_pgno(bb) = pgno
                         level = GetTreelevel(row_group_child(bb,1)) - 1
-                        row_further(bb) = 0
-                        if (level >= option%LRlevel .and. ptree%pgrp(pgno)%nproc>1) row_further(bb) = 1
+                        row_further(bb) = HMAT_MD_row_further(Ndim, row_group_child(bb,:), level, option, ptree)
                      enddo
                      do nn=1,nlist_MD(ll)%list(gg)%nn
                         group_n1 = nlist_MD(ll)%list(gg)%nlist(nn,:)
@@ -2476,8 +2474,7 @@ end function distance_geo
                         pgno = GetMshGroup_Pgno(ptree, Ndim, row_group_child(bb,:))
                         row_pgno(bb) = pgno
                         level = GetTreelevel(row_group_child(bb,1)) - 1
-                        row_further(bb) = 0
-                        if (level >= option%LRlevel .and. ptree%pgrp(pgno)%nproc>1) row_further(bb) = 1
+                        row_further(bb) = HMAT_MD_row_further(Ndim, row_group_child(bb,:), level, option, ptree)
                         group_m = row_group_child(bb,:) - groupm_start_global + 1
                         call MultiIndexToSingleIndex(Ndim,dims2, row_gg2(bb), group_m)
                      enddo
@@ -2538,8 +2535,7 @@ end function distance_geo
                         pgno = GetMshGroup_Pgno(ptree, Ndim, row_group_child(bb,:))
                         row_pgno(bb) = pgno
                         level = GetTreelevel(row_group_child(bb,1)) - 1
-                        row_further(bb) = 0
-                        if (level >= option%LRlevel .and. ptree%pgrp(pgno)%nproc>1) row_further(bb) = 1
+                        row_further(bb) = HMAT_MD_row_further(Ndim, row_group_child(bb,:), level, option, ptree)
                         group_m = row_group_child(bb,:) - groupm_start_global + 1
                         call MultiIndexToSingleIndex(Ndim,dims2, row_gg2(bb), group_m)
                      enddo
@@ -2711,6 +2707,29 @@ end function distance_geo
       onelevel%len = 0
 
    end subroutine HMAT_MD_clear_nil_level
+
+
+   !>**** 1 if the row group (multi-index group, at level level of the per-dimension trees) of a block is split further whatever
+   ! its admissibility: at or below option%LRlevel, the group is shared by several processes or lies fewer than option%hextralevel
+   ! levels below the coarsest level at which its group lies on one process (as for HMAT, hextralevel adds levels to the
+   ! partition the MPI count forces)
+   integer function HMAT_MD_row_further(Ndim, group, level, option, ptree)
+      implicit none
+      integer Ndim, group(Ndim), level, dim_i, anc(Ndim)
+      type(Hoption)::option
+      type(proctree)::ptree
+
+      HMAT_MD_row_further = 0
+      if (level < option%LRlevel) return
+      if (level < option%hextralevel) then
+         HMAT_MD_row_further = 1
+         return
+      endif
+      do dim_i = 1, Ndim
+         anc(dim_i) = group(dim_i)/2**option%hextralevel ! ancestor hextralevel levels up
+      enddo
+      if (ptree%pgrp(GetMshGroup_Pgno(ptree, Ndim, anc))%nproc > 1) HMAT_MD_row_further = 1
+   end function HMAT_MD_row_further
 
 
    subroutine HMAT_MD_init_block(Ndim, block, group_m, group_n, Maxlevel, near_far, option, msh, ptree, stats)

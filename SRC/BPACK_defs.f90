@@ -815,7 +815,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer:: use_qtt  !< 1: use qtt for the dense blocks 0: do not use qtt
 
         ! options for matrix construction
-        integer Hextralevel !< HMAT: extra levels for top partitioning of the H matrix based on MPI counts. BLR: Maxlevel-hextralevel is the level for defining B-LR/B-BF blocks
+        integer Hextralevel !< HMAT and HMAT_MD (H-TENSOR): extra levels for top partitioning of the H matrix based on MPI counts. BLR: Maxlevel-hextralevel is the level for defining B-LR/B-BF blocks
         integer ntree !< HMAT/BLR: number of trees in the user-provided cluster tree (the tree argument of BPACK_construction_Init holds ntree complete trees of equal depth, concatenated); 1: a single tree
         integer forwardN15flag !< 1 use N^1.5 algorithm. 0: use NlogN pseudo skeleton algorithm. 2: use NlogN first, if not accurate enough, switch to N^1.5. 3: use tree-based adaptive sampling for NlogN pseudo skeleton algorithm.
         real(kind=8) tol_comp      !< matrix construction tolerance
