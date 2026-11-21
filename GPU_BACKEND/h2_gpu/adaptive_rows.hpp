@@ -418,10 +418,26 @@ public:
         auto count = [](const auto& v) { return static_cast<int>(v.size()); };
         auto qrcp = [&](const std::vector<QrcpItemT<S>>& items, size_t offset, int max_n) {
             if (items.empty()) return;
+            // Wider than the one-block kernel's shared memory reaches (its
+            // launch would fail outright): the blocked kernel, panels in the
+            // work block.  Only boxes that could not have been launched at
+            // all go this way.
+            const bool wide = max_n > qrcp_max_shared_columns();
+            int max_m = 0;
+            if (wide) {
+                for (const QrcpItemT<S>& it : items) max_m = std::max(max_m, it.m);
+            }
             char* work = nullptr;
-            if (const size_t w = qrcp_work_bytes<S>(count(items), max_n)) work = heap_.alloc(w, ResidentKind::Adaptive);
-            launch_qrcp(reinterpret_cast<const QrcpItemT<S>*>(md + offset), count(items), max_n, tolerance_,
-                        abs_tolerance_, work, stream);
+            const size_t w = wide ? qrcp_blocked_work_bytes<S>(count(items), max_m, max_n)
+                                  : qrcp_work_bytes<S>(count(items), max_n);
+            if (w) work = heap_.alloc(w, ResidentKind::Adaptive);
+            if (wide) {
+                launch_qrcp_blocked(reinterpret_cast<const QrcpItemT<S>*>(md + offset), count(items), max_m, max_n,
+                                    tolerance_, abs_tolerance_, work, stream);
+            } else {
+                launch_qrcp(reinterpret_cast<const QrcpItemT<S>*>(md + offset), count(items), max_n, tolerance_,
+                            abs_tolerance_, work, stream);
+            }
             heap_.free(work);  // later launches are ordered after it
         };
         launch_gather(reinterpret_cast<const GatherItemT<S>*>(md + off_grow_), count(grow_), max_copy_m_, max_copy_n_,

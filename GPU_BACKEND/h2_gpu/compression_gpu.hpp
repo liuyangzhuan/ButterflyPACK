@@ -632,10 +632,22 @@ std::vector<int64_t> compress_level_ids(ParallelTree<CoordType, DataType>* tree,
                 selector->finish(h_status.data());
             }
         } else {
+            // Wider than the one-block kernel's shared memory reaches (its
+            // launch would fail outright): the blocked kernel takes those,
+            // with its panels in the work block.  Only boxes that could not
+            // have been launched at all go this way.
+            const bool wide = max_n > qrcp_max_shared_columns();
             char* d_qrcp_work = nullptr;
-            if (const size_t w = qrcp_work_bytes<S>(count, max_n)) d_qrcp_work = heap.alloc(w);
-            launch_qrcp(reinterpret_cast<const QrcpItemT<S>*>(md + off_id), count, max_n, tolerance,
-                        id_absolute_tolerance(tree, tolerance), d_qrcp_work, stream);
+            const size_t w = wide ? qrcp_blocked_work_bytes<S>(count, max_d, max_n)
+                                  : qrcp_work_bytes<S>(count, max_n);
+            if (w) d_qrcp_work = heap.alloc(w);
+            if (wide) {
+                launch_qrcp_blocked(reinterpret_cast<const QrcpItemT<S>*>(md + off_id), count, max_d, max_n, tolerance,
+                                    id_absolute_tolerance(tree, tolerance), d_qrcp_work, stream);
+            } else {
+                launch_qrcp(reinterpret_cast<const QrcpItemT<S>*>(md + off_id), count, max_n, tolerance,
+                            id_absolute_tolerance(tree, tolerance), d_qrcp_work, stream);
+            }
             heap.free(d_qrcp_work);
             check_cuda(cudaMemcpyAsync(h_id.data(), d_id, id_bytes, cudaMemcpyDeviceToHost, stream), "compression ids");
             check_cuda(cudaStreamSynchronize(stream), "compression ids");

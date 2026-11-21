@@ -5294,13 +5294,24 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
     if (adaptive) {
         selector->launch(md, stream);
     } else {
+        // Wider than the one-block kernel's shared memory reaches (its launch
+        // would fail outright): the blocked kernel, panels in the work block.
+        int max_id_m = 0;
+        for (const QrcpItem& it : id_items) max_id_m = std::max(max_id_m, it.m);
+        const bool wide = max_id_n > qrcp_max_shared_columns();
+        const int nid = static_cast<int>(id_items.size());
         char* d_qrcp_work = nullptr;
-        if (const size_t w = qrcp_work_bytes<S>(static_cast<int>(id_items.size()), max_id_n)) {
-            d_qrcp_work = heap_.alloc(w, ResidentKind::Adaptive);
+        const size_t w = wide ? qrcp_blocked_work_bytes<S>(nid, max_id_m, max_id_n)
+                              : qrcp_work_bytes<S>(nid, max_id_n);
+        if (w) d_qrcp_work = heap_.alloc(w, ResidentKind::Adaptive);
+        if (wide) {
+            launch_qrcp_blocked(reinterpret_cast<const QrcpItem*>(md + off_id), nid, max_id_m, max_id_n, tolerance_,
+                                id_absolute_tolerance(tree_, tolerance_), d_qrcp_work, stream);
+        } else {
+            launch_qrcp(reinterpret_cast<const QrcpItem*>(md + off_id), nid, max_id_n, tolerance_,
+                        id_absolute_tolerance(tree_, tolerance_), d_qrcp_work,
+                        stream);  // (every launch variant gives the same bits)
         }
-        launch_qrcp(reinterpret_cast<const QrcpItem*>(md + off_id), static_cast<int>(id_items.size()), max_id_n,
-                    tolerance_, id_absolute_tolerance(tree_, tolerance_), d_qrcp_work,
-                    stream);  // (every launch variant gives the same bits)
         heap_.free(d_qrcp_work);  // later launches are ordered after the ID
     }
     marks.mark(stream);

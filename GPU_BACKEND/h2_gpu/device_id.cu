@@ -1240,6 +1240,14 @@ int coop_blocks_per_box(int count, int max_n) {
     return cpb >= kMinBlocksPerBox ? cpb : 0;
 }
 
+// The dynamic shared memory the one-block-per-box qrcp_kernel keeps for a box
+// of max_n columns (the norms and the candidates by column, the warps'
+// partials): 20 bytes a column.
+__host__ inline size_t qrcp_shared_bytes(int max_n) {
+    return static_cast<size_t>(2 * max_n + kMaxWarps) * sizeof(double) +
+           static_cast<size_t>(kMaxWarps + max_n) * sizeof(int);
+}
+
 template<typename T, int kThreads>
 void launch_qrcp_with(const QrcpItemT<T>* items, int count, size_t shared, double tol, double abs_tol,
                       cudaStream_t stream) {
@@ -1255,12 +1263,43 @@ void launch_qrcp_with(const QrcpItemT<T>* items, int count, size_t shared, doubl
         const cudaError_t attr = cudaFuncSetAttribute(qrcp_kernel<T, kThreads>,
                                                       cudaFuncAttributeMaxDynamicSharedMemorySize,
                                                       static_cast<int>(shared));
-        if (attr != cudaSuccess) throw std::runtime_error("launch_qrcp: box too large for shared memory");
+        if (attr != cudaSuccess) {
+            int device = 0, optin = 0;
+            cudaGetDevice(&device);
+            cudaDeviceGetAttribute(&optin, cudaDevAttrMaxSharedMemoryPerBlockOptin, device);
+            throw std::runtime_error("launch_qrcp: box too large for shared memory (" + std::to_string(shared) +
+                                     " + " + std::to_string(static_bytes) +
+                                     " bytes; the device opts in to at most " + std::to_string(optin) +
+                                     "): a box of more than " + std::to_string(qrcp_max_shared_columns()) +
+                                     " columns belongs to launch_qrcp_blocked");
+        }
     }
     qrcp_kernel<T, kThreads><<<static_cast<unsigned>(count), kThreads, shared, stream>>>(items, tol, abs_tol);
 }
 
 }  // namespace
+
+// The widest box launch_qrcp can take.  The one-block-per-box kernel keeps
+// 20 bytes of shared memory a column, and above what the device will opt in
+// to (A100: 164 KB, ~8300 columns) cudaFuncSetAttribute refuses and the
+// launch cannot be made at all -- a wider box belongs to launch_qrcp_blocked,
+// which keeps its panels in the work block and asks for no dynamic shared
+// memory.  Queried once per process.
+int qrcp_max_shared_columns() {
+    static const int columns = [] {
+        int device = 0, optin = 0;
+        cudaGetDevice(&device);
+        if (cudaDeviceGetAttribute(&optin, cudaDevAttrMaxSharedMemoryPerBlockOptin, device) != cudaSuccess ||
+            optin <= 0) {
+            optin = 48 * 1024;  // the default every device has
+        }
+        // the kernel's static shared memory (s_tau, s_beta) and the fixed part
+        const size_t fixed = qrcp_shared_bytes(0) + 1024;
+        if (static_cast<size_t>(optin) <= fixed) return 0;
+        return static_cast<int>((static_cast<size_t>(optin) - fixed) / (2 * sizeof(double) + sizeof(int)));
+    }();
+    return columns;
+}
 
 template<typename T>
 size_t qrcp_work_bytes(int count, int max_n) {
@@ -1293,8 +1332,7 @@ void launch_qrcp(const QrcpItemT<T>* items, int count, int max_n, double tol, do
         }
         return;
     }
-    const size_t shared = static_cast<size_t>(2 * max_n + kMaxWarps) * sizeof(double) +
-                          static_cast<size_t>(kMaxWarps + max_n) * sizeof(int);
+    const size_t shared = qrcp_shared_bytes(max_n);
     // an error an earlier, unchecked call left would otherwise be reported as this launch's
     const cudaError_t pending = cudaGetLastError();
     if (pending != cudaSuccess) {

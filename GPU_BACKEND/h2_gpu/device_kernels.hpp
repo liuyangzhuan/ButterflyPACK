@@ -333,6 +333,13 @@ size_t qrcp_blocked_work_bytes(int count, int max_m, int max_n);
 template<typename T>
 void launch_qrcp_blocked(const QrcpItemT<T>* items, int count, int max_m, int max_n, double tol, double abs_tol,
                          void* work, cudaStream_t stream);
+// The widest box launch_qrcp can take: its one-block-per-box kernel keeps 20
+// bytes of shared memory a column, and above what the device will opt in to
+// (A100: 164 KB, ~8300 columns) the launch cannot be made at all, so a wider
+// box has to go to launch_qrcp_blocked.  A caller whose boxes have no bound
+// -- an H2 box whose children's skeletons are thousands of columns wide --
+// picks by this.
+int qrcp_max_shared_columns();
 
 // C_i = alpha op(A_i) op(B_i) + beta C_i on the FP64 tensor cores
 // (device_gemm.cu); sizes, leading dimensions and pointers are device arrays
